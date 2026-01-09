@@ -32,6 +32,7 @@ private:
     void renderModelInfo();
     void render3DView();
     void renderCameraGizmo();
+    //void UI_DrawTitlebar(float& outTitlebarHeight);
 
     char m_filePathBuffer[512];
     char m_exportPathBuffer[512];

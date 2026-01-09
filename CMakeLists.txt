@@ -9,7 +9,9 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin/${CMAKE_BUILD_TYPE})
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib/${CMAKE_BUILD_TYPE})
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib/${CMAKE_BUILD_TYPE})
 
+# -------------------------
 # OpenCASCADE Configuration
+# -------------------------
 if(DEFINED ENV{OpenCASCADE_DIR})
     set(OpenCASCADE_DIR $ENV{OpenCASCADE_DIR})
 else()
@@ -31,7 +33,7 @@ elseif(EXISTS "${OpenCASCADE_DIR}/lib")
     set(OpenCASCADE_BINARY_DIR "${OpenCASCADE_DIR}/bin")
 endif()
 
-# 3rd party directory
+# 3rd party directory (OCC DLL search)
 set(OpenCASCADE_3RDPARTY_ROOT "C:/opencascade-7.9.3/3rdparty-vc14-64")
 
 message(STATUS "OpenCASCADE root: ${OpenCASCADE_DIR}")
@@ -40,37 +42,87 @@ message(STATUS "OpenCASCADE libraries: ${OpenCASCADE_LIBRARY_DIR}")
 message(STATUS "OpenCASCADE binaries: ${OpenCASCADE_BINARY_DIR}")
 message(STATUS "OpenCASCADE 3rd party: ${OpenCASCADE_3RDPARTY_ROOT}")
 
-# Find packages
+# -------------------------
+# Packages
+# -------------------------
 find_package(OpenGL REQUIRED)
-find_package(glfw3 CONFIG REQUIRED)
 
-# Include OpenCASCADE
-include_directories(${OpenCASCADE_INCLUDE_DIR})
+# -------------------------
+# External deps: GLFW + ImGui + GLM
+# -------------------------
+set(EXTERNAL_DIR "${CMAKE_CURRENT_SOURCE_DIR}/external")
+set(GLFW_DIR     "${EXTERNAL_DIR}/glfw")
+set(IMGUI_DIR    "${EXTERNAL_DIR}/imgui-fork")
+set(GLM_DIR      "${EXTERNAL_DIR}/glm")
 
-# ImGui setup from git submodule
-set(IMGUI_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/imgui)
-if(EXISTS ${IMGUI_DIR})
+# Your custom ImGui extension folder
+set(IMGUI_CUSTOM_DIR "${CMAKE_CURRENT_SOURCE_DIR}/ImGui")
+
+# ---- GLFW from submodule ----
+if(EXISTS "${GLFW_DIR}/CMakeLists.txt")
+    set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+    set(GLFW_BUILD_TESTS    OFF CACHE BOOL "" FORCE)
+    set(GLFW_BUILD_DOCS     OFF CACHE BOOL "" FORCE)
+    set(GLFW_INSTALL        OFF CACHE BOOL "" FORCE)
+    add_subdirectory("${GLFW_DIR}")
+    message(STATUS "GLFW found at: ${GLFW_DIR}")
+else()
+    message(FATAL_ERROR "GLFW not found at ${GLFW_DIR}. Run: git submodule update --init --recursive")
+endif()
+
+# ---- GLM (header-only) ----
+if(EXISTS "${GLM_DIR}/glm/glm.hpp")
+    message(STATUS "GLM found at: ${GLM_DIR}")
+else()
+    message(FATAL_ERROR "GLM not found at ${GLM_DIR}. Run: git submodule update --init --recursive")
+endif()
+
+# ---- ImGui from submodule ----
+if(EXISTS "${IMGUI_DIR}")
     add_library(imgui STATIC
-        ${IMGUI_DIR}/imgui.cpp
-        ${IMGUI_DIR}/imgui_draw.cpp
-        ${IMGUI_DIR}/imgui_tables.cpp
-        ${IMGUI_DIR}/imgui_widgets.cpp
-        ${IMGUI_DIR}/imgui_demo.cpp
-        ${IMGUI_DIR}/backends/imgui_impl_glfw.cpp
-        ${IMGUI_DIR}/backends/imgui_impl_opengl3.cpp
+        # Core ImGui
+        "${IMGUI_DIR}/imgui.cpp"
+        "${IMGUI_DIR}/imgui_draw.cpp"
+        "${IMGUI_DIR}/imgui_tables.cpp"
+        "${IMGUI_DIR}/imgui_widgets.cpp"
+        "${IMGUI_DIR}/imgui_demo.cpp"
+
+        # Backends
+        "${IMGUI_DIR}/backends/imgui_impl_glfw.cpp"
+        "${IMGUI_DIR}/backends/imgui_impl_opengl3.cpp"
+
+        # Custom ImGui additions
+        "${IMGUI_CUSTOM_DIR}/ImGuiBuild.cpp"
+        "${IMGUI_CUSTOM_DIR}/ImGuiTheme.cpp"
+        "${IMGUI_CUSTOM_DIR}/ImGuiTheme.h"
+        "${IMGUI_CUSTOM_DIR}/Roboto-Bold.embed"
+        "${IMGUI_CUSTOM_DIR}/Roboto-Italic.embed"
+        "${IMGUI_CUSTOM_DIR}/Roboto-Regular.embed"
     )
-    target_include_directories(imgui PUBLIC 
-        ${IMGUI_DIR}
-        ${IMGUI_DIR}/backends
+
+    target_include_directories(imgui PUBLIC
+        "${IMGUI_DIR}"
+        "${IMGUI_DIR}/backends"
+        "${IMGUI_CUSTOM_DIR}"
+        "${GLM_DIR}"            # allow glm usage inside ImGui helpers if needed
     )
+
     target_link_libraries(imgui PUBLIC OpenGL::GL glfw)
-    target_compile_definitions(imgui PUBLIC IMGUI_IMPL_OPENGL_LOADER_GLAD)
+
     message(STATUS "ImGui found at: ${IMGUI_DIR}")
+    message(STATUS "ImGui custom dir: ${IMGUI_CUSTOM_DIR}")
 else()
     message(FATAL_ERROR "ImGui not found. Run: git submodule update --init --recursive")
 endif()
 
+# -------------------------
+# Include OpenCASCADE
+# -------------------------
+include_directories(${OpenCASCADE_INCLUDE_DIR})
+
+# -------------------------
 # Source files
+# -------------------------
 set(DOMAIN_SOURCES
     src/domain/Model.cpp
     src/domain/Geometry.cpp
@@ -103,7 +155,9 @@ set(HEADER_FILES
     src/adapters/rendering/OcctRenderer.h
 )
 
+# -------------------------
 # Main executable
+# -------------------------
 add_executable(${PROJECT_NAME}
     src/main.cpp
     ${DOMAIN_SOURCES}
@@ -114,7 +168,7 @@ add_executable(${PROJECT_NAME}
 
 target_include_directories(${PROJECT_NAME} PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
-    ${CMAKE_CURRENT_SOURCE_DIR}/external
+    ${GLM_DIR}     # GLM available to the whole app
 )
 
 # Add OpenCASCADE link directories
@@ -127,7 +181,7 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
     imgui
     OpenGL::GL
     glfw
-    
+
     # Core OpenCASCADE libraries
     TKernel
     TKMath
@@ -145,16 +199,17 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
     TKXCAF
     TKBin
     TKBinXCAF
-    
+
     # Data Exchange libraries
     TKXSBase
     TKDESTEP
-    
+
     # Additional required libraries
     TKLCAF
     TKCAF
     TKCDF
     TKBinL
+    TKXmlL
     TKXmlL
 )
 
@@ -169,39 +224,28 @@ if(MSVC)
     target_compile_options(${PROJECT_NAME} PRIVATE $<$<CONFIG:Release>:/O2>)
 endif()
 
-# Set Visual Studio properties
+# Set Visual Studio startup project
 set_property(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT ${PROJECT_NAME})
 
+# -------------------------
+# Visual Studio debugger PATH
+# -------------------------
 if(WIN32)
-    # Get all subdirectories in 3rdparty
     file(GLOB OCC_3RDPARTY_SUBDIRS "${OpenCASCADE_3RDPARTY_ROOT}/*")
-    
-    # Start with OpenCASCADE bin directory
+
     set(OCC_ALL_PATHS "${OpenCASCADE_BINARY_DIR}")
-    
-    message(STATUS "Searching for 3rd party DLL directories...")
-    
-    # Add bin directory from each subdirectory if it exists
+
     foreach(SUBDIR ${OCC_3RDPARTY_SUBDIRS})
         if(IS_DIRECTORY ${SUBDIR})
-            # Check for bin directory
-            set(BIN_PATH "${SUBDIR}/bin")
-            if(EXISTS ${BIN_PATH})
-                set(OCC_ALL_PATHS "${OCC_ALL_PATHS};${BIN_PATH}")
-                message(STATUS "  Found: ${BIN_PATH}")
+            if(EXISTS "${SUBDIR}/bin")
+                set(OCC_ALL_PATHS "${OCC_ALL_PATHS};${SUBDIR}/bin")
             endif()
-            
-            # Also check for bin/win64 subdirectory (like OpenVR)
-            set(BIN_WIN64_PATH "${SUBDIR}/bin/win64")
-            if(EXISTS ${BIN_WIN64_PATH})
-                set(OCC_ALL_PATHS "${OCC_ALL_PATHS};${BIN_WIN64_PATH}")
-                message(STATUS "  Found: ${BIN_WIN64_PATH}")
+            if(EXISTS "${SUBDIR}/bin/win64")
+                set(OCC_ALL_PATHS "${OCC_ALL_PATHS};${SUBDIR}/bin/win64")
             endif()
         endif()
     endforeach()
-    
-    message(STATUS "Final runtime DLL paths configured for Visual Studio debugger")
-    
+
     set_target_properties(${PROJECT_NAME} PROPERTIES
         VS_DEBUGGER_WORKING_DIRECTORY "${CMAKE_BINARY_DIR}/bin/${CMAKE_BUILD_TYPE}"
         VS_DEBUGGER_ENVIRONMENT "PATH=${OCC_ALL_PATHS};%PATH%"

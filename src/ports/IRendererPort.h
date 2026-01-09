@@ -14,6 +14,7 @@ namespace ports {
         virtual void setModel(std::shared_ptr<domain::Model> model) = 0;
         virtual void fitAll() = 0;
         virtual void* getFramebufferTexture() = 0;
+
         virtual void resize(int width, int height) = 0;
 
         // Camera controls
