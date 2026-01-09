@@ -1,17 +1,24 @@
 # Build directories
+.vs/
 build/
 bin/
 lib/
 out/
+bin/
+bin-int/
+x64/
+*.dir/
+*.log
 
-# Visual Studio
-.vs/
-*.suo
-*.user
-*.userosscache
-*.sln.docstates
-*.VC.db
-*.VC.opendb
+
+# Files
+*.vcxproj
+*.vcxproj.user
+*.vcxproj.filters
+*.sln
+
+# Exclude
+!external/bin
 
 # CMake
 CMakeCache.txt
