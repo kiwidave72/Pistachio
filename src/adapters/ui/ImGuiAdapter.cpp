@@ -1115,7 +1115,7 @@ static bool PointInConvexPoly(const ImVec2* pts, int count, ImVec2 p)
         const float w = ImGui::GetWindowWidth() - windowPadding.y * 2.0f;
         const float dragWidth = w-buttonsAreaWidth;
 
-        const float panelHeight = 90.0f;
+        const float panelHeight = buttonHeight+buttonHeight + 90.0f;
         ImVec2 panelPos = ImVec2(titlebarMin.x, titlebarMax.y);
         ImVec2 panelSize = ImVec2(w, panelHeight);
 
@@ -1143,6 +1143,25 @@ static bool PointInConvexPoly(const ImVec2* pts, int count, ImVec2 p)
 
         ImGui::Begin("##TitlebarToolsOverlay", nullptr, flags);
                
+        if (ImGui::Button("Load", ImVec2(120, 36))) {}
+        ImGui::SameLine();
+        if (ImGui::Button("Save", ImVec2(120, 36))) {}
+        ImGui::SameLine();
+        if (ImGui::Button("Sketch", ImVec2(120, 36))) {}
+        ImGui::SameLine();
+        if (ImGui::Button("Line", ImVec2(120, 36))) {}
+        ImGui::SameLine();
+        if (ImGui::Button("Rectangle", ImVec2(120, 36))) {}
+        ImGui::SameLine();
+        if (ImGui::Button("Circle", ImVec2(120, 36))) {}
+        ImGui::SameLine();
+        if (ImGui::Button("Square", ImVec2(120, 36))) {}
+        ImGui::SameLine();
+        if (ImGui::Button("Dimension", ImVec2(120, 36))) {}
+        ImGui::SameLine();
+        if (ImGui::Button("Constraint", ImVec2(120, 36))) {}
+
+
         const float buttonWidth = 120.0f;
         const float buttonHeight = 36.0f;
 
