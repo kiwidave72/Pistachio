@@ -32,6 +32,9 @@ namespace core {
     }
 
     bool Application::initialize() {
+
+
+
         if (!m_uiAdapter) {
             m_statusMessage = "Error: No UI adapter set";
             return false;

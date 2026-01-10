@@ -1,0 +1,108 @@
+{
+  "fileVersion": 1,
+  "document": {
+    "id": 1,
+    "name": "Test Document",
+    "sketches": [
+      {
+        "id": 100,
+        "name": "Sketch 1",
+        "visible": true,
+        "entities": [
+          {
+            "kind": "Point",
+            "data": {
+              "id": 1000,
+              "p": { "x": 0.0, "y": 0.0 }
+            }
+          },
+          {
+            "kind": "Point",
+            "data": {
+              "id": 1001,
+              "p": { "x": 100.0, "y": 0.0 }
+            }
+          },
+          {
+            "kind": "Line",
+            "data": {
+              "id": 1002,
+              "a": { "x": 0.0, "y": 0.0 },
+              "b": { "x": 100.0, "y": 0.0 }
+            }
+          },
+          {
+            "kind": "Circle",
+            "data": {
+              "id": 1003,
+              "center": { "x": 50.0, "y": 40.0 },
+              "radius": 20.0
+            }
+          }
+        ],
+        "constraints": [
+          {
+            "kind": "Geometric",
+            "data": {
+              "meta": { "id": 2000, "name": "Horizontal L1", "enabled": true, "suppressed": false },
+              "type": 0,
+              "refs": [
+                { "id": 1002, "anchor": 5 }
+              ]
+            }
+          },
+          {
+            "kind": "Geometric",
+            "data": {
+              "meta": { "id": 2001, "name": "P0 coincident L1 start", "enabled": true, "suppressed": false },
+              "type": 2,
+              "refs": [
+                { "id": 1000, "anchor": 1 },
+                { "id": 1002, "anchor": 2 }
+              ]
+            }
+          },
+          {
+            "kind": "Geometric",
+            "data": {
+              "meta": { "id": 2002, "name": "P1 coincident L1 end", "enabled": true, "suppressed": false },
+              "type": 2,
+              "refs": [
+                { "id": 1001, "anchor": 1 },
+                { "id": 1002, "anchor": 3 }
+              ]
+            }
+          },
+          {
+            "kind": "Dimensional",
+            "data": {
+              "meta": { "id": 3000, "name": "Length L1", "enabled": true, "suppressed": false },
+              "type": 1,
+              "refs": [
+                { "id": 1002, "anchor": 2 },
+                { "id": 1002, "anchor": 3 }
+              ],
+              "value": 100.0,
+              "driving": true,
+              "units": "mm"
+            }
+          },
+          {
+            "kind": "Dimensional",
+            "data": {
+              "meta": { "id": 3001, "name": "Radius C1", "enabled": true, "suppressed": false },
+              "type": 3,
+              "refs": [
+                { "id": 1003, "anchor": 6 },
+                { "id": 1003, "anchor": 7 }
+              ],
+              "value": 20.0,
+              "driving": true,
+              "units": "mm"
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

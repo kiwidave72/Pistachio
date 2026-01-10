@@ -48,13 +48,14 @@ message(STATUS "OpenCASCADE 3rd party: ${OpenCASCADE_3RDPARTY_ROOT}")
 find_package(OpenGL REQUIRED)
 
 # -------------------------
-# External deps: GLFW + ImGui + GLM + STB
+# External deps: GLFW + ImGui + GLM + STB + nlohmann/json
 # -------------------------
 set(EXTERNAL_DIR "${CMAKE_CURRENT_SOURCE_DIR}/external")
 set(GLFW_DIR     "${EXTERNAL_DIR}/glfw")
 set(IMGUI_DIR    "${EXTERNAL_DIR}/imgui-fork")
 set(GLM_DIR      "${EXTERNAL_DIR}/glm")
 set(STB_DIR      "${EXTERNAL_DIR}/stb")
+set(NLOHMANN_JSON_DIR "${EXTERNAL_DIR}/nlohmann_json")
 
 # Your custom ImGui extension folder
 set(IMGUI_CUSTOM_DIR "${CMAKE_CURRENT_SOURCE_DIR}/ImGui")
@@ -83,6 +84,17 @@ if(EXISTS "${STB_DIR}/stb_image.h")
     message(STATUS "STB found at: ${STB_DIR}")
 else()
     message(WARNING "STB not found at ${STB_DIR}. Download stb_image.h from https://github.com/nothings/stb")
+endif()
+
+# ---- nlohmann/json (header-only) ----
+if(EXISTS "${NLOHMANN_JSON_DIR}/single_include/nlohmann/json.hpp")
+    add_library(nlohmann_json INTERFACE)
+    target_include_directories(nlohmann_json INTERFACE
+        "${NLOHMANN_JSON_DIR}/single_include"
+    )
+    message(STATUS "nlohmann/json found at: ${NLOHMANN_JSON_DIR}")
+else()
+    message(FATAL_ERROR "nlohmann/json not found at ${NLOHMANN_JSON_DIR}. Run: git submodule update --init --recursive")
 endif()
 
 # ---- ImGui from submodule ----
@@ -134,6 +146,10 @@ include_directories(${OpenCASCADE_INCLUDE_DIR})
 set(DOMAIN_SOURCES
     src/domain/Model.cpp
     src/domain/Geometry.cpp
+
+    # ---- Sketch domain (NEW) ----
+    src/domain/SketchEntities.cpp
+    src/domain/SketchConstraints.cpp
 )
 
 set(CORE_SOURCES
@@ -147,11 +163,33 @@ set(ADAPTER_SOURCES
     src/adapters/exporters/ObjExporter.cpp
     src/adapters/exporters/StlExporter.cpp
     src/adapters/rendering/OcctRenderer.cpp
+
+    # ---- Sketch persistence (NEW) ----
+    src/adapters/persistence/SketchDocumentMapper.cpp
+    src/adapters/persistence/SketchDocumentJson.cpp
+    src/adapters/persistence/JsonSketchDocumentAdapter.cpp
 )
 
 set(HEADER_FILES
     src/domain/Model.h
     src/domain/Geometry.h
+
+    # ---- Sketch domain (NEW) ----
+    src/domain/SketchIds.h
+    src/domain/SketchMath.h
+    src/domain/SketchEntities.h
+    src/domain/SketchConstraints.h
+    src/domain/SketchModel.h
+
+    # ---- Ports (NEW) ----
+    src/ports/ISketchDocumentPersistencePort.h
+
+    # ---- Persistence DTO (NEW) ----
+    src/adapters/persistence/SketchDocumentDto.h
+    src/adapters/persistence/SketchDocumentMapper.h
+    src/adapters/persistence/SketchDocumentJson.h
+    src/adapters/persistence/JsonSketchDocumentAdapter.h
+
     src/ports/IUIPort.h
     src/ports/IFileLoaderPort.h
     src/ports/IExporterPort.h
@@ -191,6 +229,7 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
     imgui
     OpenGL::GL
     glfw
+    nlohmann_json
 
     # Core OpenCASCADE libraries
     TKernel
@@ -219,6 +258,7 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
     TKCAF
     TKCDF
     TKBinL
+    TKXmlL
     TKXmlL
 )
 
