@@ -48,12 +48,13 @@ message(STATUS "OpenCASCADE 3rd party: ${OpenCASCADE_3RDPARTY_ROOT}")
 find_package(OpenGL REQUIRED)
 
 # -------------------------
-# External deps: GLFW + ImGui + GLM
+# External deps: GLFW + ImGui + GLM + STB
 # -------------------------
 set(EXTERNAL_DIR "${CMAKE_CURRENT_SOURCE_DIR}/external")
 set(GLFW_DIR     "${EXTERNAL_DIR}/glfw")
 set(IMGUI_DIR    "${EXTERNAL_DIR}/imgui-fork")
 set(GLM_DIR      "${EXTERNAL_DIR}/glm")
+set(STB_DIR      "${EXTERNAL_DIR}/stb")
 
 # Your custom ImGui extension folder
 set(IMGUI_CUSTOM_DIR "${CMAKE_CURRENT_SOURCE_DIR}/ImGui")
@@ -77,6 +78,13 @@ else()
     message(FATAL_ERROR "GLM not found at ${GLM_DIR}. Run: git submodule update --init --recursive")
 endif()
 
+# ---- STB (header-only) ----
+if(EXISTS "${STB_DIR}/stb_image.h")
+    message(STATUS "STB found at: ${STB_DIR}")
+else()
+    message(WARNING "STB not found at ${STB_DIR}. Download stb_image.h from https://github.com/nothings/stb")
+endif()
+
 # ---- ImGui from submodule ----
 if(EXISTS "${IMGUI_DIR}")
     add_library(imgui STATIC
@@ -95,16 +103,16 @@ if(EXISTS "${IMGUI_DIR}")
         "${IMGUI_CUSTOM_DIR}/ImGuiBuild.cpp"
         "${IMGUI_CUSTOM_DIR}/ImGuiTheme.cpp"
         "${IMGUI_CUSTOM_DIR}/ImGuiTheme.h"
-        "${IMGUI_CUSTOM_DIR}/Roboto-Bold.embed"
-        "${IMGUI_CUSTOM_DIR}/Roboto-Italic.embed"
-        "${IMGUI_CUSTOM_DIR}/Roboto-Regular.embed"
+        "${IMGUI_CUSTOM_DIR}/Image.cpp"
+        "${IMGUI_CUSTOM_DIR}/Image.h"
     )
 
     target_include_directories(imgui PUBLIC
         "${IMGUI_DIR}"
         "${IMGUI_DIR}/backends"
         "${IMGUI_CUSTOM_DIR}"
-        "${GLM_DIR}"            # allow glm usage inside ImGui helpers if needed
+        "${GLM_DIR}"
+        "${STB_DIR}"
     )
 
     target_link_libraries(imgui PUBLIC OpenGL::GL glfw)
@@ -134,6 +142,7 @@ set(CORE_SOURCES
 
 set(ADAPTER_SOURCES
     src/adapters/ui/ImGuiAdapter.cpp
+    src/adapters/ui/UI.cpp
     src/adapters/loaders/StepFileLoader.cpp
     src/adapters/exporters/ObjExporter.cpp
     src/adapters/exporters/StlExporter.cpp
@@ -149,6 +158,7 @@ set(HEADER_FILES
     src/ports/IRendererPort.h
     src/core/Application.h
     src/adapters/ui/ImGuiAdapter.h
+    src/adapters/ui/UI.h
     src/adapters/loaders/StepFileLoader.h
     src/adapters/exporters/ObjExporter.h
     src/adapters/exporters/StlExporter.h
@@ -168,7 +178,7 @@ add_executable(${PROJECT_NAME}
 
 target_include_directories(${PROJECT_NAME} PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
-    ${GLM_DIR}     # GLM available to the whole app
+    ${GLM_DIR}
 )
 
 # Add OpenCASCADE link directories
@@ -209,7 +219,6 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
     TKCAF
     TKCDF
     TKBinL
-    TKXmlL
     TKXmlL
 )
 

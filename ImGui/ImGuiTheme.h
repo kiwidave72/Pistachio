@@ -5,7 +5,7 @@
 
 #include <algorithm>
 
-namespace ImGuiAdapter::UI {
+namespace adapters::UI {
 
 	namespace Colors
 	{

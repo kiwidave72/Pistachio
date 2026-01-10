@@ -1,6 +1,6 @@
 #include "ImGuiTheme.h"
 
-namespace ImGuiAdapter::UI {
+namespace adapters::UI {
 
 	void SetHazelTheme()
 	{
