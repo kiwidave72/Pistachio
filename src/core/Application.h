@@ -34,6 +34,7 @@ namespace core {
         void run();
         void shutdown();
 
+        void setupToolbarMenus();
         bool loadFile(const std::string& filepath);
         bool loadFileAsync(const std::string& filepath);
         bool exportFile(const std::string& filepath, const std::string& format);

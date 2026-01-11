@@ -15,12 +15,11 @@
 #include <GLFW/glfw3native.h>
 
 #include <cstring>
- 
+#include <filesystem>
+
 #include "stb_image.h"
 
-
 #include "UI.h"
-
 #include "core/rendering/SketchRenderBuilder.h"
 #include "adapters/rendering/OcctRenderer.h"
 #include "adapters/rendering/RendererRouter.h"
@@ -35,13 +34,17 @@ ImGuiAdapter::ImGuiAdapter(core::Application* app)
     std::memset(m_filePathBuffer, 0, sizeof(m_filePathBuffer));
     std::memset(m_exportPathBuffer, 0, sizeof(m_exportPathBuffer));
     m_lastMousePos = ImVec2(0, 0);
-
-
-
 }
 
 ImGuiAdapter::~ImGuiAdapter() {
     shutdown();
+}
+std::shared_ptr<Walnut::Image> LoadIcon(const std::string_view path)
+{
+    if (!std::filesystem::exists(path))
+        return nullptr;
+
+    return std::make_shared<Walnut::Image>(path);
 }
 
 bool ImGuiAdapter::initialize() {
@@ -52,8 +55,6 @@ bool ImGuiAdapter::initialize() {
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
     glfwWindowHint(GLFW_TITLEBAR, false);
-
-
 
     m_window = glfwCreateWindow(1200, 800, "Pistachio - CAD Converter", nullptr, nullptr);
     if (!m_window) {
@@ -73,9 +74,15 @@ bool ImGuiAdapter::initialize() {
     // Load embedded Roboto font
     ImFontConfig fontConfig;
     fontConfig.FontDataOwnedByAtlas = false;
-    ImFont* robotoFont = io.Fonts->AddFontFromMemoryTTF((void*)g_RobotoRegular, sizeof(g_RobotoRegular), 20.0f, &fontConfig);
-    io.FontDefault = robotoFont;
+    io.FontDefault = io.Fonts->AddFontFromMemoryTTF((void*)g_RobotoRegular, sizeof(g_RobotoRegular),17.0f, &fontConfig);
+    m_smallFont = io.Fonts->AddFontFromMemoryTTF((void*)g_RobotoRegular, sizeof(g_RobotoRegular), 14.0f, &fontConfig);
 
+    m_ToolBarLineIcon = LoadIcon("assets/icons/SketchTwoPointLine_256.png");
+    m_ToolBarCircleIcon = LoadIcon("assets/icons/SketchTwoPointCircle_256.png");
+    m_ToolBarArcIcon = LoadIcon("assets/icons/SketchTwoPointArc_256.png");
+    m_ToolBarRectIcon = LoadIcon("assets/icons/SketchTwoPointRectangle_256.png");
+
+    // windows icons
     {
         uint32_t w, h;
         void* data = Walnut::Image::Decode(g_WalnutIcon, sizeof(g_WalnutIcon), w, h);
@@ -123,13 +130,10 @@ bool ImGuiAdapter::initialize() {
             stbi_image_free(data);
         }
     }
-
     ImGui::StyleColorsDark();
     
     ImGui_ImplGlfw_InitForOpenGL(m_window, true);
     ImGui_ImplOpenGL3_Init(glsl_version);
-    
-    
 
     return true;
 }
@@ -427,6 +431,11 @@ void ImGuiAdapter::render() {
     //renderStatusBar();
     DrawViewport();
    
+}
+
+void ImGuiAdapter::setMenubarCallback(const std::function<void()>& menubarCallback)
+{
+    m_MenubarCallback = menubarCallback;
 }
 
 void ImGuiAdapter::DrawViewport()
@@ -1006,7 +1015,7 @@ static bool PointInConvexPoly(const ImVec2* pts, int count, ImVec2 p)
      const float cy = (bb.Min.y + bb.Max.y) * 0.5f;
      ImVec2 ts = ImGui::CalcTextSize(label);
      dl->AddText(ImVec2(cx - ts.x * 0.5f, cy - ts.y * 0.5f), col_text, label);
-
+     
      return pressed;
  }
  static ImRect PolyAabb(const ImVec2* pts, int count)
@@ -1153,12 +1162,12 @@ static bool PointInConvexPoly(const ImVec2* pts, int count, ImVec2 p)
 
      // Logo
      {
-         const int logoWidth =  48;// m_LogoTex->GetWidth();
+         const int logoWidth = 48;// m_LogoTex->GetWidth();
          const int logoHeight = 48;// m_LogoTex->GetHeight();
          const ImVec2 logoOffset(16.0f + windowPadding.x, 5.0f + windowPadding.y + titlebarVerticalOffset);
          const ImVec2 logoRectStart = { ImGui::GetItemRectMin().x + logoOffset.x, ImGui::GetItemRectMin().y + logoOffset.y };
          const ImVec2 logoRectMax = { logoRectStart.x + logoWidth, logoRectStart.y + logoHeight };
-         
+
          fgDrawList->AddImage(m_AppHeaderIcon->GetDescriptorSet(), logoRectStart, logoRectMax);
      }
 
@@ -1175,7 +1184,7 @@ static bool PointInConvexPoly(const ImVec2* pts, int count, ImVec2 p)
      // DEBUG DRAG BOUNDS
      //fgDrawList->AddRect(ImGui::GetCursorScreenPos(), ImVec2(ImGui::GetCursorScreenPos().x + w - buttonsAreaWidth, ImGui::GetCursorScreenPos().y + titlebarHeight), UI::Colors::Theme::invalidPrefab);
      ImGui::InvisibleButton("##titleBarDragZone", ImVec2(w - buttonsAreaWidth, titlebarHeight));
-    
+
      m_TitleBarHovered = ImGui::IsItemHovered();
 
      const bool dragZoneHovered = ImGui::IsItemHovered(ImGuiHoveredFlags_RectOnly);
@@ -1205,7 +1214,7 @@ static bool PointInConvexPoly(const ImVec2* pts, int count, ImVec2 p)
 
      // Draw Menubar
      // TODO DN menu callbacks
-     /*if (m_MenubarCallback)
+     if (m_MenubarCallback)
      {
          ImGui::SuspendLayout();
          {
@@ -1219,7 +1228,7 @@ static bool PointInConvexPoly(const ImVec2* pts, int count, ImVec2 p)
          }
 
          ImGui::ResumeLayout();
-     }*/
+     }
 
      {
          // Centered Window title
@@ -1230,7 +1239,7 @@ static bool PointInConvexPoly(const ImVec2* pts, int count, ImVec2 p)
          ImGui::SetCursorPos(currentCursorPos);
      }
 
-    
+
 
 
      // Window buttons
@@ -1248,7 +1257,7 @@ static bool PointInConvexPoly(const ImVec2* pts, int count, ImVec2 p)
          const int iconWidth = m_IconMinimize->GetWidth();
          const int iconHeight = m_IconMinimize->GetHeight();
          const float padY = (buttonHeight - (float)iconHeight) / 2.0f;
-         if (ImGui::InvisibleButton("Minimize", ImVec2(buttonWidth, buttonHeight)))
+         if (ImGui::InvisibleButton("Minimize", ImVec2(iconWidth, iconHeight)))
          {
              // TODO: move this stuff to a better place, like Window class
              if (m_window)
@@ -1272,7 +1281,7 @@ static bool PointInConvexPoly(const ImVec2* pts, int count, ImVec2 p)
 
          const bool isMaximized = IsMaximized();
 
-         if (ImGui::InvisibleButton("Maximize", ImVec2(buttonWidth, buttonHeight)))
+         if (ImGui::InvisibleButton("Maximize", ImVec2(iconWidth, iconHeight)))
          {
 
              if (isMaximized)
@@ -1299,7 +1308,7 @@ static bool PointInConvexPoly(const ImVec2* pts, int count, ImVec2 p)
      {
          const int iconWidth = m_IconClose->GetWidth();
          const int iconHeight = m_IconClose->GetHeight();
-         if (ImGui::InvisibleButton("Close", ImVec2(buttonWidth, buttonHeight)))
+         if (ImGui::InvisibleButton("Close", ImVec2(iconWidth, iconHeight)))
          {
              glfwSetWindowShouldClose(m_window, GLFW_TRUE);
              // TODO DN send the event to the application
@@ -1312,95 +1321,160 @@ static bool PointInConvexPoly(const ImVec2* pts, int count, ImVec2 p)
      ImGui::EndHorizontal();
 
      {
-        // after you've computed titlebarMin/titlebarMax, w, buttonsAreaWidth etc.
-        
-        const float buttonsAreaWidth = 94.0f; //titlebarMin/titlebarMax/titlebarClose
-        const float w = ImGui::GetWindowWidth() - windowPadding.y * 2.0f;
-        const float dragWidth = w-buttonsAreaWidth;
 
-        const float panelHeight = buttonHeight+buttonHeight + 90.0f;
-        ImVec2 panelPos = ImVec2(titlebarMin.x, titlebarMax.y);
-        ImVec2 panelSize = ImVec2(w, panelHeight);
+         const ImU32 iconColN = UI::Colors::ColorWithMultipliedValue(UI::Colors::Theme::text, 0.9f);
+         const ImU32 iconColH = UI::Colors::ColorWithMultipliedValue(UI::Colors::Theme::text, 1.2f);
+         const ImU32 iconColP = UI::Colors::Theme::textDarker;
+         const float iconWidth = 36.f;//  // 14.0f;// 256.0f;
+         const float iconHeight = 36.f;//14.0f;// 256.0f;
 
-        //Make TitlebarToolsOverlay use this size and pos
-        ImGui::SetNextWindowPos(panelPos);
-        ImGui::SetNextWindowSize(panelSize);
+         // after you've computed titlebarMin/titlebarMax, w, buttonsAreaWidth etc.
 
-        // optional: keep it above other stuff
-        ImGui::SetNextWindowViewport(ImGui::GetWindowViewport()->ID);
+         const float buttonsAreaWidth = 94.0f; //titlebarMin/titlebarMax/titlebarClose
+         const float w = ImGui::GetWindowWidth() - windowPadding.y * 2.0f;
+         const float dragWidth = w - buttonsAreaWidth;
 
-        ImGuiWindowFlags flags =
-            ImGuiWindowFlags_NoDecoration |
-            ImGuiWindowFlags_NoDocking |
-            ImGuiWindowFlags_NoMove |
-            ImGuiWindowFlags_NoSavedSettings |
-            ImGuiWindowFlags_NoScrollbar |
-            ImGuiWindowFlags_NoScrollWithMouse |
-            ImGuiWindowFlags_NoFocusOnAppearing |
-            ImGuiWindowFlags_NoNav;
+         const float panelHeight = buttonHeight + buttonHeight + 90.0f;
+         ImVec2 panelPos = ImVec2(titlebarMin.x, titlebarMax.y);
+         ImVec2 panelSize = ImVec2(w, panelHeight);
 
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(10, 10));
-        // if you want it to match titlebar:
-        ImGui::PushStyleColor(ImGuiCol_WindowBg, UI::Colors::Theme::titlebar);
+         //Make TitlebarToolsOverlay use this size and pos
+         ImGui::SetNextWindowPos(panelPos);
+         ImGui::SetNextWindowSize(panelSize);
 
-        ImGui::Begin("##TitlebarToolsOverlay", nullptr, flags);
-               
-        if (ImGui::Button("Load", ImVec2(120, 36))) {}
-        ImGui::SameLine();
-        if (ImGui::Button("Save", ImVec2(120, 36))) {}
-        ImGui::SameLine();
-        if (ImGui::Button("Sketch", ImVec2(120, 36))) {}
-        ImGui::SameLine();
-        if (ImGui::Button("Line", ImVec2(120, 36))) {}
-        ImGui::SameLine();
-        if (ImGui::Button("Rectangle", ImVec2(120, 36))) {}
-        ImGui::SameLine();
-        if (ImGui::Button("Circle", ImVec2(120, 36))) {}
-        ImGui::SameLine();
-        if (ImGui::Button("Square", ImVec2(120, 36))) {}
-        ImGui::SameLine();
-        if (ImGui::Button("Dimension", ImVec2(120, 36))) {}
-        ImGui::SameLine();
-        if (ImGui::Button("Constraint", ImVec2(120, 36))) {}
+         // optional: keep it above other stuff
+         ImGui::SetNextWindowViewport(ImGui::GetWindowViewport()->ID);
+
+         ImGuiWindowFlags flags =
+             ImGuiWindowFlags_NoDecoration |
+             ImGuiWindowFlags_NoDocking |
+             ImGuiWindowFlags_NoMove |
+             ImGuiWindowFlags_NoSavedSettings |
+             ImGuiWindowFlags_NoScrollbar |
+             ImGuiWindowFlags_NoScrollWithMouse |
+             ImGuiWindowFlags_NoFocusOnAppearing |
+             ImGuiWindowFlags_NoNav;
+
+         ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
+         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(10, 10));
+         // if you want it to match titlebar:
+         ImGui::PushStyleColor(ImGuiCol_WindowBg, UI::Colors::Theme::titlebar);
+
+         ImGui::Begin("##TitlebarToolsOverlay", nullptr, flags);
+
+         if (ImGui::Button("Load", ImVec2(120, 36))) {}
+         ImGui::SameLine();
+         if (ImGui::Button("Save", ImVec2(120, 36))) {}
+         ImGui::SameLine();
+         if (ImGui::Button("Sketch", ImVec2(120, 36))) {}
+         ImGui::SameLine();
+
+         ImGui::InvisibleButton("Line", ImVec2(iconWidth, iconHeight));
+
+         if (ImGui::IsItemHovered())
+         {
+
+             ImVec2 min = ImGui::GetItemRectMin();
+             ImVec2 max = ImGui::GetItemRectMax();
+             ImVec2 size = ImGui::GetItemRectSize();
+             ImVec2 center = { max.x,(min.y + max.y) + iconHeight };
+             ImGui::SetNextWindowBgAlpha(0.95f);
+             //ImVec2 pos = ImGui::GetMousePos();
+             //center.y = center.y +(iconHeight*3);
+             ImGui::SetNextWindowPos(center, ImGuiCond_Always, ImVec2(0.0f, 1.0f));
+             ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 1.0f);
+             ImGui::Begin("##LineTooltip",
+                 nullptr,
+                 ImGuiWindowFlags_NoDecoration |
+                 ImGuiWindowFlags_NoInputs |
+                 ImGuiWindowFlags_AlwaysAutoResize |
+                 ImGuiWindowFlags_NoSavedSettings |
+                 ImGuiWindowFlags_NoFocusOnAppearing
+             );
+             ImGui::PushFont(m_smallFont);
+             ImGui::TextUnformatted("Two point line");
+             ImGui::Separator();
+             ImGui::TextUnformatted("First click at Start point followed by clicking End point");
+             ImGui::TextDisabled("Shortcut: L");
+             ImGui::PopFont();
+             ImGui::End();
+             ImGui::PopStyleVar();
+         }
+         Walnut::UI::DrawButtonImage(m_ToolBarLineIcon, UI::Colors::Theme::text, UI::Colors::ColorWithMultipliedValue(UI::Colors::Theme::text, 1.4f), iconColP);
+
+         ImGui::SameLine();
+         ImGui::InvisibleButton("Rectangle", ImVec2(iconWidth, iconHeight));
+         Walnut::UI::DrawButtonImage(m_ToolBarRectIcon, UI::Colors::Theme::text, UI::Colors::ColorWithMultipliedValue(UI::Colors::Theme::text, 1.4f), iconColP);
+
+         ImGui::SameLine();
+         ImGui::InvisibleButton("Circle", ImVec2(iconWidth, iconHeight));
+         Walnut::UI::DrawButtonImage(m_ToolBarCircleIcon, UI::Colors::Theme::text, UI::Colors::ColorWithMultipliedValue(UI::Colors::Theme::text, 1.4f), iconColP);
+         ImGui::SameLine();
+         ImGui::InvisibleButton("Arc", ImVec2(iconWidth, iconHeight));
+         Walnut::UI::DrawButtonImage(m_ToolBarArcIcon, UI::Colors::Theme::text, UI::Colors::ColorWithMultipliedValue(UI::Colors::Theme::text, 1.4f), iconColP);
+         ImGui::SameLine();
+
+         if (ImGui::Button("Square", ImVec2(120, 36))) {}
+         ImGui::SameLine();
+         if (ImGui::Button("Dimension", ImVec2(120, 36))) {}
+         ImGui::SameLine();
+         if (ImGui::Button("Constraint", ImVec2(120, 36))) {}
 
 
-        const float buttonWidth = 120.0f;
-        const float buttonHeight = 36.0f;
+         const float buttonWidth = 120.0f;
+         const float buttonHeight = 36.0f;
 
-        ImVec2 pos;
-        pos.y = ImGui::GetCursorScreenPos().y;
+         ImVec2 pos;
+         pos.y = ImGui::GetCursorScreenPos().y;
 
-        // Center horizontally
-        pos.x = (ImGui::GetWindowWidth() - buttonWidth) * 0.5f;
-        if (TrapeziumButtonTrueHit("Home", pos, ImVec2(120, 36), 18.0f, false)) { /* tool = dimension */ }
-       
-        int count = 5;
-        float totalWidth = count * buttonWidth;
-        float startX = (ImGui::GetWindowWidth() - totalWidth) * 0.5f + 18;
-        pos.y = ImGui::GetCursorScreenPos().y; // Cursor changed as we have aded a button
-        pos.x = startX;
 
-        if (TrapeziumButtonTrueHit("Reset", pos, ImVec2(120, 36), 18.0f, false)) { /* tool = dimension */ }
-        pos.x += buttonWidth;
-        if (ParallelogramButtonTrueHit("Move", pos, ImVec2(120, 36), -18.0f)) { /* tool = line */ }
-        pos.x += buttonWidth - 18;
-        //ImGui::SameLine(120,0);
-        if (TrapeziumButtonTrueHit("Scale", pos, ImVec2(120, 36), 18.0f, true)) { /* tool = dimension */ }
-        pos.x += buttonWidth - 18;
-        //ImGui::SameLine(120,0);
-        if (ParallelogramButtonTrueHit("Undo", pos, ImVec2(120, 36), 18.0f)) { /* tool = line */ }
-        pos.x += buttonWidth;;
-        if (TrapeziumButtonTrueHit("Redo", pos, ImVec2(120, 36), 18.0f, false)) { /* tool = dimension */ }
 
-        ImGui::End();
+         // Center horizontally
+         pos.x = (ImGui::GetWindowWidth() - buttonWidth) * 0.5f;
+         if (TrapeziumButtonTrueHit("Home", pos, ImVec2(120, 36), 18.0f, false)) { /* tool = dimension */ }
 
-        ImGui::PopStyleColor();
-        ImGui::PopStyleVar(2);
+         int count = 5;
+         float totalWidth = count * buttonWidth;
+         float startX = (ImGui::GetWindowWidth() - totalWidth) * 0.5f + 18;
+         pos.y = ImGui::GetCursorScreenPos().y; // Cursor changed as we have aded a button
+         pos.x = startX;
 
-        outTitlebarHeight = titlebarHeight + panelHeight;
+         if (TrapeziumButtonTrueHit("Reset", pos, ImVec2(120, 36), 18.0f, false)) { /* tool = dimension */ }
+         pos.x += buttonWidth;
+         if (ParallelogramButtonTrueHit("Move", pos, ImVec2(120, 36), -18.0f)) { /* tool = line */ }
+         pos.x += buttonWidth - 18;
+         //ImGui::SameLine(120,0);
+         if (TrapeziumButtonTrueHit("Scale", pos, ImVec2(120, 36), 18.0f, true)) { /* tool = dimension */ }
+         pos.x += buttonWidth - 18;
+         //ImGui::SameLine(120,0);
+         if (ParallelogramButtonTrueHit("Undo", pos, ImVec2(120, 36), 18.0f)) { /* tool = line */ }
+         pos.x += buttonWidth;;
+         if (TrapeziumButtonTrueHit("Redo", pos, ImVec2(120, 36), 18.0f, false)) { /* tool = dimension */ }
+
+         ImGui::End();
+
+         ImGui::PopStyleColor();
+         ImGui::PopStyleVar(2);
+
+         outTitlebarHeight = titlebarHeight + panelHeight;
      }
-    
+ }
+ 
+ void ImGuiAdapter::UI_DrawMenubar()
+ {
+     if (!this->m_MenubarCallback)
+         return;
+
+         const ImRect menuBarRect = { ImGui::GetCursorPos(), { ImGui::GetContentRegionAvail().x + ImGui::GetCursorScreenPos().x, ImGui::GetFrameHeightWithSpacing() } };
+
+         ImGui::BeginGroup();
+         if (Walnut::UI::BeginMenubar(menuBarRect))
+         {
+             m_MenubarCallback();
+         }
+
+         Walnut::UI::EndMenubar();
+         ImGui::EndGroup();
  }
 
 } // namespace adapters

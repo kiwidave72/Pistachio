@@ -38,9 +38,13 @@ int main(int argc, char** argv) {
             return 1;
         }
 
+        std::cout << "Setup application menus...\n";
+        app->setupToolbarMenus();
+
         std::cout << "Load Sketch Document...\n";
         app->loadSketchDocument("test.pistachio.json");
 
+        
         //adapters::persistence::JsonSketchDocumentAdapter io;
         //auto doc = io.loadDocument("../test.pistachio.json");
         //io.saveDocument(*doc, "out.pistachio.json");*/
@@ -48,6 +52,8 @@ int main(int argc, char** argv) {
 
         std::cout << "Application started successfully!\n";
         std::cout << "Press ESC or close window to exit\n\n";
+        
+
         
         app->run();
         

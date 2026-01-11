@@ -1,4 +1,5 @@
 ﻿#pragma once
+#include <functional>
 #include "ports/IUIPort.h"
 #include <memory>
 #include "imgui.h" 
@@ -16,6 +17,8 @@ public:
     explicit ImGuiAdapter(core::Application* app);
     ~ImGuiAdapter() override;
     
+    void setMenubarCallback(const std::function<void()>& menubarCallback);
+
     bool IsMaximized() const;
 
     bool initialize() override;
@@ -34,6 +37,7 @@ private:
     bool IsTitleBarHovered() const { return m_TitleBarHovered; }
 
     //std::shared_ptr<Image> GetApplicationIcon() const { return m_AppHeaderIcon; }
+    std::function<void()> m_MenubarCallback;
 
 
     void renderMainMenu();
@@ -42,6 +46,8 @@ private:
     void render3DView();
     void renderCameraGizmo();
     void UI_DrawTitlebar(float& outTitlebarHeight);
+    void UI_DrawMenubar();
+
     void DrawViewport();
 
     char m_filePathBuffer[512];
@@ -70,6 +76,12 @@ private:
     std::shared_ptr<Walnut::Image> m_IconMinimize;
     std::shared_ptr<Walnut::Image> m_IconMaximize;
     std::shared_ptr<Walnut::Image> m_IconRestore;
+    std::shared_ptr<Walnut::Image> m_ToolBarLineIcon;
+    std::shared_ptr<Walnut::Image> m_ToolBarCircleIcon;
+    std::shared_ptr<Walnut::Image> m_ToolBarArcIcon;
+    std::shared_ptr<Walnut::Image> m_ToolBarRectIcon;
+    ImFont* m_smallFont;
+
 };
 
 } // namespace adapters

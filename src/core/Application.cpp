@@ -2,6 +2,9 @@
 #include <algorithm>
 #include "adapters/persistence/JsonSketchDocumentAdapter.h"
 #include <iostream>
+#include <imgui.h>
+#include "imgui_internal.h"
+
 
 namespace core {
 
@@ -233,6 +236,28 @@ namespace core {
             }
         }
         return nullptr;
+    }
+    void Application::setupToolbarMenus() {
+        m_uiAdapter->setMenubarCallback([this]()
+            {
+                if (ImGui::BeginMenu("File"))
+                {
+                    if (ImGui::MenuItem("Exit"))
+                    {
+                        this->shutdown();
+                    }
+                    ImGui::EndMenu();
+                }
+
+                if (ImGui::BeginMenu("Help"))
+                {
+                    if (ImGui::MenuItem("About"))
+                    {
+                        //exampleLayer->ShowAboutModal();
+                    }
+                    ImGui::EndMenu();
+                }
+            });
     }
 
     bool Application::loadSketchDocument(const std::string& filepath)
