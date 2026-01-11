@@ -10,6 +10,7 @@
 #include "ports/IExporterPort.h"
 #include "ports/IRendererPort.h"
 #include "domain/Model.h"
+#include "domain/SketchModel.h"
 
 namespace core {
 
@@ -61,6 +62,14 @@ namespace core {
 
         ports::IFileLoaderPort* findLoaderForFile(const std::string& filepath);
         ports::IExporterPort* findExporterForFormat(const std::string& format);
+
+    public:
+        bool loadSketchDocument(const std::string& filepath);
+        std::shared_ptr<domain::sketch::Document> getSketchDocument() const;
+
+    private:
+        std::shared_ptr<domain::sketch::Document> m_sketchDoc;
+
     };
 
 } // namespace core

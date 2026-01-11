@@ -9,7 +9,9 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin/${CMAKE_BUILD_TYPE})
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib/${CMAKE_BUILD_TYPE})
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib/${CMAKE_BUILD_TYPE})
 
+# -------------------------
 # OpenCASCADE Configuration
+# -------------------------
 if(DEFINED ENV{OpenCASCADE_DIR})
     set(OpenCASCADE_DIR $ENV{OpenCASCADE_DIR})
 else()
@@ -31,7 +33,7 @@ elseif(EXISTS "${OpenCASCADE_DIR}/lib")
     set(OpenCASCADE_BINARY_DIR "${OpenCASCADE_DIR}/bin")
 endif()
 
-# 3rd party directory
+# 3rd party directory (OCC DLL search)
 set(OpenCASCADE_3RDPARTY_ROOT "C:/opencascade-7.9.3/3rdparty-vc14-64")
 
 message(STATUS "OpenCASCADE root: ${OpenCASCADE_DIR}")
@@ -40,70 +42,141 @@ message(STATUS "OpenCASCADE libraries: ${OpenCASCADE_LIBRARY_DIR}")
 message(STATUS "OpenCASCADE binaries: ${OpenCASCADE_BINARY_DIR}")
 message(STATUS "OpenCASCADE 3rd party: ${OpenCASCADE_3RDPARTY_ROOT}")
 
-# Find packages
+# -------------------------
+# Packages
+# -------------------------
 find_package(OpenGL REQUIRED)
-find_package(glfw3 CONFIG REQUIRED)
 
+# -------------------------
+# External deps: GLFW + ImGui + GLM + STB + nlohmann-json
+# -------------------------
+set(EXTERNAL_DIR "${CMAKE_CURRENT_SOURCE_DIR}/external")
+set(GLFW_DIR     "${EXTERNAL_DIR}/glfw")
+set(IMGUI_DIR    "${EXTERNAL_DIR}/imgui-fork")
+set(GLM_DIR      "${EXTERNAL_DIR}/glm")
+set(STB_DIR      "${EXTERNAL_DIR}/stb")
+set(NLOHMANN_JSON_DIR "${EXTERNAL_DIR}/nlohmann_json")
+
+# Your custom ImGui extension folder
+set(IMGUI_CUSTOM_DIR "${CMAKE_CURRENT_SOURCE_DIR}/ImGui")
+
+# ---- GLFW from submodule ----
+add_subdirectory("${GLFW_DIR}")
+
+# ---- nlohmann-json (header-only) ----
+add_library(nlohmann_json INTERFACE)
+target_include_directories(nlohmann_json INTERFACE
+    "${NLOHMANN_JSON_DIR}/single_include"
+)
+
+# ---- ImGui from submodule ----
+add_library(imgui STATIC
+    # Core ImGui
+    "${IMGUI_DIR}/imgui.cpp"
+    "${IMGUI_DIR}/imgui_draw.cpp"
+    "${IMGUI_DIR}/imgui_tables.cpp"
+    "${IMGUI_DIR}/imgui_widgets.cpp"
+    "${IMGUI_DIR}/imgui_demo.cpp"
+
+    # Backends
+    "${IMGUI_DIR}/backends/imgui_impl_glfw.cpp"
+    "${IMGUI_DIR}/backends/imgui_impl_opengl3.cpp"
+
+    # Custom ImGui additions
+    "${IMGUI_CUSTOM_DIR}/ImGuiBuild.cpp"
+    "${IMGUI_CUSTOM_DIR}/ImGuiTheme.cpp"
+    "${IMGUI_CUSTOM_DIR}/Image.cpp"
+)
+
+target_include_directories(imgui PUBLIC
+    "${IMGUI_DIR}"
+    "${IMGUI_DIR}/backends"
+    "${IMGUI_CUSTOM_DIR}"
+    "${GLM_DIR}"
+    "${STB_DIR}"
+)
+
+target_link_libraries(imgui PUBLIC OpenGL::GL glfw)
+
+# -------------------------
 # Include OpenCASCADE
+# -------------------------
 include_directories(${OpenCASCADE_INCLUDE_DIR})
 
-# ImGui setup from git submodule
-set(IMGUI_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/imgui)
-if(EXISTS ${IMGUI_DIR})
-    add_library(imgui STATIC
-        ${IMGUI_DIR}/imgui.cpp
-        ${IMGUI_DIR}/imgui_draw.cpp
-        ${IMGUI_DIR}/imgui_tables.cpp
-        ${IMGUI_DIR}/imgui_widgets.cpp
-        ${IMGUI_DIR}/imgui_demo.cpp
-        ${IMGUI_DIR}/backends/imgui_impl_glfw.cpp
-        ${IMGUI_DIR}/backends/imgui_impl_opengl3.cpp
-    )
-    target_include_directories(imgui PUBLIC 
-        ${IMGUI_DIR}
-        ${IMGUI_DIR}/backends
-    )
-    target_link_libraries(imgui PUBLIC OpenGL::GL glfw)
-    target_compile_definitions(imgui PUBLIC IMGUI_IMPL_OPENGL_LOADER_GLAD)
-    message(STATUS "ImGui found at: ${IMGUI_DIR}")
-else()
-    message(FATAL_ERROR "ImGui not found. Run: git submodule update --init --recursive")
-endif()
-
+# -------------------------
 # Source files
+# -------------------------
 set(DOMAIN_SOURCES
     src/domain/Model.cpp
     src/domain/Geometry.cpp
+
+    # ---- Sketch domain (NEW) ----
+    src/domain/SketchEntities.cpp
+    src/domain/SketchConstraints.cpp
 )
 
 set(CORE_SOURCES
     src/core/Application.cpp
+
+    # ---- Rendering (NEW) ----
+    src/core/rendering/SketchRenderBuilder.cpp
 )
 
 set(ADAPTER_SOURCES
     src/adapters/ui/ImGuiAdapter.cpp
+    src/adapters/ui/UI.cpp
     src/adapters/loaders/StepFileLoader.cpp
     src/adapters/exporters/ObjExporter.cpp
     src/adapters/exporters/StlExporter.cpp
     src/adapters/rendering/OcctRenderer.cpp
+
+    # ---- Persistence (NEW) ----
+    src/adapters/persistence/SketchDocumentMapper.cpp
+    src/adapters/persistence/SketchDocumentJson.cpp
+    src/adapters/persistence/JsonSketchDocumentAdapter.cpp
 )
 
 set(HEADER_FILES
     src/domain/Model.h
     src/domain/Geometry.h
+
+    # ---- Sketch domain (NEW) ----
+    src/domain/SketchIds.h
+    src/domain/SketchMath.h
+    src/domain/SketchEntities.h
+    src/domain/SketchConstraints.h
+    src/domain/SketchModel.h
+
+    # ---- Rendering DTOs (NEW) ----
+    src/core/rendering/RenderScene.h
+    src/core/rendering/CameraState.h
+    src/core/rendering/SketchRenderBuilder.h
+
+    # ---- Ports (NEW) ----
+    src/ports/ISketchDocumentPersistencePort.h
+
+    # ---- Persistence DTO (NEW) ----
+    src/adapters/persistence/SketchDocumentDto.h
+    src/adapters/persistence/SketchDocumentMapper.h
+    src/adapters/persistence/SketchDocumentJson.h
+    src/adapters/persistence/JsonSketchDocumentAdapter.h
+
     src/ports/IUIPort.h
     src/ports/IFileLoaderPort.h
     src/ports/IExporterPort.h
     src/ports/IRendererPort.h
     src/core/Application.h
     src/adapters/ui/ImGuiAdapter.h
+    src/adapters/ui/UI.h
     src/adapters/loaders/StepFileLoader.h
     src/adapters/exporters/ObjExporter.h
     src/adapters/exporters/StlExporter.h
     src/adapters/rendering/OcctRenderer.h
 )
 
+# -------------------------
 # Main executable
+# -------------------------
 add_executable(${PROJECT_NAME}
     src/main.cpp
     ${DOMAIN_SOURCES}
@@ -114,7 +187,7 @@ add_executable(${PROJECT_NAME}
 
 target_include_directories(${PROJECT_NAME} PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
-    ${CMAKE_CURRENT_SOURCE_DIR}/external
+    ${GLM_DIR}
 )
 
 # Add OpenCASCADE link directories
@@ -127,7 +200,8 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
     imgui
     OpenGL::GL
     glfw
-    
+    nlohmann_json
+
     # Core OpenCASCADE libraries
     TKernel
     TKMath
@@ -145,72 +219,20 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
     TKXCAF
     TKBin
     TKBinXCAF
-    
+
     # Data Exchange libraries
     TKXSBase
     TKDESTEP
-    
+
     # Additional required libraries
     TKLCAF
     TKCAF
     TKCDF
-    TKBinL
-    TKXmlL
 )
 
-# Windows-specific OpenGL linking
 if(WIN32)
     target_link_libraries(${PROJECT_NAME} PRIVATE opengl32)
 endif()
 
-# Compiler options
-if(MSVC)
-    target_compile_options(${PROJECT_NAME} PRIVATE /W3)
-    target_compile_options(${PROJECT_NAME} PRIVATE $<$<CONFIG:Release>:/O2>)
-endif()
-
-# Set Visual Studio properties
-set_property(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT ${PROJECT_NAME})
-
-if(WIN32)
-    # Get all subdirectories in 3rdparty
-    file(GLOB OCC_3RDPARTY_SUBDIRS "${OpenCASCADE_3RDPARTY_ROOT}/*")
-    
-    # Start with OpenCASCADE bin directory
-    set(OCC_ALL_PATHS "${OpenCASCADE_BINARY_DIR}")
-    
-    message(STATUS "Searching for 3rd party DLL directories...")
-    
-    # Add bin directory from each subdirectory if it exists
-    foreach(SUBDIR ${OCC_3RDPARTY_SUBDIRS})
-        if(IS_DIRECTORY ${SUBDIR})
-            # Check for bin directory
-            set(BIN_PATH "${SUBDIR}/bin")
-            if(EXISTS ${BIN_PATH})
-                set(OCC_ALL_PATHS "${OCC_ALL_PATHS};${BIN_PATH}")
-                message(STATUS "  Found: ${BIN_PATH}")
-            endif()
-            
-            # Also check for bin/win64 subdirectory (like OpenVR)
-            set(BIN_WIN64_PATH "${SUBDIR}/bin/win64")
-            if(EXISTS ${BIN_WIN64_PATH})
-                set(OCC_ALL_PATHS "${OCC_ALL_PATHS};${BIN_WIN64_PATH}")
-                message(STATUS "  Found: ${BIN_WIN64_PATH}")
-            endif()
-        endif()
-    endforeach()
-    
-    message(STATUS "Final runtime DLL paths configured for Visual Studio debugger")
-    
-    set_target_properties(${PROJECT_NAME} PROPERTIES
-        VS_DEBUGGER_WORKING_DIRECTORY "${CMAKE_BINARY_DIR}/bin/${CMAKE_BUILD_TYPE}"
-        VS_DEBUGGER_ENVIRONMENT "PATH=${OCC_ALL_PATHS};%PATH%"
-    )
-endif()
-
-# Print configuration
-get_target_property(LINKED_LIBS ${PROJECT_NAME} LINK_LIBRARIES)
-message(STATUS "Linked libraries: ${LINKED_LIBS}")
-
-# Installation
-install(TARGETS ${PROJECT_NAME} DESTINATION bin)
+set_property(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+    PROPERTY VS_STARTUP_PROJECT ${PROJECT_NAME})
