@@ -37,9 +37,13 @@ int main(int argc, char** argv) {
             std::cerr << "Failed to initialize application\n";
             return 1;
         }
-       /* adapters::persistence::JsonSketchDocumentAdapter io;
-        auto doc = io.loadDocument("../test.pistachio.json");
-        io.saveDocument(*doc, "out.pistachio.json");*/
+
+        std::cout << "Load Sketch Document...\n";
+        app->loadSketchDocument("test.pistachio.json");
+
+        //adapters::persistence::JsonSketchDocumentAdapter io;
+        //auto doc = io.loadDocument("../test.pistachio.json");
+        //io.saveDocument(*doc, "out.pistachio.json");*/
 
 
         std::cout << "Application started successfully!\n";

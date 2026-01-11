@@ -42,6 +42,7 @@ private:
     void render3DView();
     void renderCameraGizmo();
     void UI_DrawTitlebar(float& outTitlebarHeight);
+    void DrawViewport();
 
     char m_filePathBuffer[512];
     char m_exportPathBuffer[512];

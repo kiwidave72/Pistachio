@@ -1,5 +1,7 @@
 ﻿#include "core/Application.h"
 #include <algorithm>
+#include "adapters/persistence/JsonSketchDocumentAdapter.h"
+#include <iostream>
 
 namespace core {
 
@@ -32,39 +34,52 @@ namespace core {
     }
 
     bool Application::initialize() {
-
-
+        std::cout << "\n=== APPLICATION INITIALIZATION ===" << std::endl;
 
         if (!m_uiAdapter) {
             m_statusMessage = "Error: No UI adapter set";
+            std::cout << "[X] No UI adapter" << std::endl;
             return false;
         }
+        std::cout << "[OK] UI adapter set" << std::endl;
 
         if (!m_uiAdapter->initialize()) {
             m_statusMessage = "Error: Failed to initialize UI";
+            std::cout << "[X] UI initialization failed" << std::endl;
             return false;
         }
+        std::cout << "[OK] UI initialized" << std::endl;
 
         if (m_renderer && !m_renderer->initialize()) {
             m_statusMessage = "Error: Failed to initialize renderer";
+            std::cout << "[X] Renderer initialization failed" << std::endl;
             return false;
         }
 
+        if (m_renderer) {
+            std::cout << "[OK] Renderer initialized" << std::endl;
+            auto backend = m_renderer->getBackend();
+            std::cout << "  Backend: " <<
+                (backend == ports::RendererBackend::Occt ? "OCCT" : "OpenGL")
+                << std::endl;
+        }
+
         m_statusMessage = "Application initialized";
+        std::cout << "=================================\n" << std::endl;
         return true;
     }
 
     void Application::run() {
         if (!m_uiAdapter) return;
 
+        std::cout << "Starting main loop...\n" << std::endl;
+
         while (!m_uiAdapter->shouldClose()) {
             m_uiAdapter->beginFrame();
 
-            if (m_renderer) {
-                m_renderer->render();
-            }
-
+            // UI adapter will call renderer in DrawViewport()
             m_uiAdapter->render();
+
             m_uiAdapter->endFrame();
         }
     }
@@ -218,6 +233,43 @@ namespace core {
             }
         }
         return nullptr;
+    }
+
+    bool Application::loadSketchDocument(const std::string& filepath)
+    {
+        std::cout << "\n=== LOADING SKETCH DOCUMENT ===" << std::endl;
+        std::cout << "File: " << filepath << std::endl;
+
+        adapters::persistence::JsonSketchDocumentAdapter io;
+        m_sketchDoc = io.loadDocument(filepath);
+
+        if (m_sketchDoc) {
+            std::cout << "[OK] Sketch document loaded successfully" << std::endl;
+            std::cout << "  Sketches in document: " << m_sketchDoc->sketches.size() << std::endl;
+
+            if (!m_sketchDoc->sketches.empty()) {
+                auto& sketch = m_sketchDoc->sketches[0];
+                std::cout << "  First sketch entities:" << std::endl;
+                std::cout << "    Points: " << sketch.entities.points().size() << std::endl;
+                std::cout << "    Lines: " << sketch.entities.lines().size() << std::endl;
+                std::cout << "    Circles: " << sketch.entities.circles().size() << std::endl;
+                std::cout << "    Arcs: " << sketch.entities.arcs().size() << std::endl;
+                std::cout << "    Ellipses: " << sketch.entities.ellipses().size() << std::endl;
+                std::cout << "    Curves: " << sketch.entities.curves().size() << std::endl;
+            }
+        }
+        else {
+            std::cout << "[X] Failed to load sketch document" << std::endl;
+        }
+        std::cout << "===============================\n" << std::endl;
+
+        updateStatus("Loaded sketch: " + filepath);
+        return (m_sketchDoc != nullptr);
+    }
+
+    std::shared_ptr<domain::sketch::Document> Application::getSketchDocument() const
+    {
+        return m_sketchDoc;
     }
 
 } // namespace core

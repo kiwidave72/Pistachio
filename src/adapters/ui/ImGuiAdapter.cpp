@@ -1,5 +1,11 @@
 ﻿#include "adapters/ui/ImGuiAdapter.h"
 #include "core/Application.h"
+
+#include "../Roboto-Regular.embed"
+#include "../ImGui/ImGuiTheme.h"
+#include "../ImGui/Image.h"
+
+
 #include <imgui.h>
 #include <imgui_impl_glfw.h>
 #include <imgui_impl_opengl3.h>
@@ -12,12 +18,12 @@
  
 #include "stb_image.h"
 
-#include "../Roboto-Regular.embed"
-#include "../ImGui/ImGuiTheme.h"
-#include "../ImGui/Image.h"
 
 #include "UI.h"
 
+#include "core/rendering/SketchRenderBuilder.h"
+#include "adapters/rendering/OcctRenderer.h"
+#include "adapters/rendering/RendererRouter.h"
 
 #include "../../../Walnut-Icon.embed"
 #include "../../../WindowImages.embed"
@@ -49,7 +55,7 @@ bool ImGuiAdapter::initialize() {
 
 
 
-    m_window = glfwCreateWindow(1800, 1000, "Pistachio - CAD Converter", nullptr, nullptr);
+    m_window = glfwCreateWindow(1200, 800, "Pistachio - CAD Converter", nullptr, nullptr);
     if (!m_window) {
         glfwTerminate();
         return false;
@@ -146,6 +152,7 @@ bool ImGuiAdapter::shouldClose() {
 
 void ImGuiAdapter::beginFrame() {
     glfwPollEvents();
+    glfwMakeContextCurrent(m_window);
     ImGui_ImplOpenGL3_NewFrame();
     ImGui_ImplGlfw_NewFrame();
     ImGui::NewFrame();
@@ -350,6 +357,53 @@ void ImGuiAdapter::beginFrame() {
     ImGui::End();
 }
 
+//void ImGuiAdapter::beginFrame() {
+//    
+//    glfwPollEvents();
+//    
+//    glfwMakeContextCurrent(m_window);
+//
+//    ImGui_ImplOpenGL3_NewFrame();
+//    ImGui_ImplGlfw_NewFrame();
+//    ImGui::NewFrame();
+//
+//    // Simple dockspace setup
+//    ImGuiViewport* viewport = ImGui::GetMainViewport();
+//    ImGui::SetNextWindowPos(viewport->WorkPos);
+//    ImGui::SetNextWindowSize(viewport->WorkSize);
+//    ImGui::SetNextWindowViewport(viewport->ID);
+//
+//    ImGuiWindowFlags window_flags = ImGuiWindowFlags_MenuBar | ImGuiWindowFlags_NoDocking;
+//    window_flags |= ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse;
+//    window_flags |= ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove;
+//    window_flags |= ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoNavFocus;
+//
+//    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
+//    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+//    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
+//
+//    ImGui::Begin("DockSpace", nullptr, window_flags);
+//    ImGui::PopStyleVar(3);
+//
+//    // Menu bar
+//    if (ImGui::BeginMenuBar()) {
+//        if (ImGui::BeginMenu("File")) {
+//            if (ImGui::MenuItem("Exit")) {
+//                glfwSetWindowShouldClose(m_window, GLFW_TRUE);
+//            }
+//            ImGui::EndMenu();
+//        }
+//        ImGui::EndMenuBar();
+//    }
+//
+//    ImGuiID dockspace_id = ImGui::GetID("MainDockspace");
+//    ImGui::DockSpace(dockspace_id, ImVec2(0.0f, 0.0f));
+//
+//    ImGui::End();
+//
+//    
+//}
+
 void ImGuiAdapter::endFrame() {
     ImGui::Render();
     int display_w, display_h;
@@ -359,18 +413,167 @@ void ImGuiAdapter::endFrame() {
     glClear(GL_COLOR_BUFFER_BIT);
     ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
     glfwSwapBuffers(m_window);
+
+    glfwMakeContextCurrent(m_window);
 }
 
 void ImGuiAdapter::render() {
     
-    ImGui::ShowDemoWindow();
+    //ImGui::ShowDemoWindow();
 
-    renderMainMenu();
-    renderModelInfo();
+    //renderMainMenu();
+    //renderModelInfo();  
     render3DView();
-    renderStatusBar();
-
+    //renderStatusBar();
+    DrawViewport();
    
+}
+
+void ImGuiAdapter::DrawViewport()
+{
+    ImGui::Begin("Viewport");
+
+    // === DIAGNOSTICS ===
+    ImGui::Separator();
+    ImGui::Text("RENDERER STATUS");
+    ImGui::Separator();
+
+    auto* renderer = m_app->getRenderer();
+    if (!renderer) {
+        ImGui::TextColored(ImVec4(1, 0, 0, 1), "[X] NO RENDERER!");
+        ImGui::End();
+        return;
+    }
+
+    // Direct cast (no router)
+    auto* occt = dynamic_cast<adapters::OcctRenderer*>(renderer);
+    if (occt) {
+        ImGui::TextColored(ImVec4(0, 1, 0, 1), "[OK] OcctRenderer active");
+    }
+    else {
+        ImGui::TextColored(ImVec4(1, 0, 0, 1), "[X] Not OcctRenderer!");
+        ImGui::End();
+        return;
+    }
+
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::Text("SKETCH DATA");
+    ImGui::Separator();
+
+    // === SKETCH SECTION ===
+    auto doc = m_app->getSketchDocument();
+    if (!doc) {
+        ImGui::TextColored(ImVec4(1, 1, 0, 1), "[!] No sketch document loaded");
+        ImGui::TextWrapped("Sketch should have been loaded in main.cpp");
+        ImGui::End();
+        return;
+    }
+
+    ImGui::TextColored(ImVec4(0, 1, 0, 1), "[OK] Sketch document loaded");
+    ImGui::Text("Sketches: %zu", doc->sketches.size());
+
+    if (doc->sketches.empty()) {
+        ImGui::TextColored(ImVec4(1, 1, 0, 1), "[!] Document has no sketches");
+        ImGui::End();
+        return;
+    }
+
+    // Get first sketch
+    auto& sketch = doc->sketches[0];
+
+    ImGui::Text("Sketch 0 entities:");
+    ImGui::Indent();
+    size_t pointCount = sketch.entities.points().size();
+    size_t lineCount = sketch.entities.lines().size();
+    size_t circleCount = sketch.entities.circles().size();
+    size_t arcCount = sketch.entities.arcs().size();
+    size_t ellipseCount = sketch.entities.ellipses().size();
+    size_t curveCount = sketch.entities.curves().size();
+
+    ImGui::Text("Points: %zu", pointCount);
+    ImGui::Text("Lines: %zu", lineCount);
+    ImGui::Text("Circles: %zu", circleCount);
+    ImGui::Text("Arcs: %zu", arcCount);
+    ImGui::Text("Ellipses: %zu", ellipseCount);
+    ImGui::Text("Curves: %zu", curveCount);
+    ImGui::Unindent();
+
+    size_t totalEntities = pointCount + lineCount + circleCount + arcCount + ellipseCount + curveCount;
+
+    if (totalEntities == 0) {
+        ImGui::TextColored(ImVec4(1, 1, 0, 1), "[!] Sketch has no entities!");
+        ImGui::End();
+        return;
+    }
+
+    // Build render scene
+    auto scene = core::rendering::BuildRenderSceneFromSketch(sketch);
+
+    ImGui::Spacing();
+    ImGui::Text("Render scene:");
+    ImGui::Indent();
+    ImGui::Text("Lines: %zu", scene.lines.size());
+    ImGui::Text("Circles: %zu", scene.circles.size());
+    ImGui::Text("Arcs: %zu", scene.arcs.size());
+    ImGui::Text("Ellipses: %zu", scene.ellipses.size());
+    ImGui::Text("Polylines: %zu", scene.polylines.size());
+    ImGui::Text("Points: %zu", scene.points.size());
+    ImGui::Unindent();
+
+    // Show sample data
+    if (!scene.lines.empty()) {
+        ImGui::Spacing();
+        ImGui::Text("Sample line 0:");
+        ImGui::Indent();
+        auto& line = scene.lines[0];
+        ImGui::Text("From: (%.2f, %.2f, %.2f)", line.a.x, line.a.y, line.a.z);
+        ImGui::Text("  To: (%.2f, %.2f, %.2f)", line.b.x, line.b.y, line.b.z);
+        float length = glm::length(line.b - line.a);
+        ImGui::Text("Length: %.2f", length);
+        ImGui::Unindent();
+    }
+
+    if (!scene.circles.empty()) {
+        ImGui::Spacing();
+        ImGui::Text("Sample circle 0:");
+        ImGui::Indent();
+        auto& circle = scene.circles[0];
+        ImGui::Text("Center: (%.2f, %.2f, %.2f)", circle.center.x, circle.center.y, circle.center.z);
+        ImGui::Text("Radius: %.2f", circle.radius);
+        ImGui::Unindent();
+    }
+
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::Text("ACTIONS");
+    ImGui::Separator();
+
+    // Set overlay
+    occt->setSketchOverlay(scene);
+    ImGui::TextColored(ImVec4(0, 1, 0, 1), "[OK] Overlay set");
+
+    if (ImGui::Button("Force Render & Update View", ImVec2(200, 0))) {
+        std::cout << "\n>>> MANUAL RENDER TRIGGERED <<<\n" << std::endl;
+        occt->render(m_window);
+        occt->fitAll();
+    }
+
+    ImGui::SameLine();
+    if (ImGui::Button("Fit All", ImVec2(100, 0))) {
+        occt->fitAll();
+    }
+
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::Text("AUTO RENDER");
+    ImGui::Separator();
+
+    // Automatic render call
+    occt->render(m_window);
+    ImGui::Text("[OK] Render called automatically");
+
+    ImGui::End();
 }
 
 void ImGuiAdapter::renderMainMenu() {

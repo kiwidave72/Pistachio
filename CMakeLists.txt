@@ -48,7 +48,7 @@ message(STATUS "OpenCASCADE 3rd party: ${OpenCASCADE_3RDPARTY_ROOT}")
 find_package(OpenGL REQUIRED)
 
 # -------------------------
-# External deps: GLFW + ImGui + GLM + STB + nlohmann/json
+# External deps: GLFW + ImGui + GLM + STB + nlohmann-json
 # -------------------------
 set(EXTERNAL_DIR "${CMAKE_CURRENT_SOURCE_DIR}/external")
 set(GLFW_DIR     "${EXTERNAL_DIR}/glfw")
@@ -61,79 +61,42 @@ set(NLOHMANN_JSON_DIR "${EXTERNAL_DIR}/nlohmann_json")
 set(IMGUI_CUSTOM_DIR "${CMAKE_CURRENT_SOURCE_DIR}/ImGui")
 
 # ---- GLFW from submodule ----
-if(EXISTS "${GLFW_DIR}/CMakeLists.txt")
-    set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
-    set(GLFW_BUILD_TESTS    OFF CACHE BOOL "" FORCE)
-    set(GLFW_BUILD_DOCS     OFF CACHE BOOL "" FORCE)
-    set(GLFW_INSTALL        OFF CACHE BOOL "" FORCE)
-    add_subdirectory("${GLFW_DIR}")
-    message(STATUS "GLFW found at: ${GLFW_DIR}")
-else()
-    message(FATAL_ERROR "GLFW not found at ${GLFW_DIR}. Run: git submodule update --init --recursive")
-endif()
+add_subdirectory("${GLFW_DIR}")
 
-# ---- GLM (header-only) ----
-if(EXISTS "${GLM_DIR}/glm/glm.hpp")
-    message(STATUS "GLM found at: ${GLM_DIR}")
-else()
-    message(FATAL_ERROR "GLM not found at ${GLM_DIR}. Run: git submodule update --init --recursive")
-endif()
-
-# ---- STB (header-only) ----
-if(EXISTS "${STB_DIR}/stb_image.h")
-    message(STATUS "STB found at: ${STB_DIR}")
-else()
-    message(WARNING "STB not found at ${STB_DIR}. Download stb_image.h from https://github.com/nothings/stb")
-endif()
-
-# ---- nlohmann/json (header-only) ----
-if(EXISTS "${NLOHMANN_JSON_DIR}/single_include/nlohmann/json.hpp")
-    add_library(nlohmann_json INTERFACE)
-    target_include_directories(nlohmann_json INTERFACE
-        "${NLOHMANN_JSON_DIR}/single_include"
-    )
-    message(STATUS "nlohmann/json found at: ${NLOHMANN_JSON_DIR}")
-else()
-    message(FATAL_ERROR "nlohmann/json not found at ${NLOHMANN_JSON_DIR}. Run: git submodule update --init --recursive")
-endif()
+# ---- nlohmann-json (header-only) ----
+add_library(nlohmann_json INTERFACE)
+target_include_directories(nlohmann_json INTERFACE
+    "${NLOHMANN_JSON_DIR}/single_include"
+)
 
 # ---- ImGui from submodule ----
-if(EXISTS "${IMGUI_DIR}")
-    add_library(imgui STATIC
-        # Core ImGui
-        "${IMGUI_DIR}/imgui.cpp"
-        "${IMGUI_DIR}/imgui_draw.cpp"
-        "${IMGUI_DIR}/imgui_tables.cpp"
-        "${IMGUI_DIR}/imgui_widgets.cpp"
-        "${IMGUI_DIR}/imgui_demo.cpp"
+add_library(imgui STATIC
+    # Core ImGui
+    "${IMGUI_DIR}/imgui.cpp"
+    "${IMGUI_DIR}/imgui_draw.cpp"
+    "${IMGUI_DIR}/imgui_tables.cpp"
+    "${IMGUI_DIR}/imgui_widgets.cpp"
+    "${IMGUI_DIR}/imgui_demo.cpp"
 
-        # Backends
-        "${IMGUI_DIR}/backends/imgui_impl_glfw.cpp"
-        "${IMGUI_DIR}/backends/imgui_impl_opengl3.cpp"
+    # Backends
+    "${IMGUI_DIR}/backends/imgui_impl_glfw.cpp"
+    "${IMGUI_DIR}/backends/imgui_impl_opengl3.cpp"
 
-        # Custom ImGui additions
-        "${IMGUI_CUSTOM_DIR}/ImGuiBuild.cpp"
-        "${IMGUI_CUSTOM_DIR}/ImGuiTheme.cpp"
-        "${IMGUI_CUSTOM_DIR}/ImGuiTheme.h"
-        "${IMGUI_CUSTOM_DIR}/Image.cpp"
-        "${IMGUI_CUSTOM_DIR}/Image.h"
-    )
+    # Custom ImGui additions
+    "${IMGUI_CUSTOM_DIR}/ImGuiBuild.cpp"
+    "${IMGUI_CUSTOM_DIR}/ImGuiTheme.cpp"
+    "${IMGUI_CUSTOM_DIR}/Image.cpp"
+)
 
-    target_include_directories(imgui PUBLIC
-        "${IMGUI_DIR}"
-        "${IMGUI_DIR}/backends"
-        "${IMGUI_CUSTOM_DIR}"
-        "${GLM_DIR}"
-        "${STB_DIR}"
-    )
+target_include_directories(imgui PUBLIC
+    "${IMGUI_DIR}"
+    "${IMGUI_DIR}/backends"
+    "${IMGUI_CUSTOM_DIR}"
+    "${GLM_DIR}"
+    "${STB_DIR}"
+)
 
-    target_link_libraries(imgui PUBLIC OpenGL::GL glfw)
-
-    message(STATUS "ImGui found at: ${IMGUI_DIR}")
-    message(STATUS "ImGui custom dir: ${IMGUI_CUSTOM_DIR}")
-else()
-    message(FATAL_ERROR "ImGui not found. Run: git submodule update --init --recursive")
-endif()
+target_link_libraries(imgui PUBLIC OpenGL::GL glfw)
 
 # -------------------------
 # Include OpenCASCADE
@@ -154,6 +117,9 @@ set(DOMAIN_SOURCES
 
 set(CORE_SOURCES
     src/core/Application.cpp
+
+    # ---- Rendering (NEW) ----
+    src/core/rendering/SketchRenderBuilder.cpp
 )
 
 set(ADAPTER_SOURCES
@@ -164,7 +130,7 @@ set(ADAPTER_SOURCES
     src/adapters/exporters/StlExporter.cpp
     src/adapters/rendering/OcctRenderer.cpp
 
-    # ---- Sketch persistence (NEW) ----
+    # ---- Persistence (NEW) ----
     src/adapters/persistence/SketchDocumentMapper.cpp
     src/adapters/persistence/SketchDocumentJson.cpp
     src/adapters/persistence/JsonSketchDocumentAdapter.cpp
@@ -180,6 +146,11 @@ set(HEADER_FILES
     src/domain/SketchEntities.h
     src/domain/SketchConstraints.h
     src/domain/SketchModel.h
+
+    # ---- Rendering DTOs (NEW) ----
+    src/core/rendering/RenderScene.h
+    src/core/rendering/CameraState.h
+    src/core/rendering/SketchRenderBuilder.h
 
     # ---- Ports (NEW) ----
     src/ports/ISketchDocumentPersistencePort.h
@@ -257,53 +228,11 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
     TKLCAF
     TKCAF
     TKCDF
-    TKBinL
-    TKXmlL
-    TKXmlL
 )
 
-# Windows-specific OpenGL linking
 if(WIN32)
     target_link_libraries(${PROJECT_NAME} PRIVATE opengl32)
 endif()
 
-# Compiler options
-if(MSVC)
-    target_compile_options(${PROJECT_NAME} PRIVATE /W3)
-    target_compile_options(${PROJECT_NAME} PRIVATE $<$<CONFIG:Release>:/O2>)
-endif()
-
-# Set Visual Studio startup project
-set_property(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT ${PROJECT_NAME})
-
-# -------------------------
-# Visual Studio debugger PATH
-# -------------------------
-if(WIN32)
-    file(GLOB OCC_3RDPARTY_SUBDIRS "${OpenCASCADE_3RDPARTY_ROOT}/*")
-
-    set(OCC_ALL_PATHS "${OpenCASCADE_BINARY_DIR}")
-
-    foreach(SUBDIR ${OCC_3RDPARTY_SUBDIRS})
-        if(IS_DIRECTORY ${SUBDIR})
-            if(EXISTS "${SUBDIR}/bin")
-                set(OCC_ALL_PATHS "${OCC_ALL_PATHS};${SUBDIR}/bin")
-            endif()
-            if(EXISTS "${SUBDIR}/bin/win64")
-                set(OCC_ALL_PATHS "${OCC_ALL_PATHS};${SUBDIR}/bin/win64")
-            endif()
-        endif()
-    endforeach()
-
-    set_target_properties(${PROJECT_NAME} PROPERTIES
-        VS_DEBUGGER_WORKING_DIRECTORY "${CMAKE_BINARY_DIR}/bin/${CMAKE_BUILD_TYPE}"
-        VS_DEBUGGER_ENVIRONMENT "PATH=${OCC_ALL_PATHS};%PATH%"
-    )
-endif()
-
-# Print configuration
-get_target_property(LINKED_LIBS ${PROJECT_NAME} LINK_LIBRARIES)
-message(STATUS "Linked libraries: ${LINKED_LIBS}")
-
-# Installation
-install(TARGETS ${PROJECT_NAME} DESTINATION bin)
+set_property(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+    PROPERTY VS_STARTUP_PROJECT ${PROJECT_NAME})
