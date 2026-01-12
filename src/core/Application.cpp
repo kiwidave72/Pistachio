@@ -20,6 +20,9 @@ namespace core {
         }
     }
 
+    void Application::setResolverAdapter(std::unique_ptr<ports::ISketchResolverPort> resolver) {
+        m_resolverAdapter = std::move(resolver);
+    }
     void Application::setUIAdapter(std::unique_ptr<ports::IUIPort> uiAdapter) {
         m_uiAdapter = std::move(uiAdapter);
     }
@@ -242,10 +245,32 @@ namespace core {
             {
                 if (ImGui::BeginMenu("File"))
                 {
+                    if (ImGui::MenuItem("Open")) {}
+                    ImGui::Separator();
+                    if (ImGui::MenuItem("Save")) {}
+                    if (ImGui::MenuItem("Save as ...")) {}
+                    ImGui::Separator();
+                    if (ImGui::MenuItem("Import Sketch")) {}
+                    ImGui::Separator();
                     if (ImGui::MenuItem("Exit"))
                     {
                         this->shutdown();
                     }
+                    ImGui::EndMenu();
+                }
+                if (ImGui::BeginMenu("Sketch"))
+                {
+                    ImGui::EndMenu();
+                }
+                if (ImGui::BeginMenu("Options"))
+                {
+                    ImGui::EndMenu();
+                }
+                if (ImGui::BeginMenu("Tools"))
+                {
+                }
+                if (ImGui::BeginMenu("View"))
+                {
                     ImGui::EndMenu();
                 }
 
@@ -259,6 +284,28 @@ namespace core {
                 }
             });
     }
+
+    bool Application::runSolver() {
+        std::cout << "\n=== RUNING BASIC RESOLVER ===" << std::endl;
+        ports::ResolvedSketch output= m_resolverAdapter->solve(getSketchDocument()->sketches[0]);
+
+        if (output.report.converged) {
+            std::cout << "[OK] Sketch Resolved successfully" << std::endl;
+            
+            output.sketch.name ="Updated with resolver";
+
+            m_sketchDoc->sketches[0] = output.sketch;
+            m_sketchDoc->name = "Updated with resolver";
+            
+        }
+        else {
+            std::cout << "[X] Resolver failed" << std::endl;
+
+        }
+
+        std::cout << "  Iterations: " << output.report.iterations << std::endl;
+        return true;
+    }   
 
     bool Application::loadSketchDocument(const std::string& filepath)
     {

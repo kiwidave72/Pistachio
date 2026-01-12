@@ -1,4 +1,6 @@
-﻿#include "adapters/ui/ImGuiAdapter.h"
+﻿#include <algorithm> // std::min, std::max
+
+#include "adapters/ui/ImGuiAdapter.h"
 #include "core/Application.h"
 
 #include "../Roboto-Regular.embed"
@@ -27,7 +29,13 @@
 #include "../../../Walnut-Icon.embed"
 #include "../../../WindowImages.embed"
 
+
 namespace adapters {
+
+
+    static ImVec2 Add(const ImVec2& a, const ImVec2& b) { return ImVec2(a.x + b.x, a.y + b.y); }
+    static ImVec2 Sub(const ImVec2& a, const ImVec2& b) { return ImVec2(a.x - b.x, a.y - b.y); }
+
 
 ImGuiAdapter::ImGuiAdapter(core::Application* app)
     : m_window(nullptr), m_app(app), m_isRotating(false), m_isPanning(false) {
@@ -490,6 +498,16 @@ void ImGuiAdapter::DrawViewport()
 
     // Get first sketch
     auto& sketch = doc->sketches[0];
+
+
+    ImGui::Text("Document Name: %s", doc->name.c_str());
+
+    /*if (!sketch.entities.lines().empty()) {
+        const auto& l = sketch.entities.lines()[0];
+        ImGui::Text("Line0 A(%.2f, %.2f)  B(%.2f, %.2f)", l.a.x, l.a.y, l.b.x, l.b.y);
+    }*/
+
+
 
     ImGui::Text("Sketch 0 entities:");
     ImGui::Indent();
@@ -1031,6 +1049,139 @@ static bool PointInConvexPoly(const ImVec2* pts, int count, ImVec2 p)
      }
      return ImRect(mn, mx);
  }
+
+ // Returns true if the MAIN area (not the square) was clicked.
+ // Dropdown selection is returned via selected_index (optional).
+
+// Returns true if the MAIN area (not the square) was clicked.
+// Dropdown selection is returned via selected_index (optional).
+ bool ImGuiAdapter::RibbonButtonIconTextWithDropDown(
+     const char* id,
+     ImTextureID icon_tex,
+     ImVec2 icon_size,
+     const char* label,
+     const char* const* items,
+     int item_count,
+     int* selected_index,
+     ImVec2 size,
+     float square_size
+ )
+ {
+     ImGuiWindow* window = ImGui::GetCurrentWindow();
+     if (window->SkipItems) return false;
+
+     ImGuiID wid = window->GetID(id);
+
+     ImVec2 pos = window->DC.CursorPos;
+     ImRect bb(pos, Add(pos, size));
+
+     ImGui::ItemSize(bb);
+     if (!ImGui::ItemAdd(bb, wid))
+         return false;
+
+     ImDrawList* dl = ImGui::GetWindowDrawList();
+     const ImGuiStyle& style = ImGui::GetStyle();
+
+     const float pady = style.FramePadding.y;
+
+     // Dropdown square at bottom center
+     float square_y = bb.Max.y - pady - square_size;
+     ImVec2 square_center(bb.GetCenter().x, square_y + square_size * 0.5f);
+
+     ImVec2 square_min(square_center.x - square_size * 0.5f, square_center.y - square_size * 0.5f);
+     ImVec2 square_max(square_center.x + square_size * 0.5f, square_center.y + square_size * 0.5f);
+     ImRect square_bb(square_min, square_max);
+
+     // Hover states
+     bool square_hovered = ImGui::IsMouseHoveringRect(square_bb.Min, square_bb.Max);
+     bool whole_hovered = ImGui::IsMouseHoveringRect(bb.Min, bb.Max);
+
+     // Background + border
+     ImU32 bg = ImGui::GetColorU32(whole_hovered ? ImGuiCol_ButtonHovered : ImGuiCol_Button);
+     dl->AddRectFilled(bb.Min, bb.Max, bg, style.FrameRounding);
+     dl->AddRect(bb.Min, bb.Max, ImGui::GetColorU32(ImGuiCol_Border), style.FrameRounding);
+
+     // Layout region (space above dropdown square)
+     float content_top = bb.Min.y + pady;
+     float content_bottom = square_bb.Min.y - pady;
+     float content_h = content_bottom - content_top;
+
+     // Optional icon
+     const bool has_icon = (icon_tex != nullptr) && (icon_size.x > 0.0f) && (icon_size.y > 0.0f);
+     const float icon_h = has_icon ? icon_size.y : 0.0f;
+     const float icon_gap = has_icon ? 4.0f : 0.0f; // spacing between icon and label
+
+     // Measure label
+     ImVec2 label_size = ImGui::CalcTextSize(label, nullptr, true);
+     const float text_h = ImGui::GetTextLineHeight();
+
+     // Total stack height we want to place (icon + gap + label)
+     float stack_h = icon_h + icon_gap + text_h;
+
+     // Top of stack, vertically centered in content area
+     float stack_y = content_top + (content_h - stack_h) * 0.5f;
+     if (stack_y < content_top) stack_y = content_top; // clamp if space is tight
+
+     // Icon pos (only if icon exists)
+     if (has_icon)
+     {
+         ImVec2 icon_pos(bb.GetCenter().x - icon_size.x * 0.5f, stack_y);
+         ImVec2 icon_max = Add(icon_pos, icon_size);
+         dl->AddImage(icon_tex, icon_pos, icon_max);
+     }
+
+     // Label pos (below icon if present, otherwise centered stack)
+     float label_y = stack_y + icon_h + icon_gap;
+     ImVec2 label_pos(bb.GetCenter().x - label_size.x * 0.5f, label_y);
+     dl->AddText(label_pos, ImGui::GetColorU32(ImGuiCol_Text), label);
+
+     // Draw dropdown square + chevron
+     ImU32 sq_col = ImGui::GetColorU32(square_hovered ? ImGuiCol_FrameBgHovered : ImGuiCol_FrameBg);
+     dl->AddRectFilled(square_bb.Min, square_bb.Max, sq_col, 2.0f);
+     dl->AddRect(square_bb.Min, square_bb.Max, ImGui::GetColorU32(ImGuiCol_Border), 2.0f);
+
+     ImVec2 c = square_bb.GetCenter();
+     float t = square_size * 0.25f;
+     dl->AddTriangleFilled(
+         ImVec2(c.x - t, c.y - t * 0.25f),
+         ImVec2(c.x + t, c.y - t * 0.25f),
+         ImVec2(c.x, c.y + t),
+         ImGui::GetColorU32(ImGuiCol_Text)
+     );
+
+     // Click logic
+     bool main_clicked = false;
+     if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) && whole_hovered)
+     {
+         if (square_hovered)
+             ImGui::OpenPopup(id);
+         else
+             main_clicked = true;
+     }
+
+     // Optional: better popup placement (under the square)
+     if (ImGui::IsPopupOpen(id, ImGuiPopupFlags_None))
+         ImGui::SetNextWindowPos(ImVec2(square_bb.Min.x, square_bb.Max.y));
+
+     // Popup menu
+     if (ImGui::BeginPopup(id))
+     {
+         for (int i = 0; i < item_count; ++i)
+         {
+             bool is_sel = (selected_index && *selected_index == i);
+             if (ImGui::MenuItem(items[i], nullptr, is_sel))
+             {
+                 if (selected_index) *selected_index = i;
+             }
+         }
+         ImGui::EndPopup();
+     }
+
+     return main_clicked;
+ }
+
+  
+
  bool ImGuiAdapter::ParallelogramButtonTrueHit(const char* label, ImVec2 size, float skew_x)
  {
      ImVec2 pos = ImGui::GetCursorScreenPos();
@@ -1361,11 +1512,6 @@ static bool PointInConvexPoly(const ImVec2* pts, int count, ImVec2 p)
          ImGui::PushStyleColor(ImGuiCol_WindowBg, UI::Colors::Theme::titlebar);
 
          ImGui::Begin("##TitlebarToolsOverlay", nullptr, flags);
-
-         if (ImGui::Button("Load", ImVec2(120, 36))) {}
-         ImGui::SameLine();
-         if (ImGui::Button("Save", ImVec2(120, 36))) {}
-         ImGui::SameLine();
          if (ImGui::Button("Sketch", ImVec2(120, 36))) {}
          ImGui::SameLine();
 
@@ -1418,8 +1564,21 @@ static bool PointInConvexPoly(const ImVec2* pts, int count, ImVec2 p)
          ImGui::SameLine();
          if (ImGui::Button("Dimension", ImVec2(120, 36))) {}
          ImGui::SameLine();
-         if (ImGui::Button("Constraint", ImVec2(120, 36))) {}
+        
+         static int variant = 0;
+         const char* opts[] = { "Horizontial", "Vertical", "Coincident","Distance","Length","Raduis","Angle","Tangent","Fixed","Parallel"};
 
+         RibbonButtonIconTextWithDropDown(
+             "##LineTool",
+             nullptr,
+             ImVec2(32, 32),
+             "Constraints",
+             opts,
+             IM_ARRAYSIZE(opts),
+             &variant,
+             ImVec2(120, 36),
+             16.0f
+         );
 
          const float buttonWidth = 120.0f;
          const float buttonHeight = 36.0f;

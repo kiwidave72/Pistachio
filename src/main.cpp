@@ -7,6 +7,7 @@
 #include "adapters/exporters/StlExporter.h"
 #include "adapters/rendering/OcctRenderer.h"
 #include "adapters/persistence/JsonSketchDocumentAdapter.h"
+#include "adapters/solvers/BasicConstraintSolver.h"
 #include <filesystem>
 #include <iostream>
 
@@ -29,7 +30,7 @@ int main(int argc, char** argv) {
         app->addFileLoader(std::make_unique<adapters::StepFileLoader>());
         app->addExporter(std::make_unique<adapters::ObjExporter>());
         app->addExporter(std::make_unique<adapters::StlExporter>());
-
+        app->setResolverAdapter(std::make_unique<adapters::solver::BasicConstraintSolver>());
 
 
         std::cout << "Initializing application...\n";
@@ -53,7 +54,8 @@ int main(int argc, char** argv) {
         std::cout << "Application started successfully!\n";
         std::cout << "Press ESC or close window to exit\n\n";
         
-
+        app->runSolver();
+        
         
         app->run();
         

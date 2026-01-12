@@ -63,7 +63,18 @@ private:
     bool ParallelogramButtonTrueHit(const char* label, ImVec2 pos, ImVec2 size, float skew_x = 18.0f);
     bool TrapeziumButtonTrueHit(const char* label, ImVec2 size, float top_inset_x = 18.0f);
     bool TrapeziumButtonTrueHit(const char* label, ImVec2 pos, ImVec2 size, float top_inset_x = 18.0f);
-    
+    bool RibbonButtonIconTextWithDropDown(
+        const char* id,
+        ImTextureID icon_tex,
+        ImVec2 icon_size,
+        const char* label,
+        const char* const* items,
+        int item_count,
+        int* selected_index,
+        ImVec2 size,
+        float square_size
+    );
+
     bool ImGuiAdapter::TrapeziumButtonTrueHit(
         const char* label,
         ImVec2 pos,
