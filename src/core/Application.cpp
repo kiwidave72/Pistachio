@@ -1,5 +1,6 @@
 ﻿#include "core/Application.h"
 #include <algorithm>
+#include <variant>
 #include "adapters/persistence/JsonSketchDocumentAdapter.h"
 #include <iostream>
 #include <imgui.h>
@@ -245,9 +246,17 @@ namespace core {
             {
                 if (ImGui::BeginMenu("File"))
                 {
-                    if (ImGui::MenuItem("Open")) {}
+                    if (ImGui::MenuItem("Open")) {
+                        std::cout << "Load Sketch Document...\n";
+                        loadSketchDocument("test.pistachio.json");
+                        runSolver();
+                    }
                     ImGui::Separator();
-                    if (ImGui::MenuItem("Save")) {}
+                    if (ImGui::MenuItem("Save")) {
+                    
+                        std::cout << "Save Sketch Document...\n";
+                        saveSketchDocument("test.pistachio.json");
+                    }
                     if (ImGui::MenuItem("Save as ...")) {}
                     ImGui::Separator();
                     if (ImGui::MenuItem("Import Sketch")) {}
@@ -306,7 +315,12 @@ namespace core {
         std::cout << "  Iterations: " << output.report.iterations << std::endl;
         return true;
     }   
-
+    bool Application::saveSketchDocument(const std::string& filepath)
+    {
+        adapters::persistence::JsonSketchDocumentAdapter io;
+        io.saveDocument(*getSketchDocument(), filepath);
+        return true;
+    }
     bool Application::loadSketchDocument(const std::string& filepath)
     {
         std::cout << "\n=== LOADING SKETCH DOCUMENT ===" << std::endl;
@@ -314,7 +328,7 @@ namespace core {
 
         adapters::persistence::JsonSketchDocumentAdapter io;
         m_sketchDoc = io.loadDocument(filepath);
-
+        
         if (m_sketchDoc) {
             std::cout << "[OK] Sketch document loaded successfully" << std::endl;
             std::cout << "  Sketches in document: " << m_sketchDoc->sketches.size() << std::endl;
@@ -328,6 +342,24 @@ namespace core {
                 std::cout << "    Arcs: " << sketch.entities.arcs().size() << std::endl;
                 std::cout << "    Ellipses: " << sketch.entities.ellipses().size() << std::endl;
                 std::cout << "    Curves: " << sketch.entities.curves().size() << std::endl;
+            }
+
+            // Ensure per-sketch ID generators are set after loading.
+            for (auto& sk : m_sketchDoc->sketches) {
+                domain::sketch::EntityId maxEnt = 0;
+                for (const auto& p : sk.entities.points())   maxEnt = std::max(maxEnt, p.h.id);
+                for (const auto& l : sk.entities.lines())    maxEnt = std::max(maxEnt, l.h.id);
+                for (const auto& c : sk.entities.circles())  maxEnt = std::max(maxEnt, c.h.id);
+                for (const auto& a : sk.entities.arcs())     maxEnt = std::max(maxEnt, a.h.id);
+                for (const auto& e : sk.entities.ellipses()) maxEnt = std::max(maxEnt, e.h.id);
+                for (const auto& cu: sk.entities.curves())   maxEnt = std::max(maxEnt, cu.h.id);
+                sk.nextEntityId = maxEnt + 1;
+
+                domain::sketch::ConstraintId maxC = 0;
+                for (const auto& cst : sk.constraints) {
+                    std::visit([&](auto&& c) { maxC = std::max(maxC, c.meta.id); }, cst);
+                }
+                sk.nextConstraintId = maxC + 1;
             }
         }
         else {

@@ -4,6 +4,11 @@
 #include <memory>
 #include "imgui.h" 
 #include "../../ImGui/Image.h"
+
+#include "adapters/ui/SketchTooling.h"
+
+// Command history lives in core/commands
+#include "core/commands/CommandHistory.h"
 struct GLFWwindow;
 
 namespace core {
@@ -45,6 +50,7 @@ private:
     void renderModelInfo();
     void render3DView();
     void renderCameraGizmo();
+    void renderSketchEditor();
     void UI_DrawTitlebar(float& outTitlebarHeight);
     void UI_DrawMenubar();
 
@@ -92,6 +98,17 @@ private:
     std::shared_ptr<Walnut::Image> m_ToolBarArcIcon;
     std::shared_ptr<Walnut::Image> m_ToolBarRectIcon;
     ImFont* m_smallFont;
+
+    // --- 2D sketch tooling ---
+    core::commands::CommandHistory m_cmdHistory;
+    adapters::sketchui::ToolManager m_toolManager;
+    bool m_toolingInitialized = false;
+    int m_activeSketchIndex = 0;
+
+    // Canvas state (pan/zoom)
+    ImVec2 m_sketchPan{ 0,0 };
+    float  m_sketchZoom = 40.0f;
+    adapters::sketchui::Canvas2D m_canvas2D{};
 
 };
 

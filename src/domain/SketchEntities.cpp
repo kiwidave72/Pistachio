@@ -70,6 +70,45 @@ namespace domain::sketch {
         return it->second;
     }
 
+    static void updateMovedHandle(std::unordered_map<EntityId, EntityHandle>& map,
+        EntityId movedId, EntityKind kind, std::uint32_t newIndex)
+    {
+        auto it = map.find(movedId);
+        if (it != map.end())
+            it->second = EntityHandle{ kind, newIndex };
+    }
+
+    bool EntityStore::remove(EntityId id) {
+        auto it = m_idToHandle.find(id);
+        if (it == m_idToHandle.end())
+            return false;
+
+        EntityHandle h = it->second;
+        m_idToHandle.erase(it);
+
+        auto swapErase = [&](auto& vec, EntityKind kind) {
+            const std::uint32_t idx = h.index;
+            const std::uint32_t last = static_cast<std::uint32_t>(vec.size() - 1);
+            if (idx != last) {
+                std::swap(vec[idx], vec[last]);
+                // Update handle for entity moved into idx
+                updateMovedHandle(m_idToHandle, vec[idx].h.id, kind, idx);
+            }
+            vec.pop_back();
+        };
+
+        switch (h.kind) {
+        case EntityKind::Point:   swapErase(m_points, EntityKind::Point); break;
+        case EntityKind::Line:    swapErase(m_lines, EntityKind::Line); break;
+        case EntityKind::Circle:  swapErase(m_circles, EntityKind::Circle); break;
+        case EntityKind::Arc:     swapErase(m_arcs, EntityKind::Arc); break;
+        case EntityKind::Ellipse: swapErase(m_ellipses, EntityKind::Ellipse); break;
+        case EntityKind::Curve:   swapErase(m_curves, EntityKind::Curve); break;
+        default: return false;
+        }
+        return true;
+    }
+
     void EntityStore::clear() {
         m_points.clear();
         m_lines.clear();

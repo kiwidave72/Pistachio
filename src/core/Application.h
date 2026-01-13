@@ -67,6 +67,7 @@ namespace core {
         ports::IExporterPort* findExporterForFormat(const std::string& format);
 
     public:
+        bool saveSketchDocument(const std::string& filepath);
         bool loadSketchDocument(const std::string& filepath);
         bool runSolver();
         std::shared_ptr<domain::sketch::Document> getSketchDocument() const;

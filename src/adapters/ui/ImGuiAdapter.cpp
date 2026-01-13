@@ -29,6 +29,13 @@
 #include "../../../Walnut-Icon.embed"
 #include "../../../WindowImages.embed"
 
+#ifdef min
+#undef min
+#endif
+#ifdef max
+#undef max
+#endif
+
 
 namespace adapters {
 
@@ -89,6 +96,13 @@ bool ImGuiAdapter::initialize() {
     m_ToolBarCircleIcon = LoadIcon("assets/icons/SketchTwoPointCircle_256.png");
     m_ToolBarArcIcon = LoadIcon("assets/icons/SketchTwoPointArc_256.png");
     m_ToolBarRectIcon = LoadIcon("assets/icons/SketchTwoPointRectangle_256.png");
+
+    // Register sketch tools (2D editor)
+    if (!m_toolingInitialized) {
+        m_toolManager.Register(std::make_unique<adapters::sketchui::SelectTool>());
+    m_toolManager.Register(std::make_unique<adapters::sketchui::Line2PtTool>());
+        m_toolingInitialized = true;
+    }
 
     // windows icons
     {
@@ -437,6 +451,7 @@ void ImGuiAdapter::render() {
     //renderModelInfo();  
     render3DView();
     //renderStatusBar();
+    renderSketchEditor();
     DrawViewport();
    
 }
@@ -599,6 +614,186 @@ void ImGuiAdapter::DrawViewport()
     // Automatic render call
     occt->render(m_window);
     ImGui::Text("[OK] Render called automatically");
+
+    ImGui::End();
+}
+
+// --- 2D Sketch editor window ---
+void ImGuiAdapter::renderSketchEditor()
+{
+    ImGui::Begin("Sketch Editor");
+
+    auto doc = m_app->getSketchDocument();
+    if (!doc || doc->sketches.empty()) {
+        ImGui::TextDisabled("No sketch document loaded");
+        ImGui::End();
+        return;
+    }
+
+    // Choose active sketch (simple)
+    if (m_activeSketchIndex < 0) m_activeSketchIndex = 0;
+    if (m_activeSketchIndex >= (int)doc->sketches.size()) m_activeSketchIndex = (int)doc->sketches.size() - 1;
+
+    if (doc->sketches.size() > 1) {
+        ImGui::Text("Active sketch:");
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(200);
+        ImGui::Combo("##ActiveSketch", &m_activeSketchIndex,
+            [](void* data, int idx, const char** out_text) {
+                auto* d = reinterpret_cast<domain::sketch::Document*>(data);
+                if (idx < 0 || idx >= (int)d->sketches.size()) return false;
+                *out_text = d->sketches[(size_t)idx].name.c_str();
+                return true;
+            },
+            doc.get(),
+            (int)doc->sketches.size());
+    }
+
+    auto& sketch = doc->sketches[(size_t)m_activeSketchIndex];
+
+    // Tool selection status
+    const char* toolName = "None";
+    switch (m_toolManager.ActiveKind()) {
+    case adapters::sketchui::ToolKind::Select: toolName = "Select"; break;
+    case adapters::sketchui::ToolKind::Line2Pt: toolName = "Line (2pt)"; break;
+    default: break;
+    }
+    ImGui::Text("Tool: %s", toolName);
+    ImGui::SameLine();
+    ImGui::TextDisabled("(Use toolbar: Select or Line)");
+
+    // Canvas region
+    ImVec2 canvasPos = ImGui::GetCursorScreenPos();
+    ImVec2 canvasSize = ImGui::GetContentRegionAvail();
+    if (canvasSize.x < 100) canvasSize.x = 100;
+    if (canvasSize.y < 100) canvasSize.y = 100;
+
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    dl->AddRectFilled(canvasPos, ImVec2(canvasPos.x + canvasSize.x, canvasPos.y + canvasSize.y), IM_COL32(20, 20, 20, 255));
+    dl->AddRect(canvasPos, ImVec2(canvasPos.x + canvasSize.x, canvasPos.y + canvasSize.y), IM_COL32(80, 80, 80, 255));
+
+    // Input capture for canvas
+    ImGui::InvisibleButton("##SketchCanvas", canvasSize,
+        ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonRight | ImGuiButtonFlags_MouseButtonMiddle);
+    bool hovered = ImGui::IsItemHovered();
+
+    // Update canvas mapping
+    m_canvas2D.origin_screen = canvasPos;
+    m_canvas2D.size = canvasSize;
+    m_canvas2D.pan_screen = m_sketchPan;
+    m_canvas2D.pixels_per_unit = m_sketchZoom;
+
+    // Pan with MMB drag
+    if (hovered && ImGui::IsMouseDragging(ImGuiMouseButton_Middle, 0.0f)) {
+        ImVec2 d = ImGui::GetIO().MouseDelta;
+        m_sketchPan.x += d.x;
+        m_sketchPan.y += d.y;
+    }
+
+    // Zoom with wheel (towards cursor)
+    if (hovered && ImGui::GetIO().MouseWheel != 0.0f && !ImGui::IsAnyItemActive()) {
+        float old = m_sketchZoom;
+        float next = std::clamp(old * (1.0f + ImGui::GetIO().MouseWheel * 0.10f), 5.0f, 400.0f);
+        if (next != old) {
+            ImVec2 mouseS = ImGui::GetIO().MousePos;
+            ImVec2 beforeW = m_canvas2D.ScreenToWorld(mouseS);
+            m_sketchZoom = next;
+            m_canvas2D.pixels_per_unit = m_sketchZoom;
+            ImVec2 afterS = m_canvas2D.WorldToScreen(beforeW);
+            ImVec2 delta = ImVec2(mouseS.x - afterS.x, mouseS.y - afterS.y);
+            m_sketchPan.x += delta.x;
+            m_sketchPan.y += delta.y;
+        }
+    }
+
+    // Draw grid
+    {
+        // major lines each 1 unit, minor each 0.25 (optional)
+        const float ppu = m_canvas2D.pixels_per_unit;
+        const ImVec2 origin = canvasPos;
+        const ImVec2 end = ImVec2(canvasPos.x + canvasSize.x, canvasPos.y + canvasSize.y);
+        const ImVec2 center = ImVec2(
+            canvasPos.x + canvasSize.x * 0.5f + m_sketchPan.x,
+            canvasPos.y + canvasSize.y * 0.5f + m_sketchPan.y);
+
+        // Determine visible range in world units
+        ImVec2 w0 = m_canvas2D.ScreenToWorld(origin);
+        ImVec2 w1 = m_canvas2D.ScreenToWorld(end);
+        float xmin = std::floor(std::min(w0.x, w1.x)) - 1.0f;
+        float xmax = std::ceil (std::max(w0.x, w1.x)) + 1.0f;
+        float ymin = std::floor(std::min(w0.y, w1.y)) - 1.0f;
+        float ymax = std::ceil (std::max(w0.y, w1.y)) + 1.0f;
+
+        for (int x = (int)xmin; x <= (int)xmax; ++x) {
+            ImVec2 a = ImVec2(center.x + x * ppu, origin.y);
+            ImVec2 b = ImVec2(center.x + x * ppu, end.y);
+            ImU32 col = (x == 0) ? IM_COL32(80, 120, 255, 255) : IM_COL32(40, 40, 40, 255);
+            dl->AddLine(a, b, col, (x == 0) ? 2.0f : 1.0f);
+        }
+
+        for (int y = (int)ymin; y <= (int)ymax; ++y) {
+            ImVec2 a = ImVec2(origin.x, center.y - y * ppu);
+            ImVec2 b = ImVec2(end.x,   center.y - y * ppu);
+            ImU32 col = (y == 0) ? IM_COL32(255, 80, 80, 255) : IM_COL32(40, 40, 40, 255);
+            dl->AddLine(a, b, col, (y == 0) ? 2.0f : 1.0f);
+        }
+    }
+
+    // Render existing entities
+    {
+        const ImU32 colNormal = IM_COL32(60, 90, 180, 255);
+        const ImU32 colSelected = IM_COL32(245, 195, 50, 255);
+
+        // Lines
+        for (const auto& l : sketch.entities.lines()) {
+            ImVec2 aW{ (float)l.a.x, (float)l.a.y };
+            ImVec2 bW{ (float)l.b.x, (float)l.b.y };
+
+            const bool sel = adapters::sketchui::IsSelected(sketch, l.h.id);
+            const ImU32 col = sel ? colSelected : colNormal;
+            const float thickness = sel ? 3.0f : 2.0f;
+
+            dl->AddLine(m_canvas2D.WorldToScreen(aW), m_canvas2D.WorldToScreen(bW), col, thickness);
+
+            if (sel) {
+                adapters::sketchui::DrawDimensionLabel(m_canvas2D, dl, aW, bW, "mm");
+            }
+        }
+
+        // Circles
+        for (const auto& c : sketch.entities.circles()) {
+            ImVec2 ctrW{ (float)c.center.x, (float)c.center.y };
+            float r = (float)c.radius;
+
+            const bool sel = adapters::sketchui::IsSelected(sketch, c.h.id);
+            const ImU32 col = sel ? colSelected : colNormal;
+            const float thickness = sel ? 3.0f : 2.0f;
+
+            dl->AddCircle(m_canvas2D.WorldToScreen(ctrW), r * m_canvas2D.pixels_per_unit, col, 0, thickness);
+        }
+
+        // Points (optional)
+        for (const auto& p : sketch.entities.points()) {
+            ImVec2 pW{ (float)p.p.x, (float)p.p.y };
+            dl->AddCircleFilled(m_canvas2D.WorldToScreen(pW), 3.0f, IM_COL32(200, 200, 200, 255));
+        }
+    }
+
+    // Tool update/draw (draft geometry + in-canvas dimension editing)
+    {
+        adapters::sketchui::ToolContext tctx{ sketch, m_cmdHistory };
+        m_toolManager.UpdateAndDraw(tctx, m_canvas2D, dl);
+    }
+
+    // Update OCCT overlay from the active sketch (so the 3D viewport reflects edits)
+    if (auto* renderer = m_app->getRenderer()) {
+        if (auto* occt = dynamic_cast<adapters::OcctRenderer*>(renderer)) {
+            core::rendering::SketchRenderOptions opt;
+            opt.selectedIds = &sketch.selectedEntities;
+            auto scene = core::rendering::BuildRenderSceneFromSketch(sketch, opt);
+            occt->setSketchOverlay(scene);
+        }
+    }
 
     ImGui::End();
 }
@@ -1512,10 +1707,29 @@ static bool PointInConvexPoly(const ImVec2* pts, int count, ImVec2 p)
          ImGui::PushStyleColor(ImGuiCol_WindowBg, UI::Colors::Theme::titlebar);
 
          ImGui::Begin("##TitlebarToolsOverlay", nullptr, flags);
+         
+         if (ImGui::Button("Select", ImVec2(120, 36))) {
+             if (auto doc = m_app->getSketchDocument(); doc && !doc->sketches.empty()) {
+                 if (m_activeSketchIndex < 0) m_activeSketchIndex = 0;
+                 if (m_activeSketchIndex >= (int)doc->sketches.size()) m_activeSketchIndex = (int)doc->sketches.size() - 1;
+                 adapters::sketchui::ToolContext tctx{ doc->sketches[(size_t)m_activeSketchIndex], m_cmdHistory };
+                 m_toolManager.Activate(adapters::sketchui::ToolKind::Select, tctx);
+             }
+         }
+         ImGui::SameLine();
+
          if (ImGui::Button("Sketch", ImVec2(120, 36))) {}
          ImGui::SameLine();
 
-         ImGui::InvisibleButton("Line", ImVec2(iconWidth, iconHeight));
+         bool lineClicked = ImGui::InvisibleButton("Line", ImVec2(iconWidth, iconHeight));
+         if (lineClicked) {
+             if (auto doc = m_app->getSketchDocument(); doc && !doc->sketches.empty()) {
+                 if (m_activeSketchIndex < 0) m_activeSketchIndex = 0;
+                 if (m_activeSketchIndex >= (int)doc->sketches.size()) m_activeSketchIndex = (int)doc->sketches.size() - 1;
+                 adapters::sketchui::ToolContext tctx{ doc->sketches[(size_t)m_activeSketchIndex], m_cmdHistory };
+                 m_toolManager.Activate(adapters::sketchui::ToolKind::Line2Pt, tctx);
+             }
+         }
 
          if (ImGui::IsItemHovered())
          {
@@ -1598,7 +1812,11 @@ static bool PointInConvexPoly(const ImVec2* pts, int count, ImVec2 p)
          pos.y = ImGui::GetCursorScreenPos().y; // Cursor changed as we have aded a button
          pos.x = startX;
 
-         if (TrapeziumButtonTrueHit("Reset", pos, ImVec2(120, 36), 18.0f, false)) { /* tool = dimension */ }
+         if (TrapeziumButtonTrueHit("Reset", pos, ImVec2(120, 36), 18.0f, false)) {
+             // reset view
+             m_sketchPan = ImVec2(0, 0);
+             m_sketchZoom = 40.0f;
+         }
          pos.x += buttonWidth;
          if (ParallelogramButtonTrueHit("Move", pos, ImVec2(120, 36), -18.0f)) { /* tool = line */ }
          pos.x += buttonWidth - 18;
@@ -1606,9 +1824,13 @@ static bool PointInConvexPoly(const ImVec2* pts, int count, ImVec2 p)
          if (TrapeziumButtonTrueHit("Scale", pos, ImVec2(120, 36), 18.0f, true)) { /* tool = dimension */ }
          pos.x += buttonWidth - 18;
          //ImGui::SameLine(120,0);
-         if (ParallelogramButtonTrueHit("Undo", pos, ImVec2(120, 36), 18.0f)) { /* tool = line */ }
+         if (ParallelogramButtonTrueHit("Undo", pos, ImVec2(120, 36), 18.0f)) {
+             m_cmdHistory.Undo();
+         }
          pos.x += buttonWidth;;
-         if (TrapeziumButtonTrueHit("Redo", pos, ImVec2(120, 36), 18.0f, false)) { /* tool = dimension */ }
+         if (TrapeziumButtonTrueHit("Redo", pos, ImVec2(120, 36), 18.0f, false)) {
+             m_cmdHistory.Redo();
+         }
 
          ImGui::End();
 

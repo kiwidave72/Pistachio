@@ -1,95 +1,140 @@
 {
-  "fileVersion": 1,
   "document": {
     "id": 1,
-    "name": "Test Document",
+    "name": "Updated with resolver",
     "sketches": [
       {
-        "id": 100,
-        "name": "Sketch 1",
-        "visible": true,
-        "entities": [
-          {
-            "kind": "Point",
-            "data": {
-              "id": 1000,
-              "p": { "x": 10.0, "y": 10.0 }
-            }
-          },
-          {
-            "kind": "Point",
-            "data": {
-              "id": 1001,
-              "p": { "x": 120.0, "y": 30.0 }
-            }
-          },
-          {
-            "kind": "Line",
-            "data": {
-              "id": 1002,
-              "a": { "x": 0.0, "y": 50.0 },
-              "b": { "x": 100.0, "y": 80.0 }
-            }
-          },
-          {
-            "kind": "Circle",
-            "data": {
-              "id": 1003,
-              "center": { "x": 60.0, "y": 20.0 },
-              "radius": 20.0
-            }
-          }
-        ],
         "constraints": [
           {
-            "kind": "Geometric",
             "data": {
               "meta": {
+                "enabled": true,
                 "id": 2000,
                 "name": "Horizontal L1",
-                "enabled": true,
                 "suppressed": false
               },
-              "type": 0,
               "refs": [
-                { "id": 1002, "anchor": 5 }
-              ]
-            }
+                {
+                  "anchor": 5,
+                  "id": 1002
+                }
+              ],
+              "type": 0
+            },
+            "kind": "Geometric"
           },
           {
-            "kind": "Geometric",
             "data": {
               "meta": {
+                "enabled": true,
                 "id": 2001,
                 "name": "Line start → Point 1000",
-                "enabled": true,
                 "suppressed": false
               },
-              "type": 2,
               "refs": [
-                { "id": 1002, "anchor": 2 },
-                { "id": 1000, "anchor": 1 }
-              ]
-            }
+                {
+                  "anchor": 2,
+                  "id": 1002
+                },
+                {
+                  "anchor": 1,
+                  "id": 1000
+                }
+              ],
+              "type": 2
+            },
+            "kind": "Geometric"
           },
           {
-            "kind": "Geometric",
             "data": {
               "meta": {
+                "enabled": true,
                 "id": 2002,
                 "name": "Line end → Point 1001",
-                "enabled": true,
                 "suppressed": false
               },
-              "type": 2,
               "refs": [
-                { "id": 1002, "anchor": 3 },
-                { "id": 1001, "anchor": 1 }
-              ]
-            }
+                {
+                  "anchor": 3,
+                  "id": 1002
+                },
+                {
+                  "anchor": 1,
+                  "id": 1001
+                }
+              ],
+              "type": 2
+            },
+            "kind": "Geometric"
           }
-        ]
+        ],
+        "entities": [
+          {
+            "data": {
+              "id": 1000,
+              "p": {
+                "x": 0.0,
+                "y": 50.0
+              }
+            },
+            "kind": "Point"
+          },
+          {
+            "data": {
+              "id": 1001,
+              "p": {
+                "x": 100.0,
+                "y": 50.0
+              }
+            },
+            "kind": "Point"
+          },
+          {
+            "data": {
+              "a": {
+                "x": 0.0,
+                "y": 50.0
+              },
+              "b": {
+                "x": 100.0,
+                "y": 50.0
+              },
+              "id": 1002
+            },
+            "kind": "Line"
+          },
+          {
+            "data": {
+              "a": {
+                "x": 14.634753227233887,
+                "y": 70.73746490478516
+              },
+              "b": {
+                "x": 71.03514099121094,
+                "y": 85.73756408691406
+              },
+              "id": 1004,
+              "name": "Line"
+            },
+            "kind": "Line"
+          },
+          {
+            "data": {
+              "center": {
+                "x": 60.0,
+                "y": 20.0
+              },
+              "id": 1003,
+              "radius": 20.0
+            },
+            "kind": "Circle"
+          }
+        ],
+        "id": 100,
+        "name": "Updated with resolver",
+        "visible": true
       }
     ]
-  }
+  },
+  "fileVersion": 1
 }
