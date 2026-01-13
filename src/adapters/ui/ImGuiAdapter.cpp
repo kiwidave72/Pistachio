@@ -101,7 +101,8 @@ bool ImGuiAdapter::initialize() {
     if (!m_toolingInitialized) {
         m_toolManager.Register(std::make_unique<adapters::sketchui::SelectTool>());
     m_toolManager.Register(std::make_unique<adapters::sketchui::Line2PtTool>());
-        m_toolingInitialized = true;
+        m_toolManager.Register(std::make_unique<adapters::sketchui::Circle2PtTool>());
+m_toolingInitialized = true;
     }
 
     // windows icons
@@ -1767,8 +1768,44 @@ static bool PointInConvexPoly(const ImVec2* pts, int count, ImVec2 p)
          Walnut::UI::DrawButtonImage(m_ToolBarRectIcon, UI::Colors::Theme::text, UI::Colors::ColorWithMultipliedValue(UI::Colors::Theme::text, 1.4f), iconColP);
 
          ImGui::SameLine();
-         ImGui::InvisibleButton("Circle", ImVec2(iconWidth, iconHeight));
+         bool circleClicked = ImGui::InvisibleButton("Circle", ImVec2(iconWidth, iconHeight));
+         if (circleClicked) {
+             if (auto doc = m_app->getSketchDocument(); doc && !doc->sketches.empty()) {
+                 if (m_activeSketchIndex < 0) m_activeSketchIndex = 0;
+                 if (m_activeSketchIndex >= (int)doc->sketches.size()) m_activeSketchIndex = (int)doc->sketches.size() - 1;
+                 adapters::sketchui::ToolContext tctx{ doc->sketches[(size_t)m_activeSketchIndex], m_cmdHistory };
+                 m_toolManager.Activate(adapters::sketchui::ToolKind::Circle2Pt, tctx);
+             }
+         }
          Walnut::UI::DrawButtonImage(m_ToolBarCircleIcon, UI::Colors::Theme::text, UI::Colors::ColorWithMultipliedValue(UI::Colors::Theme::text, 1.4f), iconColP);
+
+         if (ImGui::IsItemHovered())
+         {
+             ImVec2 min = ImGui::GetItemRectMin();
+             ImVec2 max = ImGui::GetItemRectMax();
+             ImVec2 size = ImGui::GetItemRectSize();
+             ImVec2 center = { max.x,(min.y + max.y) + iconHeight };
+             ImGui::SetNextWindowPos(center);
+             ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8, 8));
+             ImGui::Begin("##CircleTooltip",
+                 nullptr,
+                 ImGuiWindowFlags_NoDecoration |
+                 ImGuiWindowFlags_NoInputs |
+                 ImGuiWindowFlags_AlwaysAutoResize |
+                 ImGuiWindowFlags_NoSavedSettings |
+                 ImGuiWindowFlags_NoFocusOnAppearing
+             );
+             ImGui::PushFont(m_smallFont);
+             ImGui::TextUnformatted("Two point circle (diameter)");
+             ImGui::Separator();
+             ImGui::TextUnformatted("First click at diameter start, then click opposite side to set diameter.");
+             ImGui::TextUnformatted("Enter edits diameter, Esc cancels.");
+             ImGui::TextDisabled("Shortcut: C");
+             ImGui::PopFont();
+             ImGui::End();
+             ImGui::PopStyleVar();
+         }
+
          ImGui::SameLine();
          ImGui::InvisibleButton("Arc", ImVec2(iconWidth, iconHeight));
          Walnut::UI::DrawButtonImage(m_ToolBarArcIcon, UI::Colors::Theme::text, UI::Colors::ColorWithMultipliedValue(UI::Colors::Theme::text, 1.4f), iconColP);

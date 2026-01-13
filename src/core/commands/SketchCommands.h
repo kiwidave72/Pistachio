@@ -39,4 +39,38 @@ namespace core::commands {
         domain::sketch::EntityId m_id = 0;
     };
 
+
+    // Adds a Circle2D into a sketch (single undo step).
+    class AddCircle2DCommand final : public ICommand {
+    public:
+        AddCircle2DCommand(domain::sketch::Sketch& sketch, domain::sketch::Vec2 center, double radius)
+            : m_sketch(sketch), m_center(center), m_radius(radius) {}
+
+        const char* Name() const override { return "Add Circle"; }
+
+        void Do() override
+        {
+            if (m_id == 0)
+                m_id = m_sketch.nextEntityId++;
+
+            domain::sketch::Circle2D c;
+            c.h.id = m_id;
+            c.h.name = "Circle";
+            c.center = m_center;
+            c.radius = m_radius;
+
+            m_sketch.entities.addCircle(std::move(c));
+        }
+void Undo() override
+        {
+            m_sketch.entities.remove(m_id);
+        }
+
+    private:
+        domain::sketch::Sketch& m_sketch;
+        domain::sketch::Vec2 m_center{};
+        double m_radius{ 1.0 };
+        domain::sketch::EntityId m_id = 0;
+    };
+
 } // namespace core::commands

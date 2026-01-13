@@ -57,7 +57,7 @@ namespace adapters::sketchui {
         }
     };
 
-    enum class ToolKind { None, Select, Line2Pt };
+    enum class ToolKind { None, Select, Line2Pt, Circle2Pt };
     enum class DraftStage { Idle, PickingStart, PickingEnd, AdjustingValue };
 
     struct ToolContext {
@@ -345,6 +345,7 @@ namespace adapters::sketchui {
                     m_aW = mouseW;
                     m_bW = mouseW;
                     m_hasStart = true;
+
                     m_stage = DraftStage::PickingEnd;
                 }
                 break;
@@ -407,6 +408,152 @@ namespace adapters::sketchui {
         ImVec2 m_aW{}, m_bW{};
         ImVec2 m_dirW{ 1,0 };
         double m_len = 1.0;
+
+        bool m_focusEdit = false;
+        char m_buf[64]{};
+    };
+
+
+    // Two-point circle by diameter endpoints:
+    //  - Click first endpoint (A)
+    //  - Click opposite endpoint (B) to define diameter
+    //  - Inline edit diameter (enter to commit).
+    class Circle2PtTool final : public ISketchTool {
+    public:
+        ToolKind Kind() const override { return ToolKind::Circle2Pt; }
+        bool IsActive() const override { return m_active; }
+
+        void Begin(ToolContext&) override
+        {
+            m_active = true;
+            m_stage = DraftStage::PickingStart;
+            m_hasStart = false;
+            m_focusEdit = false;
+            m_buf[0] = '\0';
+        }
+
+        void Cancel(ToolContext&) override
+        {
+            m_active = false;
+            m_stage = DraftStage::Idle;
+            m_hasStart = false;
+            m_focusEdit = false;
+        }
+
+        void UpdateAndDraw(ToolContext& ctx, const Canvas2D& canvas, ImDrawList* dl) override
+        {
+            const Rect2 r = canvas.rect();
+            const bool hovered =
+                ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem) &&
+                ImGui::IsMouseHoveringRect(r.Min, r.Max);
+
+            if (ImGui::IsKeyPressed(ImGuiKey_Escape) ||
+                (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Right))) {
+                Cancel(ctx);
+                return;
+            }
+
+            ImVec2 mouseW = canvas.ScreenToWorld(ImGui::GetIO().MousePos);
+
+            switch (m_stage) {
+            case DraftStage::PickingStart:
+                if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+                    m_aW = mouseW;
+                    m_bW = mouseW;
+                    m_hasStart = true;
+
+                    // reset working diameter (so preview doesn't reuse the previous circle)
+                    m_diam = 0.0;
+                    m_dirW = ImVec2(1, 0);
+
+                    m_stage = DraftStage::PickingEnd;
+                }
+                break;
+
+            case DraftStage::PickingEnd:
+                if (m_hasStart) {
+                    m_bW = mouseW;
+
+                    // continuously update preview diameter from A->mouse (so preview matches what you're working with)
+                    ImVec2 d = VSub(m_bW, m_aW);
+                    float len = std::sqrt(d.x * d.x + d.y * d.y);
+                    if (len > 1e-6f) {
+                        m_dirW = ImVec2(d.x / len, d.y / len);
+                        m_diam = (double)len;
+                    }
+                    else {
+                        m_diam = 0.0;
+                    }
+                }
+
+                if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+                    // lock in current diameter and jump to edit/commit
+                    if (m_diam < 1e-6) {
+                        m_bW = m_aW; // degenerate: ignore
+                        break;
+                    }
+
+                    std::snprintf(m_buf, sizeof(m_buf), "%.3f", m_diam);
+                    m_focusEdit = true;
+                    m_stage = DraftStage::AdjustingValue;
+                }
+                break;
+
+            case DraftStage::AdjustingValue:
+            {
+                // keep diameter preview snapped to entered value if valid
+                double v = m_diam;
+                if (!ParseDouble(m_buf, v)) v = m_diam;
+                if (v > 1e-9) {
+                    m_diam = v;
+                    m_bW = VAdd(m_aW, ImVec2((float)(m_dirW.x * (float)m_diam), (float)(m_dirW.y * (float)m_diam)));
+                }
+            }
+                break;
+
+            default: break;
+            }
+
+            if (!m_hasStart) return;
+
+            // preview: diameter line + circle
+            dl->AddLine(canvas.WorldToScreen(m_aW), canvas.WorldToScreen(m_bW), IM_COL32(255, 255, 0, 255), 2.0f);
+
+            ImVec2 cW = VMul(VAdd(m_aW, m_bW), 0.5f);
+            float rW = (float)(m_diam * 0.5);
+            if (rW > 1e-6f) {
+                float rS = rW * canvas.pixels_per_unit;
+                dl->AddCircle(canvas.WorldToScreen(cW), rS, IM_COL32(255, 255, 0, 255), 0, 2.0f);
+            }
+
+            if (m_stage == DraftStage::AdjustingValue) {
+                bool enter = DrawDimensionEditBox(canvas, dl, "CircleDia", m_aW, m_bW, m_buf, (int)sizeof(m_buf), m_focusEdit);
+                m_focusEdit = false;
+                if (enter) {
+                    // commit circle
+                    ImVec2 centerW = VMul(VAdd(m_aW, m_bW), 0.5f);
+                    double radius = m_diam * 0.5;
+
+                    domain::sketch::Vec2 c{ (double)centerW.x, (double)centerW.y };
+                    ctx.history.Execute(std::make_unique<core::commands::AddCircle2DCommand>(ctx.sketch, c, radius));
+
+                    ImGui::ClearActiveID(); // releases InputText active state
+
+                    // reset for next circle
+                    m_stage = DraftStage::PickingStart;
+                    m_hasStart = false;
+                }
+            }
+        }
+
+    private:
+        bool m_active = false;
+        DraftStage m_stage = DraftStage::Idle;
+        bool m_hasStart = false;
+
+        ImVec2 m_aW{}, m_bW{};
+        ImVec2 m_dirW{ 1,0 };
+        double m_diam = 1.0;
 
         bool m_focusEdit = false;
         char m_buf[64]{};
