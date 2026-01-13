@@ -1,4 +1,6 @@
-﻿#include "adapters/ui/ImGuiAdapter.h"
+﻿#include <algorithm> // std::min, std::max
+
+#include "adapters/ui/ImGuiAdapter.h"
 #include "core/Application.h"
 
 #include "../Roboto-Regular.embed"
@@ -15,12 +17,11 @@
 #include <GLFW/glfw3native.h>
 
 #include <cstring>
- 
+#include <filesystem>
+
 #include "stb_image.h"
 
-
 #include "UI.h"
-
 #include "core/rendering/SketchRenderBuilder.h"
 #include "adapters/rendering/OcctRenderer.h"
 #include "adapters/rendering/RendererRouter.h"
@@ -28,20 +29,37 @@
 #include "../../../Walnut-Icon.embed"
 #include "../../../WindowImages.embed"
 
+#ifdef min
+#undef min
+#endif
+#ifdef max
+#undef max
+#endif
+
+
 namespace adapters {
+
+
+    static ImVec2 Add(const ImVec2& a, const ImVec2& b) { return ImVec2(a.x + b.x, a.y + b.y); }
+    static ImVec2 Sub(const ImVec2& a, const ImVec2& b) { return ImVec2(a.x - b.x, a.y - b.y); }
+
 
 ImGuiAdapter::ImGuiAdapter(core::Application* app)
     : m_window(nullptr), m_app(app), m_isRotating(false), m_isPanning(false) {
     std::memset(m_filePathBuffer, 0, sizeof(m_filePathBuffer));
     std::memset(m_exportPathBuffer, 0, sizeof(m_exportPathBuffer));
     m_lastMousePos = ImVec2(0, 0);
-
-
-
 }
 
 ImGuiAdapter::~ImGuiAdapter() {
     shutdown();
+}
+std::shared_ptr<Walnut::Image> LoadIcon(const std::string_view path)
+{
+    if (!std::filesystem::exists(path))
+        return nullptr;
+
+    return std::make_shared<Walnut::Image>(path);
 }
 
 bool ImGuiAdapter::initialize() {
@@ -52,8 +70,6 @@ bool ImGuiAdapter::initialize() {
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
     glfwWindowHint(GLFW_TITLEBAR, false);
-
-
 
     m_window = glfwCreateWindow(1200, 800, "Pistachio - CAD Converter", nullptr, nullptr);
     if (!m_window) {
@@ -73,9 +89,23 @@ bool ImGuiAdapter::initialize() {
     // Load embedded Roboto font
     ImFontConfig fontConfig;
     fontConfig.FontDataOwnedByAtlas = false;
-    ImFont* robotoFont = io.Fonts->AddFontFromMemoryTTF((void*)g_RobotoRegular, sizeof(g_RobotoRegular), 20.0f, &fontConfig);
-    io.FontDefault = robotoFont;
+    io.FontDefault = io.Fonts->AddFontFromMemoryTTF((void*)g_RobotoRegular, sizeof(g_RobotoRegular),17.0f, &fontConfig);
+    m_smallFont = io.Fonts->AddFontFromMemoryTTF((void*)g_RobotoRegular, sizeof(g_RobotoRegular), 14.0f, &fontConfig);
 
+    m_ToolBarLineIcon = LoadIcon("assets/icons/SketchTwoPointLine_256.png");
+    m_ToolBarCircleIcon = LoadIcon("assets/icons/SketchTwoPointCircle_256.png");
+    m_ToolBarArcIcon = LoadIcon("assets/icons/SketchTwoPointArc_256.png");
+    m_ToolBarRectIcon = LoadIcon("assets/icons/SketchTwoPointRectangle_256.png");
+
+    // Register sketch tools (2D editor)
+    if (!m_toolingInitialized) {
+        m_toolManager.Register(std::make_unique<adapters::sketchui::SelectTool>());
+    m_toolManager.Register(std::make_unique<adapters::sketchui::Line2PtTool>());
+        m_toolManager.Register(std::make_unique<adapters::sketchui::Circle2PtTool>());
+m_toolingInitialized = true;
+    }
+
+    // windows icons
     {
         uint32_t w, h;
         void* data = Walnut::Image::Decode(g_WalnutIcon, sizeof(g_WalnutIcon), w, h);
@@ -123,13 +153,10 @@ bool ImGuiAdapter::initialize() {
             stbi_image_free(data);
         }
     }
-
     ImGui::StyleColorsDark();
     
     ImGui_ImplGlfw_InitForOpenGL(m_window, true);
     ImGui_ImplOpenGL3_Init(glsl_version);
-    
-    
 
     return true;
 }
@@ -425,8 +452,14 @@ void ImGuiAdapter::render() {
     //renderModelInfo();  
     render3DView();
     //renderStatusBar();
+    renderSketchEditor();
     DrawViewport();
    
+}
+
+void ImGuiAdapter::setMenubarCallback(const std::function<void()>& menubarCallback)
+{
+    m_MenubarCallback = menubarCallback;
 }
 
 void ImGuiAdapter::DrawViewport()
@@ -481,6 +514,16 @@ void ImGuiAdapter::DrawViewport()
 
     // Get first sketch
     auto& sketch = doc->sketches[0];
+
+
+    ImGui::Text("Document Name: %s", doc->name.c_str());
+
+    /*if (!sketch.entities.lines().empty()) {
+        const auto& l = sketch.entities.lines()[0];
+        ImGui::Text("Line0 A(%.2f, %.2f)  B(%.2f, %.2f)", l.a.x, l.a.y, l.b.x, l.b.y);
+    }*/
+
+
 
     ImGui::Text("Sketch 0 entities:");
     ImGui::Indent();
@@ -572,6 +615,190 @@ void ImGuiAdapter::DrawViewport()
     // Automatic render call
     occt->render(m_window);
     ImGui::Text("[OK] Render called automatically");
+
+    ImGui::End();
+}
+
+// --- 2D Sketch editor window ---
+void ImGuiAdapter::renderSketchEditor()
+{
+    ImGui::Begin("Sketch Editor");
+
+    auto doc = m_app->getSketchDocument();
+    if (!doc || doc->sketches.empty()) {
+        ImGui::TextDisabled("No sketch document loaded");
+        ImGui::End();
+        return;
+    }
+
+    // Choose active sketch (simple)
+    if (m_activeSketchIndex < 0) m_activeSketchIndex = 0;
+    if (m_activeSketchIndex >= (int)doc->sketches.size()) m_activeSketchIndex = (int)doc->sketches.size() - 1;
+
+    if (doc->sketches.size() > 1) {
+        ImGui::Text("Active sketch:");
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(200);
+        ImGui::Combo("##ActiveSketch", &m_activeSketchIndex,
+            [](void* data, int idx, const char** out_text) {
+                auto* d = reinterpret_cast<domain::sketch::Document*>(data);
+                if (idx < 0 || idx >= (int)d->sketches.size()) return false;
+                *out_text = d->sketches[(size_t)idx].name.c_str();
+                return true;
+            },
+            doc.get(),
+            (int)doc->sketches.size());
+    }
+
+    auto& sketch = doc->sketches[(size_t)m_activeSketchIndex];
+
+    // Tool selection status
+    const char* toolName = "None";
+    switch (m_toolManager.ActiveKind()) {
+    case adapters::sketchui::ToolKind::Select: toolName = "Select"; break;
+    case adapters::sketchui::ToolKind::Line2Pt: toolName = "Line (2pt)"; break;
+    default: break;
+    }
+    ImGui::Text("Tool: %s", toolName);
+    ImGui::SameLine();
+    ImGui::TextDisabled("(Use toolbar: Select or Line)");
+
+    // Canvas region
+    ImVec2 canvasPos = ImGui::GetCursorScreenPos();
+    ImVec2 canvasSize = ImGui::GetContentRegionAvail();
+    if (canvasSize.x < 100) canvasSize.x = 100;
+    if (canvasSize.y < 100) canvasSize.y = 100;
+
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    dl->AddRectFilled(canvasPos, ImVec2(canvasPos.x + canvasSize.x, canvasPos.y + canvasSize.y), IM_COL32(20, 20, 20, 255));
+    dl->AddRect(canvasPos, ImVec2(canvasPos.x + canvasSize.x, canvasPos.y + canvasSize.y), IM_COL32(80, 80, 80, 255));
+
+    // Input capture for canvas
+    ImGui::InvisibleButton("##SketchCanvas", canvasSize,
+        ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonRight | ImGuiButtonFlags_MouseButtonMiddle);
+    bool hovered = ImGui::IsItemHovered();
+
+    // Update canvas mapping
+    m_canvas2D.origin_screen = canvasPos;
+    m_canvas2D.size = canvasSize;
+    m_canvas2D.pan_screen = m_sketchPan;
+    m_canvas2D.pixels_per_unit = m_sketchZoom;
+
+    // Pan with MMB drag
+    if (hovered && ImGui::IsMouseDragging(ImGuiMouseButton_Middle, 0.0f)) {
+        ImVec2 d = ImGui::GetIO().MouseDelta;
+        m_sketchPan.x += d.x;
+        m_sketchPan.y += d.y;
+    }
+
+    // Zoom with wheel (towards cursor)
+    if (hovered && ImGui::GetIO().MouseWheel != 0.0f && !ImGui::IsAnyItemActive()) {
+        float old = m_sketchZoom;
+        float next = std::clamp(old * (1.0f + ImGui::GetIO().MouseWheel * 0.10f), 5.0f, 400.0f);
+        if (next != old) {
+            ImVec2 mouseS = ImGui::GetIO().MousePos;
+            ImVec2 beforeW = m_canvas2D.ScreenToWorld(mouseS);
+            m_sketchZoom = next;
+            m_canvas2D.pixels_per_unit = m_sketchZoom;
+            ImVec2 afterS = m_canvas2D.WorldToScreen(beforeW);
+            ImVec2 delta = ImVec2(mouseS.x - afterS.x, mouseS.y - afterS.y);
+            m_sketchPan.x += delta.x;
+            m_sketchPan.y += delta.y;
+        }
+    }
+
+    // Draw grid
+    {
+        // major lines each 1 unit, minor each 0.25 (optional)
+        const float ppu = m_canvas2D.pixels_per_unit;
+        const ImVec2 origin = canvasPos;
+        const ImVec2 end = ImVec2(canvasPos.x + canvasSize.x, canvasPos.y + canvasSize.y);
+        const ImVec2 center = ImVec2(
+            canvasPos.x + canvasSize.x * 0.5f + m_sketchPan.x,
+            canvasPos.y + canvasSize.y * 0.5f + m_sketchPan.y);
+
+        // Determine visible range in world units
+        ImVec2 w0 = m_canvas2D.ScreenToWorld(origin);
+        ImVec2 w1 = m_canvas2D.ScreenToWorld(end);
+        float xmin = std::floor(std::min(w0.x, w1.x)) - 1.0f;
+        float xmax = std::ceil (std::max(w0.x, w1.x)) + 1.0f;
+        float ymin = std::floor(std::min(w0.y, w1.y)) - 1.0f;
+        float ymax = std::ceil (std::max(w0.y, w1.y)) + 1.0f;
+
+        for (int x = (int)xmin; x <= (int)xmax; ++x) {
+            ImVec2 a = ImVec2(center.x + x * ppu, origin.y);
+            ImVec2 b = ImVec2(center.x + x * ppu, end.y);
+            ImU32 col = (x == 0) ? IM_COL32(80, 120, 255, 255) : IM_COL32(40, 40, 40, 255);
+            dl->AddLine(a, b, col, (x == 0) ? 2.0f : 1.0f);
+        }
+
+        for (int y = (int)ymin; y <= (int)ymax; ++y) {
+            ImVec2 a = ImVec2(origin.x, center.y - y * ppu);
+            ImVec2 b = ImVec2(end.x,   center.y - y * ppu);
+            ImU32 col = (y == 0) ? IM_COL32(255, 80, 80, 255) : IM_COL32(40, 40, 40, 255);
+            dl->AddLine(a, b, col, (y == 0) ? 2.0f : 1.0f);
+        }
+    }
+
+    // Render existing entities
+    {
+        const ImU32 colNormal = IM_COL32(60, 90, 180, 255);
+        const ImU32 colSelected = IM_COL32(245, 195, 50, 255);
+
+        // Lines
+        for (const auto& l : sketch.entities.lines()) {
+            ImVec2 aW{ (float)l.a.x, (float)l.a.y };
+            ImVec2 bW{ (float)l.b.x, (float)l.b.y };
+
+            const bool sel = adapters::sketchui::IsSelected(sketch, l.h.id);
+            const ImU32 col = sel ? colSelected : colNormal;
+            const float thickness = sel ? 3.0f : 2.0f;
+
+            dl->AddLine(m_canvas2D.WorldToScreen(aW), m_canvas2D.WorldToScreen(bW), col, thickness);
+
+            if (sel) {
+                adapters::sketchui::DrawDimensionLabel(m_canvas2D, dl, aW, bW, "mm");
+            }
+        }
+
+        // Circles
+        for (const auto& c : sketch.entities.circles()) {
+            ImVec2 ctrW{ (float)c.center.x, (float)c.center.y };
+            float r = (float)c.radius;
+
+            const bool sel = adapters::sketchui::IsSelected(sketch, c.h.id);
+            const ImU32 col = sel ? colSelected : colNormal;
+            const float thickness = sel ? 3.0f : 2.0f;
+
+            dl->AddCircle(m_canvas2D.WorldToScreen(ctrW), r * m_canvas2D.pixels_per_unit, col, 0, thickness);
+
+            if (sel) {
+                adapters::sketchui::DrawCircleDiameterLabel(m_canvas2D, dl, ctrW, r, "mm");
+            }
+        }
+
+        // Points (optional)
+        for (const auto& p : sketch.entities.points()) {
+            ImVec2 pW{ (float)p.p.x, (float)p.p.y };
+            dl->AddCircleFilled(m_canvas2D.WorldToScreen(pW), 3.0f, IM_COL32(200, 200, 200, 255));
+        }
+    }
+
+    // Tool update/draw (draft geometry + in-canvas dimension editing)
+    {
+        adapters::sketchui::ToolContext tctx{ sketch, m_cmdHistory };
+        m_toolManager.UpdateAndDraw(tctx, m_canvas2D, dl);
+    }
+
+    // Update OCCT overlay from the active sketch (so the 3D viewport reflects edits)
+    if (auto* renderer = m_app->getRenderer()) {
+        if (auto* occt = dynamic_cast<adapters::OcctRenderer*>(renderer)) {
+            core::rendering::SketchRenderOptions opt;
+            opt.selectedIds = &sketch.selectedEntities;
+            auto scene = core::rendering::BuildRenderSceneFromSketch(sketch, opt);
+            occt->setSketchOverlay(scene);
+        }
+    }
 
     ImGui::End();
 }
@@ -1006,7 +1233,7 @@ static bool PointInConvexPoly(const ImVec2* pts, int count, ImVec2 p)
      const float cy = (bb.Min.y + bb.Max.y) * 0.5f;
      ImVec2 ts = ImGui::CalcTextSize(label);
      dl->AddText(ImVec2(cx - ts.x * 0.5f, cy - ts.y * 0.5f), col_text, label);
-
+     
      return pressed;
  }
  static ImRect PolyAabb(const ImVec2* pts, int count)
@@ -1022,6 +1249,139 @@ static bool PointInConvexPoly(const ImVec2* pts, int count, ImVec2 p)
      }
      return ImRect(mn, mx);
  }
+
+ // Returns true if the MAIN area (not the square) was clicked.
+ // Dropdown selection is returned via selected_index (optional).
+
+// Returns true if the MAIN area (not the square) was clicked.
+// Dropdown selection is returned via selected_index (optional).
+ bool ImGuiAdapter::RibbonButtonIconTextWithDropDown(
+     const char* id,
+     ImTextureID icon_tex,
+     ImVec2 icon_size,
+     const char* label,
+     const char* const* items,
+     int item_count,
+     int* selected_index,
+     ImVec2 size,
+     float square_size
+ )
+ {
+     ImGuiWindow* window = ImGui::GetCurrentWindow();
+     if (window->SkipItems) return false;
+
+     ImGuiID wid = window->GetID(id);
+
+     ImVec2 pos = window->DC.CursorPos;
+     ImRect bb(pos, Add(pos, size));
+
+     ImGui::ItemSize(bb);
+     if (!ImGui::ItemAdd(bb, wid))
+         return false;
+
+     ImDrawList* dl = ImGui::GetWindowDrawList();
+     const ImGuiStyle& style = ImGui::GetStyle();
+
+     const float pady = style.FramePadding.y;
+
+     // Dropdown square at bottom center
+     float square_y = bb.Max.y - pady - square_size;
+     ImVec2 square_center(bb.GetCenter().x, square_y + square_size * 0.5f);
+
+     ImVec2 square_min(square_center.x - square_size * 0.5f, square_center.y - square_size * 0.5f);
+     ImVec2 square_max(square_center.x + square_size * 0.5f, square_center.y + square_size * 0.5f);
+     ImRect square_bb(square_min, square_max);
+
+     // Hover states
+     bool square_hovered = ImGui::IsMouseHoveringRect(square_bb.Min, square_bb.Max);
+     bool whole_hovered = ImGui::IsMouseHoveringRect(bb.Min, bb.Max);
+
+     // Background + border
+     ImU32 bg = ImGui::GetColorU32(whole_hovered ? ImGuiCol_ButtonHovered : ImGuiCol_Button);
+     dl->AddRectFilled(bb.Min, bb.Max, bg, style.FrameRounding);
+     dl->AddRect(bb.Min, bb.Max, ImGui::GetColorU32(ImGuiCol_Border), style.FrameRounding);
+
+     // Layout region (space above dropdown square)
+     float content_top = bb.Min.y + pady;
+     float content_bottom = square_bb.Min.y - pady;
+     float content_h = content_bottom - content_top;
+
+     // Optional icon
+     const bool has_icon = (icon_tex != nullptr) && (icon_size.x > 0.0f) && (icon_size.y > 0.0f);
+     const float icon_h = has_icon ? icon_size.y : 0.0f;
+     const float icon_gap = has_icon ? 4.0f : 0.0f; // spacing between icon and label
+
+     // Measure label
+     ImVec2 label_size = ImGui::CalcTextSize(label, nullptr, true);
+     const float text_h = ImGui::GetTextLineHeight();
+
+     // Total stack height we want to place (icon + gap + label)
+     float stack_h = icon_h + icon_gap + text_h;
+
+     // Top of stack, vertically centered in content area
+     float stack_y = content_top + (content_h - stack_h) * 0.5f;
+     if (stack_y < content_top) stack_y = content_top; // clamp if space is tight
+
+     // Icon pos (only if icon exists)
+     if (has_icon)
+     {
+         ImVec2 icon_pos(bb.GetCenter().x - icon_size.x * 0.5f, stack_y);
+         ImVec2 icon_max = Add(icon_pos, icon_size);
+         dl->AddImage(icon_tex, icon_pos, icon_max);
+     }
+
+     // Label pos (below icon if present, otherwise centered stack)
+     float label_y = stack_y + icon_h + icon_gap;
+     ImVec2 label_pos(bb.GetCenter().x - label_size.x * 0.5f, label_y);
+     dl->AddText(label_pos, ImGui::GetColorU32(ImGuiCol_Text), label);
+
+     // Draw dropdown square + chevron
+     ImU32 sq_col = ImGui::GetColorU32(square_hovered ? ImGuiCol_FrameBgHovered : ImGuiCol_FrameBg);
+     dl->AddRectFilled(square_bb.Min, square_bb.Max, sq_col, 2.0f);
+     dl->AddRect(square_bb.Min, square_bb.Max, ImGui::GetColorU32(ImGuiCol_Border), 2.0f);
+
+     ImVec2 c = square_bb.GetCenter();
+     float t = square_size * 0.25f;
+     dl->AddTriangleFilled(
+         ImVec2(c.x - t, c.y - t * 0.25f),
+         ImVec2(c.x + t, c.y - t * 0.25f),
+         ImVec2(c.x, c.y + t),
+         ImGui::GetColorU32(ImGuiCol_Text)
+     );
+
+     // Click logic
+     bool main_clicked = false;
+     if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) && whole_hovered)
+     {
+         if (square_hovered)
+             ImGui::OpenPopup(id);
+         else
+             main_clicked = true;
+     }
+
+     // Optional: better popup placement (under the square)
+     if (ImGui::IsPopupOpen(id, ImGuiPopupFlags_None))
+         ImGui::SetNextWindowPos(ImVec2(square_bb.Min.x, square_bb.Max.y));
+
+     // Popup menu
+     if (ImGui::BeginPopup(id))
+     {
+         for (int i = 0; i < item_count; ++i)
+         {
+             bool is_sel = (selected_index && *selected_index == i);
+             if (ImGui::MenuItem(items[i], nullptr, is_sel))
+             {
+                 if (selected_index) *selected_index = i;
+             }
+         }
+         ImGui::EndPopup();
+     }
+
+     return main_clicked;
+ }
+
+  
+
  bool ImGuiAdapter::ParallelogramButtonTrueHit(const char* label, ImVec2 size, float skew_x)
  {
      ImVec2 pos = ImGui::GetCursorScreenPos();
@@ -1153,12 +1513,12 @@ static bool PointInConvexPoly(const ImVec2* pts, int count, ImVec2 p)
 
      // Logo
      {
-         const int logoWidth =  48;// m_LogoTex->GetWidth();
+         const int logoWidth = 48;// m_LogoTex->GetWidth();
          const int logoHeight = 48;// m_LogoTex->GetHeight();
          const ImVec2 logoOffset(16.0f + windowPadding.x, 5.0f + windowPadding.y + titlebarVerticalOffset);
          const ImVec2 logoRectStart = { ImGui::GetItemRectMin().x + logoOffset.x, ImGui::GetItemRectMin().y + logoOffset.y };
          const ImVec2 logoRectMax = { logoRectStart.x + logoWidth, logoRectStart.y + logoHeight };
-         
+
          fgDrawList->AddImage(m_AppHeaderIcon->GetDescriptorSet(), logoRectStart, logoRectMax);
      }
 
@@ -1175,7 +1535,7 @@ static bool PointInConvexPoly(const ImVec2* pts, int count, ImVec2 p)
      // DEBUG DRAG BOUNDS
      //fgDrawList->AddRect(ImGui::GetCursorScreenPos(), ImVec2(ImGui::GetCursorScreenPos().x + w - buttonsAreaWidth, ImGui::GetCursorScreenPos().y + titlebarHeight), UI::Colors::Theme::invalidPrefab);
      ImGui::InvisibleButton("##titleBarDragZone", ImVec2(w - buttonsAreaWidth, titlebarHeight));
-    
+
      m_TitleBarHovered = ImGui::IsItemHovered();
 
      const bool dragZoneHovered = ImGui::IsItemHovered(ImGuiHoveredFlags_RectOnly);
@@ -1205,7 +1565,7 @@ static bool PointInConvexPoly(const ImVec2* pts, int count, ImVec2 p)
 
      // Draw Menubar
      // TODO DN menu callbacks
-     /*if (m_MenubarCallback)
+     if (m_MenubarCallback)
      {
          ImGui::SuspendLayout();
          {
@@ -1219,7 +1579,7 @@ static bool PointInConvexPoly(const ImVec2* pts, int count, ImVec2 p)
          }
 
          ImGui::ResumeLayout();
-     }*/
+     }
 
      {
          // Centered Window title
@@ -1230,7 +1590,7 @@ static bool PointInConvexPoly(const ImVec2* pts, int count, ImVec2 p)
          ImGui::SetCursorPos(currentCursorPos);
      }
 
-    
+
 
 
      // Window buttons
@@ -1248,7 +1608,7 @@ static bool PointInConvexPoly(const ImVec2* pts, int count, ImVec2 p)
          const int iconWidth = m_IconMinimize->GetWidth();
          const int iconHeight = m_IconMinimize->GetHeight();
          const float padY = (buttonHeight - (float)iconHeight) / 2.0f;
-         if (ImGui::InvisibleButton("Minimize", ImVec2(buttonWidth, buttonHeight)))
+         if (ImGui::InvisibleButton("Minimize", ImVec2(iconWidth, iconHeight)))
          {
              // TODO: move this stuff to a better place, like Window class
              if (m_window)
@@ -1272,7 +1632,7 @@ static bool PointInConvexPoly(const ImVec2* pts, int count, ImVec2 p)
 
          const bool isMaximized = IsMaximized();
 
-         if (ImGui::InvisibleButton("Maximize", ImVec2(buttonWidth, buttonHeight)))
+         if (ImGui::InvisibleButton("Maximize", ImVec2(iconWidth, iconHeight)))
          {
 
              if (isMaximized)
@@ -1299,7 +1659,7 @@ static bool PointInConvexPoly(const ImVec2* pts, int count, ImVec2 p)
      {
          const int iconWidth = m_IconClose->GetWidth();
          const int iconHeight = m_IconClose->GetHeight();
-         if (ImGui::InvisibleButton("Close", ImVec2(buttonWidth, buttonHeight)))
+         if (ImGui::InvisibleButton("Close", ImVec2(iconWidth, iconHeight)))
          {
              glfwSetWindowShouldClose(m_window, GLFW_TRUE);
              // TODO DN send the event to the application
@@ -1312,95 +1672,231 @@ static bool PointInConvexPoly(const ImVec2* pts, int count, ImVec2 p)
      ImGui::EndHorizontal();
 
      {
-        // after you've computed titlebarMin/titlebarMax, w, buttonsAreaWidth etc.
+
+         const ImU32 iconColN = UI::Colors::ColorWithMultipliedValue(UI::Colors::Theme::text, 0.9f);
+         const ImU32 iconColH = UI::Colors::ColorWithMultipliedValue(UI::Colors::Theme::text, 1.2f);
+         const ImU32 iconColP = UI::Colors::Theme::textDarker;
+         const float iconWidth = 36.f;//  // 14.0f;// 256.0f;
+         const float iconHeight = 36.f;//14.0f;// 256.0f;
+
+         // after you've computed titlebarMin/titlebarMax, w, buttonsAreaWidth etc.
+
+         const float buttonsAreaWidth = 94.0f; //titlebarMin/titlebarMax/titlebarClose
+         const float w = ImGui::GetWindowWidth() - windowPadding.y * 2.0f;
+         const float dragWidth = w - buttonsAreaWidth;
+
+         const float panelHeight = buttonHeight + buttonHeight + 90.0f;
+         ImVec2 panelPos = ImVec2(titlebarMin.x, titlebarMax.y);
+         ImVec2 panelSize = ImVec2(w, panelHeight);
+
+         //Make TitlebarToolsOverlay use this size and pos
+         ImGui::SetNextWindowPos(panelPos);
+         ImGui::SetNextWindowSize(panelSize);
+
+         // optional: keep it above other stuff
+         ImGui::SetNextWindowViewport(ImGui::GetWindowViewport()->ID);
+
+         ImGuiWindowFlags flags =
+             ImGuiWindowFlags_NoDecoration |
+             ImGuiWindowFlags_NoDocking |
+             ImGuiWindowFlags_NoMove |
+             ImGuiWindowFlags_NoSavedSettings |
+             ImGuiWindowFlags_NoScrollbar |
+             ImGuiWindowFlags_NoScrollWithMouse |
+             ImGuiWindowFlags_NoFocusOnAppearing |
+             ImGuiWindowFlags_NoNav;
+
+         ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
+         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(10, 10));
+         // if you want it to match titlebar:
+         ImGui::PushStyleColor(ImGuiCol_WindowBg, UI::Colors::Theme::titlebar);
+
+         ImGui::Begin("##TitlebarToolsOverlay", nullptr, flags);
+         
+         if (ImGui::Button("Select", ImVec2(120, 36))) {
+             if (auto doc = m_app->getSketchDocument(); doc && !doc->sketches.empty()) {
+                 if (m_activeSketchIndex < 0) m_activeSketchIndex = 0;
+                 if (m_activeSketchIndex >= (int)doc->sketches.size()) m_activeSketchIndex = (int)doc->sketches.size() - 1;
+                 adapters::sketchui::ToolContext tctx{ doc->sketches[(size_t)m_activeSketchIndex], m_cmdHistory };
+                 m_toolManager.Activate(adapters::sketchui::ToolKind::Select, tctx);
+             }
+         }
+         ImGui::SameLine();
+
+         if (ImGui::Button("Sketch", ImVec2(120, 36))) {}
+         ImGui::SameLine();
+
+         bool lineClicked = ImGui::InvisibleButton("Line", ImVec2(iconWidth, iconHeight));
+         if (lineClicked) {
+             if (auto doc = m_app->getSketchDocument(); doc && !doc->sketches.empty()) {
+                 if (m_activeSketchIndex < 0) m_activeSketchIndex = 0;
+                 if (m_activeSketchIndex >= (int)doc->sketches.size()) m_activeSketchIndex = (int)doc->sketches.size() - 1;
+                 adapters::sketchui::ToolContext tctx{ doc->sketches[(size_t)m_activeSketchIndex], m_cmdHistory };
+                 m_toolManager.Activate(adapters::sketchui::ToolKind::Line2Pt, tctx);
+             }
+         }
+
+         if (ImGui::IsItemHovered())
+         {
+
+             ImVec2 min = ImGui::GetItemRectMin();
+             ImVec2 max = ImGui::GetItemRectMax();
+             ImVec2 size = ImGui::GetItemRectSize();
+             ImVec2 center = { max.x,(min.y + max.y) + iconHeight };
+             ImGui::SetNextWindowBgAlpha(0.95f);
+             //ImVec2 pos = ImGui::GetMousePos();
+             //center.y = center.y +(iconHeight*3);
+             ImGui::SetNextWindowPos(center, ImGuiCond_Always, ImVec2(0.0f, 1.0f));
+             ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 1.0f);
+             ImGui::Begin("##LineTooltip",
+                 nullptr,
+                 ImGuiWindowFlags_NoDecoration |
+                 ImGuiWindowFlags_NoInputs |
+                 ImGuiWindowFlags_AlwaysAutoResize |
+                 ImGuiWindowFlags_NoSavedSettings |
+                 ImGuiWindowFlags_NoFocusOnAppearing
+             );
+             ImGui::PushFont(m_smallFont);
+             ImGui::TextUnformatted("Two point line");
+             ImGui::Separator();
+             ImGui::TextUnformatted("First click at Start point followed by clicking End point");
+             ImGui::TextDisabled("Shortcut: L");
+             ImGui::PopFont();
+             ImGui::End();
+             ImGui::PopStyleVar();
+         }
+         Walnut::UI::DrawButtonImage(m_ToolBarLineIcon, UI::Colors::Theme::text, UI::Colors::ColorWithMultipliedValue(UI::Colors::Theme::text, 1.4f), iconColP);
+
+         ImGui::SameLine();
+         ImGui::InvisibleButton("Rectangle", ImVec2(iconWidth, iconHeight));
+         Walnut::UI::DrawButtonImage(m_ToolBarRectIcon, UI::Colors::Theme::text, UI::Colors::ColorWithMultipliedValue(UI::Colors::Theme::text, 1.4f), iconColP);
+
+         ImGui::SameLine();
+         bool circleClicked = ImGui::InvisibleButton("Circle", ImVec2(iconWidth, iconHeight));
+         if (circleClicked) {
+             if (auto doc = m_app->getSketchDocument(); doc && !doc->sketches.empty()) {
+                 if (m_activeSketchIndex < 0) m_activeSketchIndex = 0;
+                 if (m_activeSketchIndex >= (int)doc->sketches.size()) m_activeSketchIndex = (int)doc->sketches.size() - 1;
+                 adapters::sketchui::ToolContext tctx{ doc->sketches[(size_t)m_activeSketchIndex], m_cmdHistory };
+                 m_toolManager.Activate(adapters::sketchui::ToolKind::Circle2Pt, tctx);
+             }
+         }
+         Walnut::UI::DrawButtonImage(m_ToolBarCircleIcon, UI::Colors::Theme::text, UI::Colors::ColorWithMultipliedValue(UI::Colors::Theme::text, 1.4f), iconColP);
+
+         if (ImGui::IsItemHovered())
+         {
+             ImVec2 min = ImGui::GetItemRectMin();
+             ImVec2 max = ImGui::GetItemRectMax();
+             ImVec2 size = ImGui::GetItemRectSize();
+             ImVec2 center = { max.x,(min.y + max.y) + iconHeight };
+             ImGui::SetNextWindowPos(center);
+             ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8, 8));
+             ImGui::Begin("##CircleTooltip",
+                 nullptr,
+                 ImGuiWindowFlags_NoDecoration |
+                 ImGuiWindowFlags_NoInputs |
+                 ImGuiWindowFlags_AlwaysAutoResize |
+                 ImGuiWindowFlags_NoSavedSettings |
+                 ImGuiWindowFlags_NoFocusOnAppearing
+             );
+             ImGui::PushFont(m_smallFont);
+             ImGui::TextUnformatted("Two point circle (diameter)");
+             ImGui::Separator();
+             ImGui::TextUnformatted("First click at diameter start, then click opposite side to set diameter.");
+             ImGui::TextUnformatted("Enter edits diameter, Esc cancels.");
+             ImGui::TextDisabled("Shortcut: C");
+             ImGui::PopFont();
+             ImGui::End();
+             ImGui::PopStyleVar();
+         }
+
+         ImGui::SameLine();
+         ImGui::InvisibleButton("Arc", ImVec2(iconWidth, iconHeight));
+         Walnut::UI::DrawButtonImage(m_ToolBarArcIcon, UI::Colors::Theme::text, UI::Colors::ColorWithMultipliedValue(UI::Colors::Theme::text, 1.4f), iconColP);
+         ImGui::SameLine();
+
+         if (ImGui::Button("Square", ImVec2(120, 36))) {}
+         ImGui::SameLine();
+         if (ImGui::Button("Dimension", ImVec2(120, 36))) {}
+         ImGui::SameLine();
         
-        const float buttonsAreaWidth = 94.0f; //titlebarMin/titlebarMax/titlebarClose
-        const float w = ImGui::GetWindowWidth() - windowPadding.y * 2.0f;
-        const float dragWidth = w-buttonsAreaWidth;
+         static int variant = 0;
+         const char* opts[] = { "Horizontial", "Vertical", "Coincident","Distance","Length","Raduis","Angle","Tangent","Fixed","Parallel"};
 
-        const float panelHeight = buttonHeight+buttonHeight + 90.0f;
-        ImVec2 panelPos = ImVec2(titlebarMin.x, titlebarMax.y);
-        ImVec2 panelSize = ImVec2(w, panelHeight);
+         RibbonButtonIconTextWithDropDown(
+             "##LineTool",
+             nullptr,
+             ImVec2(32, 32),
+             "Constraints",
+             opts,
+             IM_ARRAYSIZE(opts),
+             &variant,
+             ImVec2(120, 36),
+             16.0f
+         );
 
-        //Make TitlebarToolsOverlay use this size and pos
-        ImGui::SetNextWindowPos(panelPos);
-        ImGui::SetNextWindowSize(panelSize);
+         const float buttonWidth = 120.0f;
+         const float buttonHeight = 36.0f;
 
-        // optional: keep it above other stuff
-        ImGui::SetNextWindowViewport(ImGui::GetWindowViewport()->ID);
-
-        ImGuiWindowFlags flags =
-            ImGuiWindowFlags_NoDecoration |
-            ImGuiWindowFlags_NoDocking |
-            ImGuiWindowFlags_NoMove |
-            ImGuiWindowFlags_NoSavedSettings |
-            ImGuiWindowFlags_NoScrollbar |
-            ImGuiWindowFlags_NoScrollWithMouse |
-            ImGuiWindowFlags_NoFocusOnAppearing |
-            ImGuiWindowFlags_NoNav;
-
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(10, 10));
-        // if you want it to match titlebar:
-        ImGui::PushStyleColor(ImGuiCol_WindowBg, UI::Colors::Theme::titlebar);
-
-        ImGui::Begin("##TitlebarToolsOverlay", nullptr, flags);
-               
-        if (ImGui::Button("Load", ImVec2(120, 36))) {}
-        ImGui::SameLine();
-        if (ImGui::Button("Save", ImVec2(120, 36))) {}
-        ImGui::SameLine();
-        if (ImGui::Button("Sketch", ImVec2(120, 36))) {}
-        ImGui::SameLine();
-        if (ImGui::Button("Line", ImVec2(120, 36))) {}
-        ImGui::SameLine();
-        if (ImGui::Button("Rectangle", ImVec2(120, 36))) {}
-        ImGui::SameLine();
-        if (ImGui::Button("Circle", ImVec2(120, 36))) {}
-        ImGui::SameLine();
-        if (ImGui::Button("Square", ImVec2(120, 36))) {}
-        ImGui::SameLine();
-        if (ImGui::Button("Dimension", ImVec2(120, 36))) {}
-        ImGui::SameLine();
-        if (ImGui::Button("Constraint", ImVec2(120, 36))) {}
+         ImVec2 pos;
+         pos.y = ImGui::GetCursorScreenPos().y;
 
 
-        const float buttonWidth = 120.0f;
-        const float buttonHeight = 36.0f;
 
-        ImVec2 pos;
-        pos.y = ImGui::GetCursorScreenPos().y;
+         // Center horizontally
+         pos.x = (ImGui::GetWindowWidth() - buttonWidth) * 0.5f;
+         if (TrapeziumButtonTrueHit("Home", pos, ImVec2(120, 36), 18.0f, false)) { /* tool = dimension */ }
 
-        // Center horizontally
-        pos.x = (ImGui::GetWindowWidth() - buttonWidth) * 0.5f;
-        if (TrapeziumButtonTrueHit("Home", pos, ImVec2(120, 36), 18.0f, false)) { /* tool = dimension */ }
-       
-        int count = 5;
-        float totalWidth = count * buttonWidth;
-        float startX = (ImGui::GetWindowWidth() - totalWidth) * 0.5f + 18;
-        pos.y = ImGui::GetCursorScreenPos().y; // Cursor changed as we have aded a button
-        pos.x = startX;
+         int count = 5;
+         float totalWidth = count * buttonWidth;
+         float startX = (ImGui::GetWindowWidth() - totalWidth) * 0.5f + 18;
+         pos.y = ImGui::GetCursorScreenPos().y; // Cursor changed as we have aded a button
+         pos.x = startX;
 
-        if (TrapeziumButtonTrueHit("Reset", pos, ImVec2(120, 36), 18.0f, false)) { /* tool = dimension */ }
-        pos.x += buttonWidth;
-        if (ParallelogramButtonTrueHit("Move", pos, ImVec2(120, 36), -18.0f)) { /* tool = line */ }
-        pos.x += buttonWidth - 18;
-        //ImGui::SameLine(120,0);
-        if (TrapeziumButtonTrueHit("Scale", pos, ImVec2(120, 36), 18.0f, true)) { /* tool = dimension */ }
-        pos.x += buttonWidth - 18;
-        //ImGui::SameLine(120,0);
-        if (ParallelogramButtonTrueHit("Undo", pos, ImVec2(120, 36), 18.0f)) { /* tool = line */ }
-        pos.x += buttonWidth;;
-        if (TrapeziumButtonTrueHit("Redo", pos, ImVec2(120, 36), 18.0f, false)) { /* tool = dimension */ }
+         if (TrapeziumButtonTrueHit("Reset", pos, ImVec2(120, 36), 18.0f, false)) {
+             // reset view
+             m_sketchPan = ImVec2(0, 0);
+             m_sketchZoom = 40.0f;
+         }
+         pos.x += buttonWidth;
+         if (ParallelogramButtonTrueHit("Move", pos, ImVec2(120, 36), -18.0f)) { /* tool = line */ }
+         pos.x += buttonWidth - 18;
+         //ImGui::SameLine(120,0);
+         if (TrapeziumButtonTrueHit("Scale", pos, ImVec2(120, 36), 18.0f, true)) { /* tool = dimension */ }
+         pos.x += buttonWidth - 18;
+         //ImGui::SameLine(120,0);
+         if (ParallelogramButtonTrueHit("Undo", pos, ImVec2(120, 36), 18.0f)) {
+             m_cmdHistory.Undo();
+         }
+         pos.x += buttonWidth;;
+         if (TrapeziumButtonTrueHit("Redo", pos, ImVec2(120, 36), 18.0f, false)) {
+             m_cmdHistory.Redo();
+         }
 
-        ImGui::End();
+         ImGui::End();
 
-        ImGui::PopStyleColor();
-        ImGui::PopStyleVar(2);
+         ImGui::PopStyleColor();
+         ImGui::PopStyleVar(2);
 
-        outTitlebarHeight = titlebarHeight + panelHeight;
+         outTitlebarHeight = titlebarHeight + panelHeight;
      }
-    
+ }
+ 
+ void ImGuiAdapter::UI_DrawMenubar()
+ {
+     if (!this->m_MenubarCallback)
+         return;
+
+         const ImRect menuBarRect = { ImGui::GetCursorPos(), { ImGui::GetContentRegionAvail().x + ImGui::GetCursorScreenPos().x, ImGui::GetFrameHeightWithSpacing() } };
+
+         ImGui::BeginGroup();
+         if (Walnut::UI::BeginMenubar(menuBarRect))
+         {
+             m_MenubarCallback();
+         }
+
+         Walnut::UI::EndMenubar();
+         ImGui::EndGroup();
  }
 
 } // namespace adapters

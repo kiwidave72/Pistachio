@@ -1,7 +1,11 @@
 ﻿#include "core/Application.h"
 #include <algorithm>
+#include <variant>
 #include "adapters/persistence/JsonSketchDocumentAdapter.h"
 #include <iostream>
+#include <imgui.h>
+#include "imgui_internal.h"
+
 
 namespace core {
 
@@ -17,6 +21,9 @@ namespace core {
         }
     }
 
+    void Application::setResolverAdapter(std::unique_ptr<ports::ISketchResolverPort> resolver) {
+        m_resolverAdapter = std::move(resolver);
+    }
     void Application::setUIAdapter(std::unique_ptr<ports::IUIPort> uiAdapter) {
         m_uiAdapter = std::move(uiAdapter);
     }
@@ -234,7 +241,86 @@ namespace core {
         }
         return nullptr;
     }
+    void Application::setupToolbarMenus() {
+        m_uiAdapter->setMenubarCallback([this]()
+            {
+                if (ImGui::BeginMenu("File"))
+                {
+                    if (ImGui::MenuItem("Open")) {
+                        std::cout << "Load Sketch Document...\n";
+                        loadSketchDocument("test.pistachio.json");
+                        runSolver();
+                    }
+                    ImGui::Separator();
+                    if (ImGui::MenuItem("Save")) {
+                    
+                        std::cout << "Save Sketch Document...\n";
+                        saveSketchDocument("test.pistachio.json");
+                    }
+                    if (ImGui::MenuItem("Save as ...")) {}
+                    ImGui::Separator();
+                    if (ImGui::MenuItem("Import Sketch")) {}
+                    ImGui::Separator();
+                    if (ImGui::MenuItem("Exit"))
+                    {
+                        this->shutdown();
+                    }
+                    ImGui::EndMenu();
+                }
+                if (ImGui::BeginMenu("Sketch"))
+                {
+                    ImGui::EndMenu();
+                }
+                if (ImGui::BeginMenu("Options"))
+                {
+                    ImGui::EndMenu();
+                }
+                if (ImGui::BeginMenu("Tools"))
+                {
+                }
+                if (ImGui::BeginMenu("View"))
+                {
+                    ImGui::EndMenu();
+                }
 
+                if (ImGui::BeginMenu("Help"))
+                {
+                    if (ImGui::MenuItem("About"))
+                    {
+                        //exampleLayer->ShowAboutModal();
+                    }
+                    ImGui::EndMenu();
+                }
+            });
+    }
+
+    bool Application::runSolver() {
+        std::cout << "\n=== RUNING BASIC RESOLVER ===" << std::endl;
+        ports::ResolvedSketch output= m_resolverAdapter->solve(getSketchDocument()->sketches[0]);
+
+        if (output.report.converged) {
+            std::cout << "[OK] Sketch Resolved successfully" << std::endl;
+            
+            output.sketch.name ="Updated with resolver";
+
+            m_sketchDoc->sketches[0] = output.sketch;
+            m_sketchDoc->name = "Updated with resolver";
+            
+        }
+        else {
+            std::cout << "[X] Resolver failed" << std::endl;
+
+        }
+
+        std::cout << "  Iterations: " << output.report.iterations << std::endl;
+        return true;
+    }   
+    bool Application::saveSketchDocument(const std::string& filepath)
+    {
+        adapters::persistence::JsonSketchDocumentAdapter io;
+        io.saveDocument(*getSketchDocument(), filepath);
+        return true;
+    }
     bool Application::loadSketchDocument(const std::string& filepath)
     {
         std::cout << "\n=== LOADING SKETCH DOCUMENT ===" << std::endl;
@@ -242,7 +328,7 @@ namespace core {
 
         adapters::persistence::JsonSketchDocumentAdapter io;
         m_sketchDoc = io.loadDocument(filepath);
-
+        
         if (m_sketchDoc) {
             std::cout << "[OK] Sketch document loaded successfully" << std::endl;
             std::cout << "  Sketches in document: " << m_sketchDoc->sketches.size() << std::endl;
@@ -256,6 +342,24 @@ namespace core {
                 std::cout << "    Arcs: " << sketch.entities.arcs().size() << std::endl;
                 std::cout << "    Ellipses: " << sketch.entities.ellipses().size() << std::endl;
                 std::cout << "    Curves: " << sketch.entities.curves().size() << std::endl;
+            }
+
+            // Ensure per-sketch ID generators are set after loading.
+            for (auto& sk : m_sketchDoc->sketches) {
+                domain::sketch::EntityId maxEnt = 0;
+                for (const auto& p : sk.entities.points())   maxEnt = std::max(maxEnt, p.h.id);
+                for (const auto& l : sk.entities.lines())    maxEnt = std::max(maxEnt, l.h.id);
+                for (const auto& c : sk.entities.circles())  maxEnt = std::max(maxEnt, c.h.id);
+                for (const auto& a : sk.entities.arcs())     maxEnt = std::max(maxEnt, a.h.id);
+                for (const auto& e : sk.entities.ellipses()) maxEnt = std::max(maxEnt, e.h.id);
+                for (const auto& cu: sk.entities.curves())   maxEnt = std::max(maxEnt, cu.h.id);
+                sk.nextEntityId = maxEnt + 1;
+
+                domain::sketch::ConstraintId maxC = 0;
+                for (const auto& cst : sk.constraints) {
+                    std::visit([&](auto&& c) { maxC = std::max(maxC, c.meta.id); }, cst);
+                }
+                sk.nextConstraintId = maxC + 1;
             }
         }
         else {

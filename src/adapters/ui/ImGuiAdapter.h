@@ -1,8 +1,14 @@
 ﻿#pragma once
+#include <functional>
 #include "ports/IUIPort.h"
 #include <memory>
 #include "imgui.h" 
 #include "../../ImGui/Image.h"
+
+#include "adapters/ui/SketchTooling.h"
+
+// Command history lives in core/commands
+#include "core/commands/CommandHistory.h"
 struct GLFWwindow;
 
 namespace core {
@@ -16,6 +22,8 @@ public:
     explicit ImGuiAdapter(core::Application* app);
     ~ImGuiAdapter() override;
     
+    void setMenubarCallback(const std::function<void()>& menubarCallback);
+
     bool IsMaximized() const;
 
     bool initialize() override;
@@ -34,6 +42,7 @@ private:
     bool IsTitleBarHovered() const { return m_TitleBarHovered; }
 
     //std::shared_ptr<Image> GetApplicationIcon() const { return m_AppHeaderIcon; }
+    std::function<void()> m_MenubarCallback;
 
 
     void renderMainMenu();
@@ -41,7 +50,10 @@ private:
     void renderModelInfo();
     void render3DView();
     void renderCameraGizmo();
+    void renderSketchEditor();
     void UI_DrawTitlebar(float& outTitlebarHeight);
+    void UI_DrawMenubar();
+
     void DrawViewport();
 
     char m_filePathBuffer[512];
@@ -57,7 +69,18 @@ private:
     bool ParallelogramButtonTrueHit(const char* label, ImVec2 pos, ImVec2 size, float skew_x = 18.0f);
     bool TrapeziumButtonTrueHit(const char* label, ImVec2 size, float top_inset_x = 18.0f);
     bool TrapeziumButtonTrueHit(const char* label, ImVec2 pos, ImVec2 size, float top_inset_x = 18.0f);
-    
+    bool RibbonButtonIconTextWithDropDown(
+        const char* id,
+        ImTextureID icon_tex,
+        ImVec2 icon_size,
+        const char* label,
+        const char* const* items,
+        int item_count,
+        int* selected_index,
+        ImVec2 size,
+        float square_size
+    );
+
     bool ImGuiAdapter::TrapeziumButtonTrueHit(
         const char* label,
         ImVec2 pos,
@@ -70,6 +93,23 @@ private:
     std::shared_ptr<Walnut::Image> m_IconMinimize;
     std::shared_ptr<Walnut::Image> m_IconMaximize;
     std::shared_ptr<Walnut::Image> m_IconRestore;
+    std::shared_ptr<Walnut::Image> m_ToolBarLineIcon;
+    std::shared_ptr<Walnut::Image> m_ToolBarCircleIcon;
+    std::shared_ptr<Walnut::Image> m_ToolBarArcIcon;
+    std::shared_ptr<Walnut::Image> m_ToolBarRectIcon;
+    ImFont* m_smallFont;
+
+    // --- 2D sketch tooling ---
+    core::commands::CommandHistory m_cmdHistory;
+    adapters::sketchui::ToolManager m_toolManager;
+    bool m_toolingInitialized = false;
+    int m_activeSketchIndex = 0;
+
+    // Canvas state (pan/zoom)
+    ImVec2 m_sketchPan{ 0,0 };
+    float  m_sketchZoom = 40.0f;
+    adapters::sketchui::Canvas2D m_canvas2D{};
+
 };
 
 } // namespace adapters

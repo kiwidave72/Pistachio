@@ -62,11 +62,16 @@ namespace adapters {
             m_viewer = new V3d_Viewer(graphicDriver);
             m_viewer->SetDefaultLights();
             m_viewer->SetLightOn();
-            std::cout << "Viewer created" << std::endl;
+             std::cout << "Viewer created" << std::endl;
 
             // Create 3D view
             m_view = m_viewer->CreateView();
-            m_view->SetBackgroundColor(Quantity_NOC_GRAY30);
+            //m_view->SetBackgroundColor(Quantity_NOC_GRAY30);
+            m_view->SetBgGradientColors(
+                Quantity_NOC_GRAY90, Quantity_NOC_GRAY70,
+                Aspect_GFM_VER
+            );
+
             std::cout << "View created" << std::endl;
 
             // CRITICAL: Create a separate window for the view
@@ -498,27 +503,52 @@ namespace adapters {
         return comp;
     }
 
-    void OcctRenderer::createExampleCube() {
+    void OcctRenderer::createExampleCube()
+    {
         if (m_context.IsNull()) return;
 
-        // Create a simple box
-        gp_Pnt corner(0, 0, 0);
-        BRepPrimAPI_MakeBox boxMaker(corner, 100, 100, 100);
-        TopoDS_Shape box = boxMaker.Shape();
+        // Geometry
+        TopoDS_Shape box = BRepPrimAPI_MakeBox(gp_Pnt(0, 0, 0), 100, 100, 100).Shape();
 
-        // Display the box
-        opencascade::handle<AIS_Shape> aisBox = new AIS_Shape(box);
-        aisBox->SetColor(Quantity_NOC_ORANGE);
-        aisBox->SetMaterial(Graphic3d_NOM_PLASTIC);
+        // AIS
+        Handle(AIS_Shape) aisBox = new AIS_Shape(box);
 
-        Handle(Prs3d_Drawer) d = aisBox->Attributes();
-        d->SetFaceBoundaryDraw(Standard_True);
-        d->SetFaceBoundaryAspect(new Prs3d_LineAspect(Quantity_NOC_BLACK, Aspect_TOL_SOLID, 2.0));
+        // Face color (pick something a little less "neon")
+        const Quantity_Color faceCol(Quantity_NOC_ORANGE);   // or Quantity_NOC_SANDYBROWN, etc.
+        aisBox->SetColor(faceCol);
+
+        // Material: PLASTIC is OK, but these often look nicer
+        aisBox->SetMaterial(Graphic3d_NOM_SATIN);            // or Graphic3d_NOM_BRASS / Graphic3d_NOM_STEEL
+        aisBox->SetTransparency(0.0);
+
+        // Ask OCCT to render edges over shading (if supported in your version)
+        // This is usually what people want for a “cube with visible edges”.
+#ifdef AIS_ShadedWithEdges
+        aisBox->SetDisplayMode(AIS_ShadedWithEdges);
+#else
+    // Fallback: keep shaded, but enable face boundaries
+        aisBox->SetDisplayMode(AIS_Shaded);
+#endif
+
+        // Styling via drawer
+        Handle(Prs3d_Drawer) dr = aisBox->Attributes();
+
+        // If using fallback boundary draw, this helps; with AIS_ShadedWithEdges it can still apply
+        dr->SetFaceBoundaryDraw(Standard_True);
+
+        // Edge color: darken the face color instead of pure black
+        Quantity_Color edgeCol = faceCol;
+        edgeCol.ChangeIntensity(0.25); // darker (0..1). Tweak to taste.
+
+        // Edge thickness: 1.0–1.5 tends to look cleaner
+        Handle(Prs3d_LineAspect) edgeAsp =
+            new Prs3d_LineAspect(edgeCol, Aspect_TOL_SOLID, 1.2f);
+        dr->SetFaceBoundaryAspect(edgeAsp);
         
+        aisBox->SetMaterial(Graphic3d_NOM_SATIN); // or BRASS / STEEL
+         // Display
         m_context->Display(aisBox, Standard_True);
-
     }
-
     void OcctRenderer::setupViewCube() {
         if (m_context.IsNull()) return;
 
@@ -657,7 +687,7 @@ namespace adapters {
             return;
         }
 
-        std::cout << "\n=== OCCT RENDER START ===" << std::endl;
+        //std::cout << "\n=== OCCT RENDER START ===" << std::endl;
 
         try
         {
@@ -665,7 +695,7 @@ namespace adapters {
             if (!m_view->Window().IsNull()) {
                 Standard_Integer width, height;
                 m_view->Window()->Size(width, height);
-                std::cout << "Window size: " << width << "x" << height << std::endl;
+                //std::cout << "Window size: " << width << "x" << height << std::endl;
             }
             else {
                 std::cout << "View has window: NO (THIS IS A PROBLEM!)" << std::endl;
@@ -675,18 +705,18 @@ namespace adapters {
             // Count objects in context
             AIS_ListOfInteractive allObjects;
             m_context->DisplayedObjects(allObjects);
-            std::cout << "Objects in context: " << allObjects.Size() << std::endl;
+            //std::cout << "Objects in context: " << allObjects.Size() << std::endl;
 
             // Update sketch overlay (only when changed)
             if (m_sketchOverlayDirty && !m_context.IsNull())
             {
-                std::cout << "\n--- Building sketch overlay ---" << std::endl;
-                std::cout << "Scene has:" << std::endl;
-                std::cout << "  Lines: " << m_sketchOverlay.lines.size() << std::endl;
-                std::cout << "  Circles: " << m_sketchOverlay.circles.size() << std::endl;
-                std::cout << "  Arcs: " << m_sketchOverlay.arcs.size() << std::endl;
-                std::cout << "  Ellipses: " << m_sketchOverlay.ellipses.size() << std::endl;
-                std::cout << "  Polylines: " << m_sketchOverlay.polylines.size() << std::endl;
+                //std::cout << "\n--- Building sketch overlay ---" << std::endl;
+                //std::cout << "Scene has:" << std::endl;
+                //std::cout << "  Lines: " << m_sketchOverlay.lines.size() << std::endl;
+                //std::cout << "  Circles: " << m_sketchOverlay.circles.size() << std::endl;
+                //std::cout << "  Arcs: " << m_sketchOverlay.arcs.size() << std::endl;
+                //std::cout << "  Ellipses: " << m_sketchOverlay.ellipses.size() << std::endl;
+                //std::cout << "  Polylines: " << m_sketchOverlay.polylines.size() << std::endl;
 
                 TopoDS_Shape overlay = BuildSketchOverlayShape(m_sketchOverlay);
 
@@ -694,18 +724,18 @@ namespace adapters {
                     std::cout << "WARNING: Built overlay shape is NULL!" << std::endl;
                 }
                 else {
-                    std::cout << "Overlay shape built: NOT NULL" << std::endl;
+                    //std::cout << "Overlay shape built: NOT NULL" << std::endl;
 
                     // Check if compound has any content
                     TopExp_Explorer exp(overlay, TopAbs_EDGE);
-                    int edgeCount = 0;
-                    for (; exp.More(); exp.Next()) edgeCount++;
-                    std::cout << "Edges in overlay shape: " << edgeCount << std::endl;
+                    //int edgeCount = 0;
+                    //for (; exp.More(); exp.Next()) edgeCount++;
+                    //std::cout << "Edges in overlay shape: " << edgeCount << std::endl;
                 }
 
                 if (m_sketchOverlayAis.IsNull())
                 {
-                    std::cout << "Creating NEW AIS_Shape for overlay" << std::endl;
+                    //std::cout << "Creating NEW AIS_Shape for overlay" << std::endl;
                     m_sketchOverlayAis = new AIS_Shape(overlay);
 
                     // Set appearance - make it very visible
@@ -714,13 +744,13 @@ namespace adapters {
                     m_sketchOverlayAis->SetDisplayMode(AIS_WireFrame);
                     m_sketchOverlayAis->SetZLayer(Graphic3d_ZLayerId_Top);
 
-                    std::cout << "Calling m_context->Display()..." << std::endl;
+                    //std::cout << "Calling m_context->Display()..." << std::endl;
                     m_context->Display(m_sketchOverlayAis, Standard_True);
-                    std::cout << "Display complete" << std::endl;
+                    //std::cout << "Display complete" << std::endl;
 
                     // Check if it's actually displayed
                     if (m_context->IsDisplayed(m_sketchOverlayAis)) {
-                        std::cout << "[OK] Overlay IS displayed in context" << std::endl;
+                        //std::cout << "[OK] Overlay IS displayed in context" << std::endl;
                     }
                     else {
                         std::cout << "[X] Overlay NOT displayed in context!" << std::endl;
@@ -728,25 +758,25 @@ namespace adapters {
                 }
                 else
                 {
-                    std::cout << "UPDATING existing AIS_Shape overlay" << std::endl;
+                    //std::cout << "UPDATING existing AIS_Shape overlay" << std::endl;
                     m_sketchOverlayAis->SetShape(overlay);
                     m_context->Redisplay(m_sketchOverlayAis, Standard_True);
-                    std::cout << "Redisplay complete" << std::endl;
+                    //std::cout << "Redisplay complete" << std::endl;
                 }
 
                 m_sketchOverlayDirty = false;
             }
 
-            std::cout << "\nCalling m_view->Redraw()..." << std::endl;
+            //std::cout << "\nCalling m_view->Redraw()..." << std::endl;
             m_view->Redraw();
-            std::cout << "Calling m_view->Update()..." << std::endl;
+            //std::cout << "Calling m_view->Update()..." << std::endl;
             m_view->Update();
-            std::cout << "View update complete" << std::endl;
+            //std::cout << "View update complete" << std::endl;
 
             // Count objects again after render
             allObjects.Clear();
             m_context->DisplayedObjects(allObjects);
-            std::cout << "Objects in context after render: " << allObjects.Size() << std::endl;
+            //std::cout << "Objects in context after render: " << allObjects.Size() << std::endl;
 
             
             if (m_window)
@@ -765,7 +795,7 @@ namespace adapters {
             std::cout << "Unknown exception in render()" << std::endl;
         }
 
-        std::cout << "=== OCCT RENDER END ===\n" << std::endl;
+        //std::cout << "=== OCCT RENDER END ===\n" << std::endl;
     }
     void OcctRenderer::setModel(std::shared_ptr<domain::Model> model) {
         m_currentModel = model;

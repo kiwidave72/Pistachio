@@ -1,4 +1,5 @@
 ﻿#pragma once
+#include <functional>
 
 namespace ports {
 
@@ -12,6 +13,8 @@ public:
     virtual void beginFrame() = 0;
     virtual void endFrame() = 0;
     virtual void render() = 0;
+    virtual void setMenubarCallback(const std::function<void()>& menubarCallback) = 0;
+
 };
 
 } // namespace ports

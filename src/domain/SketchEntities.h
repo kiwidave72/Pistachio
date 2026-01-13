@@ -107,6 +107,9 @@ namespace domain::sketch {
         const std::vector<Ellipse2D>& ellipses() const { return m_ellipses; }
         const std::vector<Curve2D>& curves() const { return m_curves; }
 
+        // Remove by id (needed for undo/redo). Returns false if missing.
+        bool remove(EntityId id);
+
         void clear();
 
     private:

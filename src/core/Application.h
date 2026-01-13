@@ -9,6 +9,7 @@
 #include "ports/IFileLoaderPort.h"
 #include "ports/IExporterPort.h"
 #include "ports/IRendererPort.h"
+#include "ports/ISketchResolverPort.h"
 #include "domain/Model.h"
 #include "domain/SketchModel.h"
 
@@ -24,7 +25,7 @@ namespace core {
         Application(Application&&) = delete;
         Application& operator=(Application&&) = delete;
 
-
+        void setResolverAdapter(std::unique_ptr<ports::ISketchResolverPort> resolver);
         void setUIAdapter(std::unique_ptr<ports::IUIPort> uiAdapter);
         void setRenderer(std::unique_ptr<ports::IRendererPort> renderer);
         void addFileLoader(std::unique_ptr<ports::IFileLoaderPort> loader);
@@ -34,6 +35,7 @@ namespace core {
         void run();
         void shutdown();
 
+        void setupToolbarMenus();
         bool loadFile(const std::string& filepath);
         bool loadFileAsync(const std::string& filepath);
         bool exportFile(const std::string& filepath, const std::string& format);
@@ -50,6 +52,7 @@ namespace core {
         std::vector<std::unique_ptr<ports::IFileLoaderPort>> m_loaders;
         std::vector<std::unique_ptr<ports::IExporterPort>> m_exporters;
         std::shared_ptr<domain::Model> m_currentModel;
+        std::unique_ptr<ports::ISketchResolverPort> m_resolverAdapter;
 
         std::string m_statusMessage;
         std::atomic<bool> m_isLoading;
@@ -59,16 +62,19 @@ namespace core {
 
         void updateStatus(const std::string& message);
         void loadFileThreaded(const std::string& filepath);
-
+        
         ports::IFileLoaderPort* findLoaderForFile(const std::string& filepath);
         ports::IExporterPort* findExporterForFormat(const std::string& format);
 
     public:
+        bool saveSketchDocument(const std::string& filepath);
         bool loadSketchDocument(const std::string& filepath);
+        bool runSolver();
         std::shared_ptr<domain::sketch::Document> getSketchDocument() const;
 
     private:
         std::shared_ptr<domain::sketch::Document> m_sketchDoc;
+         
 
     };
 
