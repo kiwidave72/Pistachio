@@ -192,6 +192,35 @@ namespace adapters::sketchui {
         dl->AddText(ImVec2(r.Min.x + pad.x, r.Min.y + pad.y), IM_COL32(230, 230, 230, 255), buf);
     }
 
+    // Visual-only diameter label for a circle, rendered similarly to line length.
+    inline void DrawCircleDiameterLabel(
+        const Canvas2D& canvas,
+        ImDrawList* dl,
+        const ImVec2& centerW,
+        float radiusW,
+        const char* units = "mm"
+    )
+    {
+        const double dia = (double)radiusW * 2.0;
+
+        char buf[64];
+        // Use ASCII-safe "Dia" instead of the diameter symbol to avoid font issues.
+        std::snprintf(buf, sizeof(buf), "Dia: %.2f %s", dia, units);
+
+        ImVec2 centerS = canvas.WorldToScreen(centerW);
+        const float rpx = radiusW * canvas.pixels_per_unit;
+        // Place label just above the circle.
+        ImVec2 midS{ centerS.x, centerS.y - rpx - 14.0f };
+
+        ImVec2 textSize = ImGui::CalcTextSize(buf);
+        ImVec2 pad{ 6.0f, 3.0f };
+        ImRect r(ImVec2(midS.x - textSize.x * 0.5f - pad.x, midS.y - textSize.y * 0.5f - pad.y),
+                 ImVec2(midS.x + textSize.x * 0.5f + pad.x, midS.y + textSize.y * 0.5f + pad.y));
+        dl->AddRectFilled(r.Min, r.Max, IM_COL32(10, 10, 10, 220), 4.0f);
+        dl->AddRect(r.Min, r.Max, IM_COL32(180, 180, 180, 180), 4.0f);
+        dl->AddText(ImVec2(r.Min.x + pad.x, r.Min.y + pad.y), IM_COL32(230, 230, 230, 255), buf);
+    }
+
     inline float DistPointToSegment(const ImVec2& p, const ImVec2& a, const ImVec2& b)
     {
         const float vx = b.x - a.x;
@@ -220,6 +249,13 @@ namespace adapters::sketchui {
     inline void ClearSelection(domain::sketch::Sketch& sk)
     {
         sk.selectedEntities.clear();
+    }
+
+    inline void AddSelected(domain::sketch::Sketch& sk, domain::sketch::EntityId id)
+    {
+        auto& v = sk.selectedEntities;
+        if (std::find(v.begin(), v.end(), id) == v.end())
+            v.push_back(id);
     }
 
     inline void ToggleSelected(domain::sketch::Sketch& sk, domain::sketch::EntityId id)
@@ -256,50 +292,167 @@ namespace adapters::sketchui {
                 return l.h.id;
         }
 
+        // Circles (hit-test against the circumference)
+        for (auto const& c : sk.entities.circles()) {
+            if (!c.h.visible || !c.h.selectable) continue;
+            const float cx = (float)c.center.x;
+            const float cy = (float)c.center.y;
+            const float r  = (float)c.radius;
+
+            const float dx = mouseW.x - cx;
+            const float dy = mouseW.y - cy;
+            const float dist = std::sqrt(dx * dx + dy * dy);
+
+            if (std::fabs(dist - r) <= tolW)
+                return c.h.id;
+        }
+
         return 0; // 0 = none (EntityId starts at 1)
     }
 
-    // Select tool: click to select entities (Shift=toggle). Escape / click empty clears.
+        // Select tool:
+    //  - Click to select (Shift=toggle)
+    //  - Drag a marquee rectangle to select everything fully inside
+    //      * Points: inside
+    //      * Lines: both endpoints inside
+    //      * Circles: fully inside (center +/- radius inside)
     class SelectTool final : public ISketchTool {
     public:
         ToolKind Kind() const override { return ToolKind::Select; }
         bool IsActive() const override { return m_active; }
 
-        void Begin(ToolContext&) override { m_active = true; }
-        void Cancel(ToolContext& ctx) override { m_active = false; /* keep selection */ }
+        void Begin(ToolContext&) override
+        {
+            m_active = true;
+            m_dragging = false;
+        }
 
-        void UpdateAndDraw(ToolContext& ctx, const Canvas2D& canvas, ImDrawList*) override
+        void Cancel(ToolContext& ctx) override
+        {
+            m_active = false;
+            m_dragging = false;
+            /* keep selection */
+        }
+
+        void UpdateAndDraw(ToolContext& ctx, const Canvas2D& canvas, ImDrawList* dl) override
         {
             if (!m_active) return;
 
             const Rect2 r = canvas.rect();
             const ImVec2 mouseS = ImGui::GetMousePos();
-            const bool inCanvas = (mouseS.x >= r.Min.x && mouseS.x <= r.Max.x && mouseS.y >= r.Min.y && mouseS.y <= r.Max.y);
+
+            const bool hovered =
+                ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem) &&
+                ImGui::IsMouseHoveringRect(r.Min, r.Max);
 
             // Escape clears
             if (ImGui::IsKeyPressed(ImGuiKey_Escape)) {
                 ClearSelection(ctx.sketch);
             }
 
-            if (inCanvas && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
-                const ImVec2 mouseW = canvas.ScreenToWorld(mouseS);
-                const float tolW = 6.0f / canvas.pixels_per_unit; // ~6px
+            // Begin drag inside canvas
+            if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+                m_dragging = true;
+                m_dragStartS = mouseS;
+                m_dragEndS = mouseS;
+            }
 
-                const auto hit = HitTestEntity(ctx.sketch, mouseW, tolW);
-                if (hit != 0) {
-                    const bool shift = ImGui::GetIO().KeyShift;
-                    if (shift) ToggleSelected(ctx.sketch, hit);
-                    else SetSingleSelection(ctx.sketch, hit);
+            // Update drag
+            if (m_dragging) {
+                m_dragEndS = mouseS;
+
+                // Draw marquee rectangle in screen space
+                ImVec2 a = m_dragStartS;
+                ImVec2 b = m_dragEndS;
+                ImVec2 mn(std::min(a.x, b.x), std::min(a.y, b.y));
+                ImVec2 mx(std::max(a.x, b.x), std::max(a.y, b.y));
+                if (dl) {
+                    dl->AddRectFilled(mn, mx, IM_COL32(80, 140, 255, 35));
+                    dl->AddRect(mn, mx, IM_COL32(80, 140, 255, 220), 0.0f, 0, 1.5f);
                 }
-                else {
-                    ClearSelection(ctx.sketch);
+
+                // Finish drag on mouse up
+                if (ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
+                    m_dragging = false;
+
+                    // If small movement, treat as click-hit-test
+                    const float dx = mx.x - mn.x;
+                    const float dy = mx.y - mn.y;
+                    const float clickThresh = 3.0f; // px
+                    if (dx <= clickThresh && dy <= clickThresh) {
+                        const ImVec2 mouseW = canvas.ScreenToWorld(mouseS);
+                        const float tolW = 6.0f / canvas.pixels_per_unit; // ~6px
+
+                        const auto hit = HitTestEntity(ctx.sketch, mouseW, tolW);
+                        if (hit != 0) {
+                            const bool shift = ImGui::GetIO().KeyShift;
+                            if (shift) ToggleSelected(ctx.sketch, hit);
+                            else SetSingleSelection(ctx.sketch, hit);
+                        } else {
+                            ClearSelection(ctx.sketch);
+                        }
+                        return;
+                    }
+
+                    // Otherwise: marquee select everything fully inside
+                    const bool shift = ImGui::GetIO().KeyShift;
+                    if (!shift) ClearSelection(ctx.sketch);
+
+                    // Build world-space AABB from the screen rectangle
+                    // (Convert all 4 corners, then take min/max to be safe with any axis orientation.)
+                    const ImVec2 p00 = canvas.ScreenToWorld(ImVec2(mn.x, mn.y));
+                    const ImVec2 p10 = canvas.ScreenToWorld(ImVec2(mx.x, mn.y));
+                    const ImVec2 p01 = canvas.ScreenToWorld(ImVec2(mn.x, mx.y));
+                    const ImVec2 p11 = canvas.ScreenToWorld(ImVec2(mx.x, mx.y));
+
+                    const float minx = std::min(std::min(p00.x, p10.x), std::min(p01.x, p11.x));
+                    const float maxx = std::max(std::max(p00.x, p10.x), std::max(p01.x, p11.x));
+                    const float miny = std::min(std::min(p00.y, p10.y), std::min(p01.y, p11.y));
+                    const float maxy = std::max(std::max(p00.y, p10.y), std::max(p01.y, p11.y));
+
+                    auto inside = [&](const ImVec2& pW) -> bool {
+                        return pW.x >= minx && pW.x <= maxx && pW.y >= miny && pW.y <= maxy;
+                    };
+
+                    // Points
+                    for (auto const& p : ctx.sketch.entities.points()) {
+                        if (!p.h.visible || !p.h.selectable) continue;
+                        ImVec2 pw{ (float)p.p.x, (float)p.p.y };
+                        if (inside(pw)) AddSelected(ctx.sketch, p.h.id);
+                    }
+
+                    // Lines: both endpoints inside
+                    for (auto const& l : ctx.sketch.entities.lines()) {
+                        if (!l.h.visible || !l.h.selectable) continue;
+                        ImVec2 aW{ (float)l.a.x, (float)l.a.y };
+                        ImVec2 bW{ (float)l.b.x, (float)l.b.y };
+                        if (inside(aW) && inside(bW)) AddSelected(ctx.sketch, l.h.id);
+                    }
+
+                    // Circles: fully inside (center +/- radius inside)
+                    for (auto const& c : ctx.sketch.entities.circles()) {
+                        if (!c.h.visible || !c.h.selectable) continue;
+                        const float cx = (float)c.center.x;
+                        const float cy = (float)c.center.y;
+                        const float rad = (float)c.radius;
+
+                        if ((cx - rad) >= minx && (cx + rad) <= maxx &&
+                            (cy - rad) >= miny && (cy + rad) <= maxy) {
+                            AddSelected(ctx.sketch, c.h.id);
+                        }
+                    }
                 }
             }
         }
 
     private:
         bool m_active = false;
+
+        bool m_dragging = false;
+        ImVec2 m_dragStartS{};
+        ImVec2 m_dragEndS{};
     };
+
 
     // Line: click start, click end, then inline edit length (enter to commit).
     class Line2PtTool final : public ISketchTool {

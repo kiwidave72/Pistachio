@@ -771,6 +771,10 @@ void ImGuiAdapter::renderSketchEditor()
             const float thickness = sel ? 3.0f : 2.0f;
 
             dl->AddCircle(m_canvas2D.WorldToScreen(ctrW), r * m_canvas2D.pixels_per_unit, col, 0, thickness);
+
+            if (sel) {
+                adapters::sketchui::DrawCircleDiameterLabel(m_canvas2D, dl, ctrW, r, "mm");
+            }
         }
 
         // Points (optional)
