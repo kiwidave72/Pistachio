@@ -159,6 +159,112 @@ namespace adapters {
         return d > 0.0;
     }
 
+    // Fix (aka Fixed) constraint
+    // Expected:
+    //  - refs[0] points at a specific anchor (point, line start/end, circle center, circle radius point)
+    //  - paramPoint holds the fixed world position
+    //  - for circle radius-point, param optionally stores the picked angle (radians) so we can keep the same side
+    bool applyFix(EntityStore& store, const GeometricConstraint& c, double& maxDelta) {
+        if (c.refs.empty()) return false;
+        if (!c.paramPoint.has_value()) return false; // nothing to fix to
+
+        const auto& r = c.refs[0];
+        const Vec2 target = *c.paramPoint;
+
+        if (!store.contains(r.id)) return false;
+        const EntityHandle h = store.getHandle(r.id);
+
+        // Most anchors resolve to an actual stored Vec2 we can set directly.
+        if (r.anchor != EntityAnchor::RadiusPoint) {
+            Vec2* p = resolveAnchor(store, r);
+            if (!p) return false;
+            const Vec2 old = *p;
+            *p = target;
+            const double d = std::sqrt(dist2(old, *p));
+            maxDelta = std::max(maxDelta, d);
+            return d > 0.0;
+        }
+
+        // Circle radius-point is derived; fix it by moving the center so that the picked point on the circumference
+        // stays at the target location (radius is preserved).
+        if (h.kind != EntityKind::Circle) return false;
+        auto& circle = store.circle(h.index);
+
+        const double rads = circle.radius;
+        if (rads <= 1e-9) return false;
+
+        // Use stored angle if present, otherwise infer from current geometry (best effort).
+        double ang = 0.0;
+        if (c.param.has_value()) {
+            ang = *c.param;
+        }
+        else {
+            // Infer by assuming the radius-point is on +X side.
+            ang = 0.0;
+        }
+
+        const Vec2 oldCenter = circle.center;
+        circle.center.x = target.x - rads * std::cos(ang);
+        circle.center.y = target.y - rads * std::sin(ang);
+
+        const double d = std::sqrt(dist2(oldCenter, circle.center));
+        maxDelta = std::max(maxDelta, d);
+        return d > 0.0;
+    }
+
+    // Tangent constraint (Phase 2): Line <-> Circle only.
+    // Refs should include one line and one circle.
+    bool applyTangent(EntityStore& store, const GeometricConstraint& c, double& maxDelta) {
+        if (c.refs.size() < 2) return false;
+
+        // Identify the line and circle refs (order doesn't matter).
+        const EntityRef* lineRef = nullptr;
+        const EntityRef* circRef = nullptr;
+
+        for (const auto& r : c.refs) {
+            if (!store.contains(r.id)) continue;
+            const EntityHandle h = store.getHandle(r.id);
+            if (h.kind == EntityKind::Line && !lineRef) lineRef = &r;
+            if (h.kind == EntityKind::Circle && !circRef) circRef = &r;
+        }
+        if (!lineRef || !circRef) return false;
+
+        const EntityHandle hl = store.getHandle(lineRef->id);
+        const EntityHandle hc = store.getHandle(circRef->id);
+        if (hl.kind != EntityKind::Line || hc.kind != EntityKind::Circle) return false;
+
+        auto& ln = store.line(hl.index);
+        auto& cc = store.circle(hc.index);
+
+        const Vec2 a = ln.a;
+        const Vec2 b = ln.b;
+        const Vec2 centerOld = cc.center;
+
+        const double dx = b.x - a.x;
+        const double dy = b.y - a.y;
+        const double len = std::sqrt(dx * dx + dy * dy);
+        if (len <= 1e-9) return false;
+
+        // Unit normal to the line.
+        const double nx = -dy / len;
+        const double ny =  dx / len;
+
+        // Signed distance from circle center to line.
+        const double dist = ((cc.center.x - a.x) * nx + (cc.center.y - a.y) * ny);
+        const double rads = cc.radius;
+
+        // Maintain the current side of the line (avoid flipping).
+        const double target = (dist >= 0.0) ? rads : -rads;
+        const double delta = (target - dist);
+
+        cc.center.x += delta * nx;
+        cc.center.y += delta * ny;
+
+        const double moved = std::sqrt(dist2(centerOld, cc.center));
+        maxDelta = std::max(maxDelta, moved);
+        return moved > 0.0;
+    }
+
     bool applyGeometric(EntityStore& store, const GeometricConstraint& gc, double& maxDelta) {
         if (!gc.meta.enabled || gc.meta.suppressed) return false;
 
@@ -166,7 +272,9 @@ namespace adapters {
         case GeometricConstraintType::Coincident: return applyCoincident(store, gc, maxDelta);
         case GeometricConstraintType::Horizontal: return applyHorizontal(store, gc, maxDelta);
         case GeometricConstraintType::Vertical:   return applyVertical(store, gc, maxDelta);
-        default: return false; // Phase 2 = only these three for now
+        case GeometricConstraintType::Fix:        return applyFix(store, gc, maxDelta);
+        case GeometricConstraintType::Tangent:    return applyTangent(store, gc, maxDelta);
+        default: return false; // Phase 2: keep other constraints for later
         }
     }
 

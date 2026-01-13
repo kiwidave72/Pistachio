@@ -4,8 +4,11 @@
 #include <cmath>
 #include <memory>
 #include <vector>
+#include <optional>
+#include <variant>
 #include <cstdlib>
 #include <cstdio>
+#include <functional>
 
 #include <imgui.h>
 #include <imgui_internal.h>
@@ -15,6 +18,23 @@
 #include "domain/SketchModel.h"
 
 namespace adapters::sketchui {
+
+    // Returns true if the given circle has a Fix constraint anchored to its Center.
+    // Used for drawing UI glyphs (e.g. a small "F" at the center).
+    inline bool HasFixedCircleCenterConstraint(const domain::sketch::Sketch& sk, domain::sketch::EntityId circleId)
+    {
+        for (const auto& c : sk.constraints) {
+            const auto* gc = std::get_if<domain::sketch::GeometricConstraint>(&c);
+            if (!gc) continue;
+            if (gc->type != domain::sketch::GeometricConstraintType::Fix) continue;
+
+            for (const auto& r : gc->refs) {
+                if (r.id == circleId && r.anchor == domain::sketch::EntityAnchor::Center)
+                    return true;
+            }
+        }
+        return false;
+    }
 
     // ImVec2 has no operator overloads in Dear ImGui. Keep math explicit.
     inline ImVec2 VAdd(const ImVec2& a, const ImVec2& b) { return ImVec2(a.x + b.x, a.y + b.y); }
@@ -57,12 +77,15 @@ namespace adapters::sketchui {
         }
     };
 
-    enum class ToolKind { None, Select, Line2Pt, Circle2Pt };
+    enum class ToolKind { None, Select, Line2Pt, Circle2Pt, ConstraintFix, ConstraintTangent };
     enum class DraftStage { Idle, PickingStart, PickingEnd, AdjustingValue };
 
     struct ToolContext {
         domain::sketch::Sketch& sketch;
         core::commands::CommandHistory& history;
+
+        // Call this after a tool commits any change that should trigger re-solving.
+        std::function<void()> markDirty;
     };
 
     class ISketchTool {
@@ -251,19 +274,20 @@ namespace adapters::sketchui {
         sk.selectedEntities.clear();
     }
 
-    inline void AddSelected(domain::sketch::Sketch& sk, domain::sketch::EntityId id)
-    {
-        auto& v = sk.selectedEntities;
-        if (std::find(v.begin(), v.end(), id) == v.end())
-            v.push_back(id);
-    }
-
     inline void ToggleSelected(domain::sketch::Sketch& sk, domain::sketch::EntityId id)
     {
         auto& v = sk.selectedEntities;
         auto it = std::find(v.begin(), v.end(), id);
         if (it == v.end()) v.push_back(id);
         else v.erase(it);
+    }
+
+    // Add without toggling (used for box/marquee selection)
+    inline void AddSelected(domain::sketch::Sketch& sk, domain::sketch::EntityId id)
+    {
+        auto& v = sk.selectedEntities;
+        if (std::find(v.begin(), v.end(), id) == v.end())
+            v.push_back(id);
     }
 
     inline void SetSingleSelection(domain::sketch::Sketch& sk, domain::sketch::EntityId id)
@@ -308,6 +332,92 @@ namespace adapters::sketchui {
         }
 
         return 0; // 0 = none (EntityId starts at 1)
+    }
+
+    struct FixHit
+    {
+        domain::sketch::EntityRef ref{};
+        domain::sketch::Vec2 target{};       // world-space point to lock to
+        std::optional<double> param;         // e.g. angle for circle radius-point
+        bool valid{ false };
+    };
+
+    // Hit-test a specific anchor suitable for a Fix constraint.
+    // Prefers endpoints/centers over body hits so user clicks feel "snappy".
+    inline FixHit HitTestFixAnchor(const domain::sketch::Sketch& sk, const ImVec2& mouseW, float tolW)
+    {
+        FixHit out{};
+
+        auto sqr = [](float v) { return v * v; };
+        auto dist2 = [&](float ax, float ay) {
+            return sqr(mouseW.x - ax) + sqr(mouseW.y - ay);
+        };
+
+        // Point entities
+        for (auto const& p : sk.entities.points()) {
+            if (!p.h.visible || !p.h.selectable) continue;
+            const float x = (float)p.p.x;
+            const float y = (float)p.p.y;
+            if (dist2(x, y) <= tolW * tolW) {
+                out.ref = { p.h.id, domain::sketch::EntityAnchor::Point };
+                out.target = domain::sketch::Vec2{ p.p.x, p.p.y };
+                out.valid = true;
+                return out;
+            }
+        }
+
+        // Line endpoints
+        for (auto const& l : sk.entities.lines()) {
+            if (!l.h.visible || !l.h.selectable) continue;
+
+            const float ax = (float)l.a.x, ay = (float)l.a.y;
+            const float bx = (float)l.b.x, by = (float)l.b.y;
+
+            if (dist2(ax, ay) <= tolW * tolW) {
+                out.ref = { l.h.id, domain::sketch::EntityAnchor::LineStart };
+                out.target = l.a;
+                out.valid = true;
+                return out;
+            }
+            if (dist2(bx, by) <= tolW * tolW) {
+                out.ref = { l.h.id, domain::sketch::EntityAnchor::LineEnd };
+                out.target = l.b;
+                out.valid = true;
+                return out;
+            }
+        }
+
+        // Circle center / circumference
+        for (auto const& c : sk.entities.circles()) {
+            if (!c.h.visible || !c.h.selectable) continue;
+
+            const float cx = (float)c.center.x;
+            const float cy = (float)c.center.y;
+            const float r  = (float)c.radius;
+
+            // Center first
+            if (dist2(cx, cy) <= tolW * tolW) {
+                out.ref = { c.h.id, domain::sketch::EntityAnchor::Center };
+                out.target = c.center;
+                out.valid = true;
+                return out;
+            }
+
+            // Circumference
+            const float dx = mouseW.x - cx;
+            const float dy = mouseW.y - cy;
+            const float d = std::sqrt(dx * dx + dy * dy);
+
+            if (std::fabs(d - r) <= tolW) {
+                out.ref = { c.h.id, domain::sketch::EntityAnchor::RadiusPoint };
+                out.target = domain::sketch::Vec2{ mouseW.x, mouseW.y };
+                out.param = std::atan2((double)dy, (double)dx); // radians
+                out.valid = true;
+                return out;
+            }
+        }
+
+        return out;
     }
 
         // Select tool:
@@ -712,4 +822,111 @@ namespace adapters::sketchui {
         char m_buf[64]{};
     };
 
+
+
+    // ----------------- Constraint Tools -----------------
+
+    class FixedConstraintTool final : public ISketchTool {
+    public:
+        ToolKind Kind() const override { return ToolKind::ConstraintFix; }
+        bool IsActive() const override { return true; }
+
+        void Begin(ToolContext&) override {}
+        void Cancel(ToolContext&) override {}
+
+        void UpdateAndDraw(ToolContext& ctx, const Canvas2D& canvas, ImDrawList* dl) override
+        {
+            (void)dl;
+
+            // Simple status text
+            ImGui::SetCursorScreenPos(ImGui::GetCursorScreenPos());
+            if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !ImGui::GetIO().KeyAlt)
+            {
+                const ImVec2 mouseW = canvas.ScreenToWorld(ImGui::GetIO().MousePos);
+
+                // Use pixel tolerance converted to world units
+                // Canvas2D uses pixels_per_unit (not "zoom")
+                const float tolW = 6.0f / canvas.pixels_per_unit;
+
+                FixHit hit = HitTestFixAnchor(ctx.sketch, mouseW, tolW);
+                if (!hit.valid)
+                    return;
+
+                domain::sketch::GeometricConstraint gc;
+                gc.type = domain::sketch::GeometricConstraintType::Fix;
+                gc.refs.clear();
+                gc.refs.push_back(hit.ref);
+
+                // Fix constraints need a world-space target point
+                gc.paramPoint = hit.target;
+
+                // Optional param for circle radius point (angle)
+                gc.param = hit.param;
+
+                ctx.history.Execute(std::make_unique<core::commands::AddGeometricConstraintCommand>(ctx.sketch, std::move(gc)));
+            if (ctx.markDirty) ctx.markDirty();
+                if (ctx.markDirty) ctx.markDirty();
+            }
+        }
+    };
+
+    class TangentConstraintTool final : public ISketchTool {
+    public:
+        ToolKind Kind() const override { return ToolKind::ConstraintTangent; }
+        bool IsActive() const override { return true; }
+
+        void Begin(ToolContext&) override { m_stage = 0; m_first = {}; }
+        void Cancel(ToolContext&) override { m_stage = 0; m_first = {}; }
+
+        void UpdateAndDraw(ToolContext& ctx, const Canvas2D& canvas, ImDrawList* dl) override
+        {
+            (void)dl;
+
+            if (!ImGui::IsMouseClicked(ImGuiMouseButton_Left) || ImGui::GetIO().KeyAlt)
+                return;
+
+            const ImVec2 mouseW = canvas.ScreenToWorld(ImGui::GetIO().MousePos);
+            const float tolW = 6.0f / canvas.pixels_per_unit;
+
+            // For tangent we accept clicking the entity body; reuse existing entity hit-test,
+            // then assign reasonable anchors.
+            const domain::sketch::EntityId id = HitTestEntity(ctx.sketch, mouseW, tolW);
+            if (id == 0) return;
+
+            // Determine entity kind from store
+            const auto h = ctx.sketch.entities.getHandle(id);
+
+            domain::sketch::EntityRef ref{};
+            ref.id = id;
+            if (h.kind == domain::sketch::EntityKind::Line) ref.anchor = domain::sketch::EntityAnchor::LineInfinite;
+            else if (h.kind == domain::sketch::EntityKind::Circle) ref.anchor = domain::sketch::EntityAnchor::Center;
+            else return; // not supported yet
+
+            if (m_stage == 0) {
+                m_first = ref;
+                m_stage = 1;
+                return;
+            }
+
+            // Second pick must be opposite type (line<->circle)
+            if (ref.id == m_first.id) return;
+
+            // create constraint
+            domain::sketch::GeometricConstraint gc;
+            gc.type = domain::sketch::GeometricConstraintType::Tangent;
+            gc.refs = { m_first, ref };
+
+            ctx.history.Execute(std::make_unique<core::commands::AddGeometricConstraintCommand>(ctx.sketch, std::move(gc)));
+            if (ctx.markDirty) ctx.markDirty();
+                if (ctx.markDirty) ctx.markDirty();
+
+            // reset for next one
+            m_stage = 0;
+            m_first = {};
+        }
+
+    private:
+        int m_stage{ 0 };
+        domain::sketch::EntityRef m_first{};
+    };
 } // namespace adapters::sketchui

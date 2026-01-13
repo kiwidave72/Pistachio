@@ -102,6 +102,8 @@ bool ImGuiAdapter::initialize() {
         m_toolManager.Register(std::make_unique<adapters::sketchui::SelectTool>());
     m_toolManager.Register(std::make_unique<adapters::sketchui::Line2PtTool>());
         m_toolManager.Register(std::make_unique<adapters::sketchui::Circle2PtTool>());
+    m_toolManager.Register(std::make_unique<adapters::sketchui::FixedConstraintTool>());
+    m_toolManager.Register(std::make_unique<adapters::sketchui::TangentConstraintTool>());
 m_toolingInitialized = true;
     }
 
@@ -766,6 +768,16 @@ void ImGuiAdapter::renderSketchEditor()
             ImVec2 ctrW{ (float)c.center.x, (float)c.center.y };
             float r = (float)c.radius;
 
+            // UI glyph: show a small badge when the circle center is Fixed.
+            if (adapters::sketchui::HasFixedCircleCenterConstraint(sketch, c.h.id))
+            {
+                ImVec2 ctrS = m_canvas2D.WorldToScreen(ctrW);
+                const float rr = 7.0f;
+                dl->AddCircleFilled(ctrS, rr, IM_COL32(0, 0, 0, 180));
+                dl->AddCircle(ctrS, rr, IM_COL32(255, 255, 255, 220));
+                dl->AddText(ImVec2(ctrS.x - 3.5f, ctrS.y - 6.0f), IM_COL32(255, 255, 255, 255), "F");
+            }
+
             const bool sel = adapters::sketchui::IsSelected(sketch, c.h.id);
             const ImU32 col = sel ? colSelected : colNormal;
             const float thickness = sel ? 3.0f : 2.0f;
@@ -786,7 +798,7 @@ void ImGuiAdapter::renderSketchEditor()
 
     // Tool update/draw (draft geometry + in-canvas dimension editing)
     {
-        adapters::sketchui::ToolContext tctx{ sketch, m_cmdHistory };
+        adapters::sketchui::ToolContext tctx{ sketch, m_cmdHistory, [this]() { if (m_app) m_app->markActiveSketchDirty(); } };
         m_toolManager.UpdateAndDraw(tctx, m_canvas2D, dl);
     }
 
@@ -1717,7 +1729,7 @@ static bool PointInConvexPoly(const ImVec2* pts, int count, ImVec2 p)
              if (auto doc = m_app->getSketchDocument(); doc && !doc->sketches.empty()) {
                  if (m_activeSketchIndex < 0) m_activeSketchIndex = 0;
                  if (m_activeSketchIndex >= (int)doc->sketches.size()) m_activeSketchIndex = (int)doc->sketches.size() - 1;
-                 adapters::sketchui::ToolContext tctx{ doc->sketches[(size_t)m_activeSketchIndex], m_cmdHistory };
+                 adapters::sketchui::ToolContext tctx{ doc->sketches[(size_t)m_activeSketchIndex], m_cmdHistory, [this]() { if (m_app) m_app->markActiveSketchDirty(); } };
                  m_toolManager.Activate(adapters::sketchui::ToolKind::Select, tctx);
              }
          }
@@ -1731,7 +1743,7 @@ static bool PointInConvexPoly(const ImVec2* pts, int count, ImVec2 p)
              if (auto doc = m_app->getSketchDocument(); doc && !doc->sketches.empty()) {
                  if (m_activeSketchIndex < 0) m_activeSketchIndex = 0;
                  if (m_activeSketchIndex >= (int)doc->sketches.size()) m_activeSketchIndex = (int)doc->sketches.size() - 1;
-                 adapters::sketchui::ToolContext tctx{ doc->sketches[(size_t)m_activeSketchIndex], m_cmdHistory };
+                 adapters::sketchui::ToolContext tctx{ doc->sketches[(size_t)m_activeSketchIndex], m_cmdHistory, [this]() { if (m_app) m_app->markActiveSketchDirty(); } };
                  m_toolManager.Activate(adapters::sketchui::ToolKind::Line2Pt, tctx);
              }
          }
@@ -1777,7 +1789,7 @@ static bool PointInConvexPoly(const ImVec2* pts, int count, ImVec2 p)
              if (auto doc = m_app->getSketchDocument(); doc && !doc->sketches.empty()) {
                  if (m_activeSketchIndex < 0) m_activeSketchIndex = 0;
                  if (m_activeSketchIndex >= (int)doc->sketches.size()) m_activeSketchIndex = (int)doc->sketches.size() - 1;
-                 adapters::sketchui::ToolContext tctx{ doc->sketches[(size_t)m_activeSketchIndex], m_cmdHistory };
+                 adapters::sketchui::ToolContext tctx{ doc->sketches[(size_t)m_activeSketchIndex], m_cmdHistory, [this]() { if (m_app) m_app->markActiveSketchDirty(); } };
                  m_toolManager.Activate(adapters::sketchui::ToolKind::Circle2Pt, tctx);
              }
          }
@@ -1834,6 +1846,23 @@ static bool PointInConvexPoly(const ImVec2* pts, int count, ImVec2 p)
              ImVec2(120, 36),
              16.0f
          );
+
+          // Activate constraint tool based on dropdown selection
+          if (strcmp(opts[variant], "Fixed") == 0 || strcmp(opts[variant], "Tangent") == 0)
+          {
+              if (auto doc = m_app->getSketchDocument(); doc && !doc->sketches.empty())
+              {
+                  if (m_activeSketchIndex < 0) m_activeSketchIndex = 0;
+                  if (m_activeSketchIndex >= (int)doc->sketches.size()) m_activeSketchIndex = (int)doc->sketches.size() - 1;
+                  adapters::sketchui::ToolContext tctx{ doc->sketches[(size_t)m_activeSketchIndex], m_cmdHistory, [this]() { if (m_app) m_app->markActiveSketchDirty(); } };
+
+                  if (strcmp(opts[variant], "Fixed") == 0)
+                      m_toolManager.Activate(adapters::sketchui::ToolKind::ConstraintFix, tctx);
+                  else
+                      m_toolManager.Activate(adapters::sketchui::ToolKind::ConstraintTangent, tctx);
+              }
+          }
+
 
          const float buttonWidth = 120.0f;
          const float buttonHeight = 36.0f;

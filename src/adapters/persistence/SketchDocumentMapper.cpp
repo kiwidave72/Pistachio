@@ -128,6 +128,7 @@ namespace adapters::persistence {
                     out.meta = toDtoMeta(gc.meta);
                     out.type = gc.type;
                     out.param = gc.param;
+                    out.paramPoint = gc.paramPoint;
                     out.refs.reserve(gc.refs.size());
                     for (const auto& r : gc.refs) out.refs.push_back(toDtoRef(r));
                     sd.constraints.emplace_back(out);
@@ -251,6 +252,7 @@ namespace adapters::persistence {
                         gc.meta = fromDtoMeta(cc.meta);
                         gc.type = cc.type;
                         gc.param = cc.param;
+                        gc.paramPoint = cc.paramPoint;
                         gc.refs.reserve(cc.refs.size());
                         for (const auto& r : cc.refs) gc.refs.push_back(fromDtoRef(r));
                         sk.constraints.emplace_back(std::move(gc));

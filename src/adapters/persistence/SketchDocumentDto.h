@@ -103,6 +103,7 @@ namespace adapters::persistence::dto {
         domain::sketch::GeometricConstraintType type{};
         std::vector<EntityRefDto> refs;
         std::optional<double> param;
+        std::optional<domain::sketch::Vec2> paramPoint;
     };
 
     struct DimensionalConstraintDto {

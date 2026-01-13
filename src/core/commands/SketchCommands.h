@@ -73,4 +73,62 @@ void Undo() override
         domain::sketch::EntityId m_id = 0;
     };
 
+
+
+    // Adds a GeometricConstraint into a sketch (single undo step).
+    class AddGeometricConstraintCommand final : public ICommand {
+    public:
+        AddGeometricConstraintCommand(domain::sketch::Sketch& sketch, domain::sketch::GeometricConstraint constraint)
+            : m_sketch(sketch), m_constraint(std::move(constraint)) {}
+
+        const char* Name() const override { return "Add Geometric Constraint"; }
+
+        void Do() override
+        {
+            if (m_constraint.meta.id == 0)
+                m_constraint.meta.id = m_sketch.nextConstraintId++;
+
+            if (m_constraint.meta.name.empty()) {
+                // Simple default names
+                switch (m_constraint.type) {
+                case domain::sketch::GeometricConstraintType::Fix:     m_constraint.meta.name = "Fix"; break;
+                case domain::sketch::GeometricConstraintType::Tangent: m_constraint.meta.name = "Tangent"; break;
+                default:                                               m_constraint.meta.name = "Constraint"; break;
+                }
+            }
+
+            // Only add once
+            if (!m_added) {
+                m_sketch.constraints.emplace_back(m_constraint);
+                m_added = true;
+            }
+            else {
+                // Re-do after undo: push again
+                m_sketch.constraints.emplace_back(m_constraint);
+            }
+        }
+
+        void Undo() override
+        {
+            // Remove by id
+            const auto id = m_constraint.meta.id;
+            auto& v = m_sketch.constraints;
+            for (auto it = v.begin(); it != v.end(); ++it) {
+                if (std::holds_alternative<domain::sketch::GeometricConstraint>(*it)) {
+                    const auto& gc = std::get<domain::sketch::GeometricConstraint>(*it);
+                    if (gc.meta.id == id) {
+                        v.erase(it);
+                        break;
+                    }
+                }
+            }
+        }
+
+    private:
+        domain::sketch::Sketch& m_sketch;
+        domain::sketch::GeometricConstraint m_constraint{};
+        bool m_added{ false };
+    };
+
+
 } // namespace core::commands

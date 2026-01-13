@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "SketchIds.h"
+#include "SketchMath.h"
 
 namespace domain::sketch {
 
@@ -43,7 +44,10 @@ namespace domain::sketch {
         ConstraintMeta meta{};
         GeometricConstraintType type{};
         std::vector<EntityRef> refs;
-        std::optional<double> param; // optional numeric parameter
+        // Optional numeric parameter (e.g. fixed radius-point angle, etc.)
+        std::optional<double> param;
+        // Optional 2D parameter (e.g. fixed target point for Fix constraint).
+        std::optional<Vec2> paramPoint;
     };
 
     struct DimensionalConstraint {

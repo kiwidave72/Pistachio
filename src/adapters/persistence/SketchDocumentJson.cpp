@@ -152,6 +152,7 @@ namespace adapters::persistence::dto {
         j["type"] = static_cast<int>(c.type);
         j["refs"] = c.refs;
         if (c.param.has_value()) j["param"] = *c.param;
+        if (c.paramPoint.has_value()) j["paramPoint"] = *c.paramPoint;
     }
     void from_json(const json& j, GeometricConstraintDto& c) {
         c.meta = require<ConstraintMetaDto>(j, "meta");
@@ -159,6 +160,8 @@ namespace adapters::persistence::dto {
         c.refs = j.value("refs", std::vector<EntityRefDto>{});
         if (j.contains("param")) c.param = j.at("param").get<double>();
         else c.param.reset();
+        if (j.contains("paramPoint")) c.paramPoint = j.at("paramPoint").get<domain::sketch::Vec2>();
+        else c.paramPoint.reset();
     }
 
     void to_json(json& j, const DimensionalConstraintDto& c) {

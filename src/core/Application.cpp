@@ -87,6 +87,15 @@ namespace core {
             // UI adapter will call renderer in DrawViewport()
             m_uiAdapter->render();
 
+            // If sketch was modified by a tool, re-run the solver once and clear the flag.
+            // (We do this after UI input has been processed for the frame.)
+            if (m_activeSketchDirty.load(std::memory_order_relaxed)) {
+                if (m_resolverAdapter && m_sketchDoc && !m_sketchDoc->sketches.empty()) {
+                    runSolver();
+                }
+                m_activeSketchDirty.store(false, std::memory_order_relaxed);
+            }
+
             m_uiAdapter->endFrame();
         }
     }
@@ -222,6 +231,14 @@ namespace core {
 
     float Application::getLoadingProgress() const {
         return m_loadingProgress;
+    }
+
+    void Application::markActiveSketchDirty() {
+        m_activeSketchDirty.store(true, std::memory_order_relaxed);
+    }
+
+    bool Application::isActiveSketchDirty() const {
+        return m_activeSketchDirty.load(std::memory_order_relaxed);
     }
 
     ports::IFileLoaderPort* Application::findLoaderForFile(const std::string& filepath) {
