@@ -2,6 +2,7 @@
 #include <functional>
 #include "ports/IUIPort.h"
 #include <memory>
+#include <vector>
 #include "imgui.h" 
 #include "../../ImGui/Image.h"
 
@@ -104,6 +105,16 @@ private:
     adapters::sketchui::ToolManager m_toolManager;
     bool m_toolingInitialized = false;
     int m_activeSketchIndex = 0;
+    int m_activeConstraintIcon = -1; // UI-only selection for constraint toolbar
+
+    // Solve-on-dirty flags for sketch constraints
+    bool m_sketchNeedsSolve = true;
+    uint64_t m_sketchChangeSerial = 0;
+
+    // UI selection highlight (hover + current pick sequence)
+    std::vector<domain::sketch::EntityId> m_uiPickedIds;
+    domain::sketch::EntityId m_uiHoverId = 0;
+
 
     // Canvas state (pan/zoom)
     ImVec2 m_sketchPan{ 0,0 };

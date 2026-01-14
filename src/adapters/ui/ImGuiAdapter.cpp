@@ -13,8 +13,25 @@
 #include <imgui_impl_opengl3.h>
 #include "imgui_internal.h"
 #include <GLFW/glfw3.h>
+// Windows headers (pulled in via GLFW native) define min/max macros; avoid breaking std::min/std::max.
+#ifdef min
+#undef min
+#endif
+#ifdef max
+#undef max
+#endif
+
 #define GLFW_EXPOSE_NATIVE_WIN32
 #include <GLFW/glfw3native.h>
+
+// Fix Windows min/max macro clash (prevents std::min/std::max from breaking)
+#ifdef min
+#undef min
+#endif
+#ifdef max
+#undef max
+#endif
+
 
 #include <cstring>
 #include <filesystem>
@@ -22,19 +39,13 @@
 #include "stb_image.h"
 
 #include "UI.h"
+#include "adapters/ui/ConstraintIcons.h"
 #include "core/rendering/SketchRenderBuilder.h"
 #include "adapters/rendering/OcctRenderer.h"
 #include "adapters/rendering/RendererRouter.h"
 
 #include "../../../Walnut-Icon.embed"
 #include "../../../WindowImages.embed"
-
-#ifdef min
-#undef min
-#endif
-#ifdef max
-#undef max
-#endif
 
 
 namespace adapters {
@@ -99,12 +110,10 @@ bool ImGuiAdapter::initialize() {
 
     // Register sketch tools (2D editor)
     if (!m_toolingInitialized) {
-        m_toolManager.Register(std::make_unique<adapters::sketchui::SelectTool>());
-    m_toolManager.Register(std::make_unique<adapters::sketchui::Line2PtTool>());
-        m_toolManager.Register(std::make_unique<adapters::sketchui::Circle2PtTool>());
-    m_toolManager.Register(std::make_unique<adapters::sketchui::FixedConstraintTool>());
-    m_toolManager.Register(std::make_unique<adapters::sketchui::TangentConstraintTool>());
-m_toolingInitialized = true;
+        m_toolManager.Register(std::make_unique<adapters::sketchui::Line2PtTool>());
+    m_toolManager.Register(std::make_unique<adapters::sketchui::CircleCenterRadiusTool>());
+    m_toolManager.Register(std::make_unique<adapters::sketchui::ConstraintTool>());
+        m_toolingInitialized = true;
     }
 
     // windows icons
@@ -498,6 +507,7 @@ void ImGuiAdapter::DrawViewport()
 
     // === SKETCH SECTION ===
     auto doc = m_app->getSketchDocument();
+    static int s_lastSketchIdx = -1;
     if (!doc) {
         ImGui::TextColored(ImVec4(1, 1, 0, 1), "[!] No sketch document loaded");
         ImGui::TextWrapped("Sketch should have been loaded in main.cpp");
@@ -627,6 +637,7 @@ void ImGuiAdapter::renderSketchEditor()
     ImGui::Begin("Sketch Editor");
 
     auto doc = m_app->getSketchDocument();
+    static int s_lastSketchIdx = -1;
     if (!doc || doc->sketches.empty()) {
         ImGui::TextDisabled("No sketch document loaded");
         ImGui::End();
@@ -652,18 +663,60 @@ void ImGuiAdapter::renderSketchEditor()
             (int)doc->sketches.size());
     }
 
-    auto& sketch = doc->sketches[(size_t)m_activeSketchIndex];
+    // Solve constraints once when requested (e.g. after adding constraints)
+    if (m_sketchNeedsSolve) {
+        m_sketchNeedsSolve = false;
+        if (m_app) m_app->runSolver();
+        // document may have been updated by solver; continue with latest sketch reference
+    }
+
+    if (s_lastSketchIdx != m_activeSketchIndex) { s_lastSketchIdx = m_activeSketchIndex; m_sketchNeedsSolve = true; }
+
+auto& sketch = doc->sketches[(size_t)m_activeSketchIndex];
 
     // Tool selection status
-    const char* toolName = "None";
-    switch (m_toolManager.ActiveKind()) {
-    case adapters::sketchui::ToolKind::Select: toolName = "Select"; break;
-    case adapters::sketchui::ToolKind::Line2Pt: toolName = "Line (2pt)"; break;
-    default: break;
-    }
-    ImGui::Text("Tool: %s", toolName);
+    const auto _ak = m_toolManager.ActiveKind();
+    const char* _toolName =
+        (_ak == adapters::sketchui::ToolKind::Line2Pt) ? "Line (2pt)" :
+        (_ak == adapters::sketchui::ToolKind::CircleCenterRadius) ? "Circle (center-radius)" :
+        (_ak == adapters::sketchui::ToolKind::Constraint) ? "Constraint" :
+        "None";
+    ImGui::Text("Tool: %s", _toolName);
     ImGui::SameLine();
-    ImGui::TextDisabled("(Use toolbar: Select or Line)");
+    ImGui::TextDisabled("(Click Line icon in toolbar)");
+    ImGui::Separator();
+    ImGui::TextUnformatted("Constraints:");
+    ImGui::SameLine();
+    {
+        using adapters::sketchui::ConstraintIcon;
+        auto iconBtn = [&](const char* id, ConstraintIcon ic, const char* tip) {
+            bool sel = (m_activeConstraintIcon == (int)ic);
+            if (adapters::sketchui::ConstraintIconButton(id, ic, sel)) {
+                m_activeConstraintIcon = sel ? -1 : (int)ic;
+                // Make constraint selection feel like an active tool (separate from sketch drawing tools).
+                if (auto doc = m_app->getSketchDocument(); doc && !doc->sketches.empty()) {
+                    if (m_activeSketchIndex < 0) m_activeSketchIndex = 0;
+                    if (m_activeSketchIndex >= (int)doc->sketches.size()) m_activeSketchIndex = (int)doc->sketches.size() - 1;
+                    adapters::sketchui::ToolContext tctx{ doc->sketches[(size_t)m_activeSketchIndex], m_cmdHistory, &m_activeConstraintIcon, &m_sketchNeedsSolve, &m_sketchChangeSerial , &m_uiPickedIds, &m_uiHoverId };
+                    if (m_activeConstraintIcon >= 0)
+                        m_toolManager.Activate(adapters::sketchui::ToolKind::Constraint, tctx);
+                }
+            }
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tip);
+            ImGui::SameLine();
+        };
+        iconBtn("##c_fixed", ConstraintIcon::Fixed, "Fixed");
+        iconBtn("##c_tangent", ConstraintIcon::Tangent, "Tangent");
+        iconBtn("##c_h", ConstraintIcon::Horizontal, "Horizontal");
+        iconBtn("##c_v", ConstraintIcon::Vertical, "Vertical");
+        iconBtn("##c_parallel", ConstraintIcon::Parallel, "Parallel");
+        iconBtn("##c_perp", ConstraintIcon::Perpendicular, "Perpendicular");
+        iconBtn("##c_coin", ConstraintIcon::Coincident, "Coincident");
+        iconBtn("##c_mid", ConstraintIcon::Midpoint, "Midpoint");
+        iconBtn("##c_equal", ConstraintIcon::Equal, "Equal");
+        ImGui::NewLine();
+    }
+
 
     // Canvas region
     ImVec2 canvasPos = ImGui::GetCursorScreenPos();
@@ -722,10 +775,10 @@ void ImGuiAdapter::renderSketchEditor()
         // Determine visible range in world units
         ImVec2 w0 = m_canvas2D.ScreenToWorld(origin);
         ImVec2 w1 = m_canvas2D.ScreenToWorld(end);
-        float xmin = std::floor(std::min(w0.x, w1.x)) - 1.0f;
-        float xmax = std::ceil (std::max(w0.x, w1.x)) + 1.0f;
-        float ymin = std::floor(std::min(w0.y, w1.y)) - 1.0f;
-        float ymax = std::ceil (std::max(w0.y, w1.y)) + 1.0f;
+        float xmin = std::floor((std::min)(w0.x, w1.x)) - 1.0f;
+        float xmax = std::ceil ((std::max)(w0.x, w1.x)) + 1.0f;
+        float ymin = std::floor((std::min)(w0.y, w1.y)) - 1.0f;
+        float ymax = std::ceil ((std::max)(w0.y, w1.y)) + 1.0f;
 
         for (int x = (int)xmin; x <= (int)xmax; ++x) {
             ImVec2 a = ImVec2(center.x + x * ppu, origin.y);
@@ -744,49 +797,28 @@ void ImGuiAdapter::renderSketchEditor()
 
     // Render existing entities
     {
-        const ImU32 colNormal = IM_COL32(60, 90, 180, 255);
-        const ImU32 colSelected = IM_COL32(245, 195, 50, 255);
+
+auto isHi = [&](domain::sketch::EntityId id) -> bool {
+    if (m_uiHoverId != 0 && id == m_uiHoverId) return true;
+    for (auto pid : m_uiPickedIds) if (pid == id) return true;
+    return false;
+};
+
+const ImU32 baseCol = IM_COL32(60, 90, 180, 255);
+const ImU32 hiCol   = IM_COL32(255, 220, 0, 255);
 
         // Lines
         for (const auto& l : sketch.entities.lines()) {
             ImVec2 aW{ (float)l.a.x, (float)l.a.y };
             ImVec2 bW{ (float)l.b.x, (float)l.b.y };
-
-            const bool sel = adapters::sketchui::IsSelected(sketch, l.h.id);
-            const ImU32 col = sel ? colSelected : colNormal;
-            const float thickness = sel ? 3.0f : 2.0f;
-
-            dl->AddLine(m_canvas2D.WorldToScreen(aW), m_canvas2D.WorldToScreen(bW), col, thickness);
-
-            if (sel) {
-                adapters::sketchui::DrawDimensionLabel(m_canvas2D, dl, aW, bW, "mm");
-            }
+            dl->AddLine(m_canvas2D.WorldToScreen(aW), m_canvas2D.WorldToScreen(bW), isHi(l.h.id) ? hiCol : baseCol, 2.0f);
         }
 
         // Circles
         for (const auto& c : sketch.entities.circles()) {
             ImVec2 ctrW{ (float)c.center.x, (float)c.center.y };
             float r = (float)c.radius;
-
-            // UI glyph: show a small badge when the circle center is Fixed.
-            if (adapters::sketchui::HasFixedCircleCenterConstraint(sketch, c.h.id))
-            {
-                ImVec2 ctrS = m_canvas2D.WorldToScreen(ctrW);
-                const float rr = 7.0f;
-                dl->AddCircleFilled(ctrS, rr, IM_COL32(0, 0, 0, 180));
-                dl->AddCircle(ctrS, rr, IM_COL32(255, 255, 255, 220));
-                dl->AddText(ImVec2(ctrS.x - 3.5f, ctrS.y - 6.0f), IM_COL32(255, 255, 255, 255), "F");
-            }
-
-            const bool sel = adapters::sketchui::IsSelected(sketch, c.h.id);
-            const ImU32 col = sel ? colSelected : colNormal;
-            const float thickness = sel ? 3.0f : 2.0f;
-
-            dl->AddCircle(m_canvas2D.WorldToScreen(ctrW), r * m_canvas2D.pixels_per_unit, col, 0, thickness);
-
-            if (sel) {
-                adapters::sketchui::DrawCircleDiameterLabel(m_canvas2D, dl, ctrW, r, "mm");
-            }
+            dl->AddCircle(m_canvas2D.WorldToScreen(ctrW), r * m_canvas2D.pixels_per_unit, isHi(c.h.id) ? hiCol : baseCol, 0, 2.0f);
         }
 
         // Points (optional)
@@ -798,16 +830,14 @@ void ImGuiAdapter::renderSketchEditor()
 
     // Tool update/draw (draft geometry + in-canvas dimension editing)
     {
-        adapters::sketchui::ToolContext tctx{ sketch, m_cmdHistory, [this]() { if (m_app) m_app->markActiveSketchDirty(); } };
+        adapters::sketchui::ToolContext tctx{ sketch, m_cmdHistory, &m_activeConstraintIcon, &m_sketchNeedsSolve, &m_sketchChangeSerial , &m_uiPickedIds, &m_uiHoverId };
         m_toolManager.UpdateAndDraw(tctx, m_canvas2D, dl);
     }
 
     // Update OCCT overlay from the active sketch (so the 3D viewport reflects edits)
     if (auto* renderer = m_app->getRenderer()) {
         if (auto* occt = dynamic_cast<adapters::OcctRenderer*>(renderer)) {
-            core::rendering::SketchRenderOptions opt;
-            opt.selectedIds = &sketch.selectedEntities;
-            auto scene = core::rendering::BuildRenderSceneFromSketch(sketch, opt);
+            auto scene = core::rendering::BuildRenderSceneFromSketch(sketch);
             occt->setSketchOverlay(scene);
         }
     }
@@ -1724,17 +1754,6 @@ static bool PointInConvexPoly(const ImVec2* pts, int count, ImVec2 p)
          ImGui::PushStyleColor(ImGuiCol_WindowBg, UI::Colors::Theme::titlebar);
 
          ImGui::Begin("##TitlebarToolsOverlay", nullptr, flags);
-         
-         if (ImGui::Button("Select", ImVec2(120, 36))) {
-             if (auto doc = m_app->getSketchDocument(); doc && !doc->sketches.empty()) {
-                 if (m_activeSketchIndex < 0) m_activeSketchIndex = 0;
-                 if (m_activeSketchIndex >= (int)doc->sketches.size()) m_activeSketchIndex = (int)doc->sketches.size() - 1;
-                 adapters::sketchui::ToolContext tctx{ doc->sketches[(size_t)m_activeSketchIndex], m_cmdHistory, [this]() { if (m_app) m_app->markActiveSketchDirty(); } };
-                 m_toolManager.Activate(adapters::sketchui::ToolKind::Select, tctx);
-             }
-         }
-         ImGui::SameLine();
-
          if (ImGui::Button("Sketch", ImVec2(120, 36))) {}
          ImGui::SameLine();
 
@@ -1743,7 +1762,7 @@ static bool PointInConvexPoly(const ImVec2* pts, int count, ImVec2 p)
              if (auto doc = m_app->getSketchDocument(); doc && !doc->sketches.empty()) {
                  if (m_activeSketchIndex < 0) m_activeSketchIndex = 0;
                  if (m_activeSketchIndex >= (int)doc->sketches.size()) m_activeSketchIndex = (int)doc->sketches.size() - 1;
-                 adapters::sketchui::ToolContext tctx{ doc->sketches[(size_t)m_activeSketchIndex], m_cmdHistory, [this]() { if (m_app) m_app->markActiveSketchDirty(); } };
+                 adapters::sketchui::ToolContext tctx{ doc->sketches[(size_t)m_activeSketchIndex], m_cmdHistory, &m_activeConstraintIcon, &m_sketchNeedsSolve, &m_sketchChangeSerial , &m_uiPickedIds, &m_uiHoverId };
                  m_toolManager.Activate(adapters::sketchui::ToolKind::Line2Pt, tctx);
              }
          }
@@ -1785,43 +1804,15 @@ static bool PointInConvexPoly(const ImVec2* pts, int count, ImVec2 p)
 
          ImGui::SameLine();
          bool circleClicked = ImGui::InvisibleButton("Circle", ImVec2(iconWidth, iconHeight));
-         if (circleClicked) {
-             if (auto doc = m_app->getSketchDocument(); doc && !doc->sketches.empty()) {
-                 if (m_activeSketchIndex < 0) m_activeSketchIndex = 0;
-                 if (m_activeSketchIndex >= (int)doc->sketches.size()) m_activeSketchIndex = (int)doc->sketches.size() - 1;
-                 adapters::sketchui::ToolContext tctx{ doc->sketches[(size_t)m_activeSketchIndex], m_cmdHistory, [this]() { if (m_app) m_app->markActiveSketchDirty(); } };
-                 m_toolManager.Activate(adapters::sketchui::ToolKind::Circle2Pt, tctx);
-             }
-         }
+          if (circleClicked) {
+              if (auto doc = m_app->getSketchDocument(); doc && !doc->sketches.empty()) {
+                  if (m_activeSketchIndex < 0) m_activeSketchIndex = 0;
+                  if (m_activeSketchIndex >= (int)doc->sketches.size()) m_activeSketchIndex = (int)doc->sketches.size() - 1;
+                  adapters::sketchui::ToolContext tctx{ doc->sketches[(size_t)m_activeSketchIndex], m_cmdHistory, &m_activeConstraintIcon, &m_sketchNeedsSolve, &m_sketchChangeSerial , &m_uiPickedIds, &m_uiHoverId };
+                  m_toolManager.Activate(adapters::sketchui::ToolKind::CircleCenterRadius, tctx);
+              }
+          }
          Walnut::UI::DrawButtonImage(m_ToolBarCircleIcon, UI::Colors::Theme::text, UI::Colors::ColorWithMultipliedValue(UI::Colors::Theme::text, 1.4f), iconColP);
-
-         if (ImGui::IsItemHovered())
-         {
-             ImVec2 min = ImGui::GetItemRectMin();
-             ImVec2 max = ImGui::GetItemRectMax();
-             ImVec2 size = ImGui::GetItemRectSize();
-             ImVec2 center = { max.x,(min.y + max.y) + iconHeight };
-             ImGui::SetNextWindowPos(center);
-             ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8, 8));
-             ImGui::Begin("##CircleTooltip",
-                 nullptr,
-                 ImGuiWindowFlags_NoDecoration |
-                 ImGuiWindowFlags_NoInputs |
-                 ImGuiWindowFlags_AlwaysAutoResize |
-                 ImGuiWindowFlags_NoSavedSettings |
-                 ImGuiWindowFlags_NoFocusOnAppearing
-             );
-             ImGui::PushFont(m_smallFont);
-             ImGui::TextUnformatted("Two point circle (diameter)");
-             ImGui::Separator();
-             ImGui::TextUnformatted("First click at diameter start, then click opposite side to set diameter.");
-             ImGui::TextUnformatted("Enter edits diameter, Esc cancels.");
-             ImGui::TextDisabled("Shortcut: C");
-             ImGui::PopFont();
-             ImGui::End();
-             ImGui::PopStyleVar();
-         }
-
          ImGui::SameLine();
          ImGui::InvisibleButton("Arc", ImVec2(iconWidth, iconHeight));
          Walnut::UI::DrawButtonImage(m_ToolBarArcIcon, UI::Colors::Theme::text, UI::Colors::ColorWithMultipliedValue(UI::Colors::Theme::text, 1.4f), iconColP);
@@ -1846,23 +1837,6 @@ static bool PointInConvexPoly(const ImVec2* pts, int count, ImVec2 p)
              ImVec2(120, 36),
              16.0f
          );
-
-          // Activate constraint tool based on dropdown selection
-          if (strcmp(opts[variant], "Fixed") == 0 || strcmp(opts[variant], "Tangent") == 0)
-          {
-              if (auto doc = m_app->getSketchDocument(); doc && !doc->sketches.empty())
-              {
-                  if (m_activeSketchIndex < 0) m_activeSketchIndex = 0;
-                  if (m_activeSketchIndex >= (int)doc->sketches.size()) m_activeSketchIndex = (int)doc->sketches.size() - 1;
-                  adapters::sketchui::ToolContext tctx{ doc->sketches[(size_t)m_activeSketchIndex], m_cmdHistory, [this]() { if (m_app) m_app->markActiveSketchDirty(); } };
-
-                  if (strcmp(opts[variant], "Fixed") == 0)
-                      m_toolManager.Activate(adapters::sketchui::ToolKind::ConstraintFix, tctx);
-                  else
-                      m_toolManager.Activate(adapters::sketchui::ToolKind::ConstraintTangent, tctx);
-              }
-          }
-
 
          const float buttonWidth = 120.0f;
          const float buttonHeight = 36.0f;

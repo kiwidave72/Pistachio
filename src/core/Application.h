@@ -46,11 +46,6 @@ namespace core {
         bool isLoading() const;
         float getLoadingProgress() const;
 
-        // Sketch dirty flag / solver triggering
-        void markActiveSketchDirty();
-        bool isActiveSketchDirty() const;
-
-
     private:
         std::unique_ptr<ports::IUIPort> m_uiAdapter;
         std::unique_ptr<ports::IRendererPort> m_renderer;
@@ -72,7 +67,6 @@ namespace core {
         ports::IExporterPort* findExporterForFormat(const std::string& format);
 
     public:
-        bool saveSketchDocument(const std::string& filepath);
         bool loadSketchDocument(const std::string& filepath);
         bool runSolver();
         std::shared_ptr<domain::sketch::Document> getSketchDocument() const;
@@ -81,8 +75,6 @@ namespace core {
         std::shared_ptr<domain::sketch::Document> m_sketchDoc;
          
 
-    
-        std::atomic<bool> m_activeSketchDirty{ false }; // set by tools when sketch changes
-};
+    };
 
 } // namespace core

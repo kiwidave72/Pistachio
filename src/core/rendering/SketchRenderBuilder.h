@@ -15,11 +15,6 @@ namespace core::rendering
 
         float lineThickness = 2.0f;
         float pointSize = 6.0f;
-
-        // Selection styling
-        Color selectedColor{ 0.95f, 0.75f, 0.15f, 1.0f };
-        float selectedThicknessScale = 1.5f;
-        const std::vector<domain::sketch::EntityId>* selectedIds = nullptr;
     };
 
     RenderScene BuildRenderSceneFromSketch(

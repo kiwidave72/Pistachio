@@ -159,111 +159,96 @@ namespace adapters {
         return d > 0.0;
     }
 
-    // Fix (aka Fixed) constraint
-    // Expected:
-    //  - refs[0] points at a specific anchor (point, line start/end, circle center, circle radius point)
-    //  - paramPoint holds the fixed world position
-    //  - for circle radius-point, param optionally stores the picked angle (radians) so we can keep the same side
-    bool applyFix(EntityStore& store, const GeometricConstraint& c, double& maxDelta) {
-        if (c.refs.empty()) return false;
-        if (!c.paramPoint.has_value()) return false; // nothing to fix to
+// --- Tangent constraint (Phase 2 minimal) ---
+// Supports:
+//   - Line <-> Circle: move the circle center so distance(center, line) == radius
+//   - Circle <-> Circle: move the second circle so center distance == r1 + r2 (external tangent)
+static bool applyTangent(EntityStore& store, const GeometricConstraint& c, double& maxDelta)
+{
+    if (c.refs.size() < 2) return false;
+    if (!store.contains(c.refs[0].id) || !store.contains(c.refs[1].id)) return false;
 
-        const auto& r = c.refs[0];
-        const Vec2 target = *c.paramPoint;
+    const EntityHandle ha = store.getHandle(c.refs[0].id);
+    const EntityHandle hb = store.getHandle(c.refs[1].id);
 
-        if (!store.contains(r.id)) return false;
-        const EntityHandle h = store.getHandle(r.id);
+    auto tangentLineCircle = [&](const EntityHandle& hLine, const EntityHandle& hCircle) -> bool
+    {
+        if (hLine.kind != EntityKind::Line || hCircle.kind != EntityKind::Circle) return false;
 
-        // Most anchors resolve to an actual stored Vec2 we can set directly.
-        if (r.anchor != EntityAnchor::RadiusPoint) {
-            Vec2* p = resolveAnchor(store, r);
-            if (!p) return false;
-            const Vec2 old = *p;
-            *p = target;
-            const double d = std::sqrt(dist2(old, *p));
-            maxDelta = std::max(maxDelta, d);
-            return d > 0.0;
-        }
-
-        // Circle radius-point is derived; fix it by moving the center so that the picked point on the circumference
-        // stays at the target location (radius is preserved).
-        if (h.kind != EntityKind::Circle) return false;
-        auto& circle = store.circle(h.index);
-
-        const double rads = circle.radius;
-        if (rads <= 1e-9) return false;
-
-        // Use stored angle if present, otherwise infer from current geometry (best effort).
-        double ang = 0.0;
-        if (c.param.has_value()) {
-            ang = *c.param;
-        }
-        else {
-            // Infer by assuming the radius-point is on +X side.
-            ang = 0.0;
-        }
-
-        const Vec2 oldCenter = circle.center;
-        circle.center.x = target.x - rads * std::cos(ang);
-        circle.center.y = target.y - rads * std::sin(ang);
-
-        const double d = std::sqrt(dist2(oldCenter, circle.center));
-        maxDelta = std::max(maxDelta, d);
-        return d > 0.0;
-    }
-
-    // Tangent constraint (Phase 2): Line <-> Circle only.
-    // Refs should include one line and one circle.
-    bool applyTangent(EntityStore& store, const GeometricConstraint& c, double& maxDelta) {
-        if (c.refs.size() < 2) return false;
-
-        // Identify the line and circle refs (order doesn't matter).
-        const EntityRef* lineRef = nullptr;
-        const EntityRef* circRef = nullptr;
-
-        for (const auto& r : c.refs) {
-            if (!store.contains(r.id)) continue;
-            const EntityHandle h = store.getHandle(r.id);
-            if (h.kind == EntityKind::Line && !lineRef) lineRef = &r;
-            if (h.kind == EntityKind::Circle && !circRef) circRef = &r;
-        }
-        if (!lineRef || !circRef) return false;
-
-        const EntityHandle hl = store.getHandle(lineRef->id);
-        const EntityHandle hc = store.getHandle(circRef->id);
-        if (hl.kind != EntityKind::Line || hc.kind != EntityKind::Circle) return false;
-
-        auto& ln = store.line(hl.index);
-        auto& cc = store.circle(hc.index);
+        auto& ln = store.line(hLine.index);
+        auto& cc = store.circle(hCircle.index);
 
         const Vec2 a = ln.a;
         const Vec2 b = ln.b;
-        const Vec2 centerOld = cc.center;
 
-        const double dx = b.x - a.x;
-        const double dy = b.y - a.y;
-        const double len = std::sqrt(dx * dx + dy * dy);
-        if (len <= 1e-9) return false;
+        const double vx = b.x - a.x;
+        const double vy = b.y - a.y;
+        const double len = std::sqrt(vx * vx + vy * vy);
+        if (len < 1e-12) return false;
 
-        // Unit normal to the line.
-        const double nx = -dy / len;
-        const double ny =  dx / len;
+        // Signed distance from point to infinite line (a->b)
+        const double nx = -vy / len; // unit normal
+        const double ny =  vx / len;
 
-        // Signed distance from circle center to line.
-        const double dist = ((cc.center.x - a.x) * nx + (cc.center.y - a.y) * ny);
-        const double rads = cc.radius;
+        const double px = cc.center.x - a.x;
+        const double py = cc.center.y - a.y;
 
-        // Maintain the current side of the line (avoid flipping).
-        const double target = (dist >= 0.0) ? rads : -rads;
-        const double delta = (target - dist);
+        const double signedD = px * nx + py * ny;         // positive on one side, negative on the other
+        const double absD = std::abs(signedD);
 
-        cc.center.x += delta * nx;
-        cc.center.y += delta * ny;
+        const double err = cc.radius - absD;
+        if (std::abs(err) < 1e-9) return false;
 
-        const double moved = std::sqrt(dist2(centerOld, cc.center));
+        // Preserve the current side of the line (sign of signedD).
+        const double side = (signedD >= 0.0) ? 1.0 : -1.0;
+
+        Vec2 old = cc.center;
+        cc.center.x += nx * side * err;
+        cc.center.y += ny * side * err;
+
+        const double d = std::sqrt(dist2(old, cc.center));
+        maxDelta = std::max(maxDelta, d);
+        return d > 0.0;
+    };
+
+    auto tangentCircleCircle = [&](const EntityHandle& hC1, const EntityHandle& hC2) -> bool
+    {
+        if (hC1.kind != EntityKind::Circle || hC2.kind != EntityKind::Circle) return false;
+
+        auto& c1 = store.circle(hC1.index);
+        auto& c2 = store.circle(hC2.index);
+
+        const double dx = c2.center.x - c1.center.x;
+        const double dy = c2.center.y - c1.center.y;
+        const double d = std::sqrt(dx * dx + dy * dy);
+        if (d < 1e-12) return false;
+
+        const double target = c1.radius + c2.radius; // external tangency
+        const double err = target - d;
+        if (std::abs(err) < 1e-9) return false;
+
+        const double ux = dx / d;
+        const double uy = dy / d;
+
+        Vec2 old = c2.center;
+        c2.center.x += ux * err;
+        c2.center.y += uy * err;
+
+        const double moved = std::sqrt(dist2(old, c2.center));
         maxDelta = std::max(maxDelta, moved);
         return moved > 0.0;
-    }
+    };
+
+    // Try both orderings (user can pick in any order)
+    if (tangentLineCircle(ha, hb)) return true;
+    if (tangentLineCircle(hb, ha)) return true;
+    if (tangentCircleCircle(ha, hb)) return true;
+    if (tangentCircleCircle(hb, ha)) return true;
+
+    return false;
+}
+
+
 
     bool applyGeometric(EntityStore& store, const GeometricConstraint& gc, double& maxDelta) {
         if (!gc.meta.enabled || gc.meta.suppressed) return false;
@@ -272,9 +257,8 @@ namespace adapters {
         case GeometricConstraintType::Coincident: return applyCoincident(store, gc, maxDelta);
         case GeometricConstraintType::Horizontal: return applyHorizontal(store, gc, maxDelta);
         case GeometricConstraintType::Vertical:   return applyVertical(store, gc, maxDelta);
-        case GeometricConstraintType::Fix:        return applyFix(store, gc, maxDelta);
         case GeometricConstraintType::Tangent:    return applyTangent(store, gc, maxDelta);
-        default: return false; // Phase 2: keep other constraints for later
+        default: return false; // Phase 2 = minimal set implemented
         }
     }
 

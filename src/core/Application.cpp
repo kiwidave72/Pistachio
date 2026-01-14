@@ -87,15 +87,6 @@ namespace core {
             // UI adapter will call renderer in DrawViewport()
             m_uiAdapter->render();
 
-            // If sketch was modified by a tool, re-run the solver once and clear the flag.
-            // (We do this after UI input has been processed for the frame.)
-            if (m_activeSketchDirty.load(std::memory_order_relaxed)) {
-                if (m_resolverAdapter && m_sketchDoc && !m_sketchDoc->sketches.empty()) {
-                    runSolver();
-                }
-                m_activeSketchDirty.store(false, std::memory_order_relaxed);
-            }
-
             m_uiAdapter->endFrame();
         }
     }
@@ -233,14 +224,6 @@ namespace core {
         return m_loadingProgress;
     }
 
-    void Application::markActiveSketchDirty() {
-        m_activeSketchDirty.store(true, std::memory_order_relaxed);
-    }
-
-    bool Application::isActiveSketchDirty() const {
-        return m_activeSketchDirty.load(std::memory_order_relaxed);
-    }
-
     ports::IFileLoaderPort* Application::findLoaderForFile(const std::string& filepath) {
         for (auto& loader : m_loaders) {
             if (loader->canLoad(filepath)) {
@@ -263,17 +246,9 @@ namespace core {
             {
                 if (ImGui::BeginMenu("File"))
                 {
-                    if (ImGui::MenuItem("Open")) {
-                        std::cout << "Load Sketch Document...\n";
-                        loadSketchDocument("test.pistachio.json");
-                        runSolver();
-                    }
+                    if (ImGui::MenuItem("Open")) {}
                     ImGui::Separator();
-                    if (ImGui::MenuItem("Save")) {
-                    
-                        std::cout << "Save Sketch Document...\n";
-                        saveSketchDocument("test.pistachio.json");
-                    }
+                    if (ImGui::MenuItem("Save")) {}
                     if (ImGui::MenuItem("Save as ...")) {}
                     ImGui::Separator();
                     if (ImGui::MenuItem("Import Sketch")) {}
@@ -332,12 +307,7 @@ namespace core {
         std::cout << "  Iterations: " << output.report.iterations << std::endl;
         return true;
     }   
-    bool Application::saveSketchDocument(const std::string& filepath)
-    {
-        adapters::persistence::JsonSketchDocumentAdapter io;
-        io.saveDocument(*getSketchDocument(), filepath);
-        return true;
-    }
+
     bool Application::loadSketchDocument(const std::string& filepath)
     {
         std::cout << "\n=== LOADING SKETCH DOCUMENT ===" << std::endl;
@@ -345,7 +315,7 @@ namespace core {
 
         adapters::persistence::JsonSketchDocumentAdapter io;
         m_sketchDoc = io.loadDocument(filepath);
-        
+
         if (m_sketchDoc) {
             std::cout << "[OK] Sketch document loaded successfully" << std::endl;
             std::cout << "  Sketches in document: " << m_sketchDoc->sketches.size() << std::endl;

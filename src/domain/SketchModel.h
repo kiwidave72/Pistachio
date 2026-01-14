@@ -20,9 +20,6 @@ namespace domain::sketch {
 
         EntityStore entities;
         std::vector<Constraint> constraints;
-
-        // UI/runtime state (not persisted yet)
-        std::vector<EntityId> selectedEntities;
     };
 
     struct Document {
