@@ -40,6 +40,8 @@
 
 #include "UI.h"
 #include "adapters/ui/ConstraintIcons.h"
+#include "adapters/ui/SketchTooling.h"
+#include "core/commands/SketchCommands.h"
 #include "core/rendering/SketchRenderBuilder.h"
 #include "adapters/rendering/OcctRenderer.h"
 #include "adapters/rendering/RendererRouter.h"
@@ -739,6 +741,70 @@ auto& sketch = doc->sketches[(size_t)m_activeSketchIndex];
     m_canvas2D.pan_screen = m_sketchPan;
     m_canvas2D.pixels_per_unit = m_sketchZoom;
 
+    // === Hover picking (for delete + visual feedback) ===
+    if (hovered)
+    {
+        const float tolW = 6.0f / std::max(m_canvas2D.pixels_per_unit, 1.0f);
+        ImVec2 mouseW = m_canvas2D.ScreenToWorld(ImGui::GetMousePos());
+        adapters::sketchui::PickResult hp = adapters::sketchui::PickGeometry(sketch, mouseW, tolW);
+        m_uiHoverId = (hp.type != adapters::sketchui::PickType::None) ? hp.id : (domain::sketch::EntityId)0;
+
+        // Draw a yellow highlight over the hovered entity
+        if (m_uiHoverId != 0)
+        {
+            auto WS = [&](const domain::sketch::Vec2& w) { return m_canvas2D.WorldToScreen(ImVec2((float)w.x, (float)w.y)); };
+
+            if (sketch.entities.contains(m_uiHoverId))
+            {
+                auto h = sketch.entities.getHandle(m_uiHoverId);
+                const ImU32 col = IM_COL32(255, 210, 0, 220);
+
+                switch (h.kind)
+                {
+                case domain::sketch::EntityKind::Point:
+                {
+                    const auto& pt = sketch.entities.point(h.index);
+                    ImVec2 s = WS(pt.p);
+                    dl->AddCircle(s, 6.0f, col, 16, 2.0f);
+                } break;
+                case domain::sketch::EntityKind::Line:
+                {
+                    const auto& ln = sketch.entities.line(h.index);
+                    dl->AddLine(WS(ln.a), WS(ln.b), col, 3.0f);
+                } break;
+                case domain::sketch::EntityKind::Circle:
+                {
+                    const auto& cc = sketch.entities.circle(h.index);
+                    ImVec2 c = WS(cc.center);
+                    float r = (float)cc.radius * m_canvas2D.pixels_per_unit;
+                    dl->AddCircle(c, r, col, 64, 3.0f);
+                } break;
+                default:
+                    // Fallback: small cursor ring
+                    dl->AddCircle(ImGui::GetMousePos(), 10.0f, col, 16, 2.0f);
+                    break;
+                }
+            }
+        }
+
+        // Delete hovered entity (single entity) with undo/redo
+        if (m_uiHoverId != 0
+            && !ImGui::IsAnyItemActive()
+            && !ImGui::GetIO().WantTextInput
+            && (ImGui::IsKeyPressed(ImGuiKey_Delete) || ImGui::IsKeyPressed(ImGuiKey_Backspace)))
+        {
+            m_cmdHistory.Execute(std::make_unique<core::commands::DeleteEntityCommand>(sketch, m_uiHoverId));
+
+            // Clear UI picks (so tools don't think the entity is still there)
+            m_uiPickedIds.clear();
+            m_uiHoverId = 0;
+
+            // Force solve + redraw
+            m_sketchNeedsSolve = true;
+            ++m_sketchChangeSerial;
+        }
+    }
+
     // Pan with MMB drag
     if (hovered && ImGui::IsMouseDragging(ImGuiMouseButton_Middle, 0.0f)) {
         ImVec2 d = ImGui::GetIO().MouseDelta;
@@ -755,6 +821,70 @@ auto& sketch = doc->sketches[(size_t)m_activeSketchIndex];
             ImVec2 beforeW = m_canvas2D.ScreenToWorld(mouseS);
             m_sketchZoom = next;
             m_canvas2D.pixels_per_unit = m_sketchZoom;
+
+    // === Hover picking (for delete + visual feedback) ===
+    if (hovered)
+    {
+        const float tolW = 6.0f / std::max(m_canvas2D.pixels_per_unit, 1.0f);
+        ImVec2 mouseW = m_canvas2D.ScreenToWorld(ImGui::GetMousePos());
+        adapters::sketchui::PickResult hp = adapters::sketchui::PickGeometry(sketch, mouseW, tolW);
+        m_uiHoverId = (hp.type != adapters::sketchui::PickType::None) ? hp.id : (domain::sketch::EntityId)0;
+
+        // Draw a yellow highlight over the hovered entity
+        if (m_uiHoverId != 0)
+        {
+            auto WS = [&](const domain::sketch::Vec2& w) { return m_canvas2D.WorldToScreen(ImVec2((float)w.x, (float)w.y)); };
+
+            if (sketch.entities.contains(m_uiHoverId))
+            {
+                auto h = sketch.entities.getHandle(m_uiHoverId);
+                const ImU32 col = IM_COL32(255, 210, 0, 220);
+
+                switch (h.kind)
+                {
+                case domain::sketch::EntityKind::Point:
+                {
+                    const auto& pt = sketch.entities.point(h.index);
+                    ImVec2 s = WS(pt.p);
+                    dl->AddCircle(s, 6.0f, col, 16, 2.0f);
+                } break;
+                case domain::sketch::EntityKind::Line:
+                {
+                    const auto& ln = sketch.entities.line(h.index);
+                    dl->AddLine(WS(ln.a), WS(ln.b), col, 3.0f);
+                } break;
+                case domain::sketch::EntityKind::Circle:
+                {
+                    const auto& cc = sketch.entities.circle(h.index);
+                    ImVec2 c = WS(cc.center);
+                    float r = (float)cc.radius * m_canvas2D.pixels_per_unit;
+                    dl->AddCircle(c, r, col, 64, 3.0f);
+                } break;
+                default:
+                    // Fallback: small cursor ring
+                    dl->AddCircle(ImGui::GetMousePos(), 10.0f, col, 16, 2.0f);
+                    break;
+                }
+            }
+        }
+
+        // Delete hovered entity (single entity) with undo/redo
+        if (m_uiHoverId != 0
+            && !ImGui::IsAnyItemActive()
+            && !ImGui::GetIO().WantTextInput
+            && (ImGui::IsKeyPressed(ImGuiKey_Delete) || ImGui::IsKeyPressed(ImGuiKey_Backspace)))
+        {
+            m_cmdHistory.Execute(std::make_unique<core::commands::DeleteEntityCommand>(sketch, m_uiHoverId));
+
+            // Clear UI picks (so tools don't think the entity is still there)
+            m_uiPickedIds.clear();
+            m_uiHoverId = 0;
+
+            // Force solve + redraw
+            m_sketchNeedsSolve = true;
+            ++m_sketchChangeSerial;
+        }
+    }
             ImVec2 afterS = m_canvas2D.WorldToScreen(beforeW);
             ImVec2 delta = ImVec2(mouseS.x - afterS.x, mouseS.y - afterS.y);
             m_sketchPan.x += delta.x;
