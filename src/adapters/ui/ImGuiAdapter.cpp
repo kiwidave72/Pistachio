@@ -672,9 +672,12 @@ void ImGuiAdapter::renderSketchEditor()
         // document may have been updated by solver; continue with latest sketch reference
     }
 
-    if (s_lastSketchIdx != m_activeSketchIndex) { s_lastSketchIdx = m_activeSketchIndex; m_sketchNeedsSolve = true; }
+    if (s_lastSketchIdx != m_activeSketchIndex) {
+        s_lastSketchIdx = m_activeSketchIndex;
+        m_sketchNeedsSolve = true;
+    }
 
-auto& sketch = doc->sketches[(size_t)m_activeSketchIndex];
+    auto& sketch = doc->sketches[(size_t)m_activeSketchIndex];
 
     // Tool selection status
     const auto _ak = m_toolManager.ActiveKind();
@@ -687,6 +690,7 @@ auto& sketch = doc->sketches[(size_t)m_activeSketchIndex];
     ImGui::SameLine();
     ImGui::TextDisabled("(Click Line icon in toolbar)");
     ImGui::Separator();
+
     ImGui::TextUnformatted("Constraints:");
     ImGui::SameLine();
     {
@@ -695,18 +699,30 @@ auto& sketch = doc->sketches[(size_t)m_activeSketchIndex];
             bool sel = (m_activeConstraintIcon == (int)ic);
             if (adapters::sketchui::ConstraintIconButton(id, ic, sel)) {
                 m_activeConstraintIcon = sel ? -1 : (int)ic;
+
                 // Make constraint selection feel like an active tool (separate from sketch drawing tools).
-                if (auto doc = m_app->getSketchDocument(); doc && !doc->sketches.empty()) {
+                if (auto doc2 = m_app->getSketchDocument(); doc2 && !doc2->sketches.empty()) {
                     if (m_activeSketchIndex < 0) m_activeSketchIndex = 0;
-                    if (m_activeSketchIndex >= (int)doc->sketches.size()) m_activeSketchIndex = (int)doc->sketches.size() - 1;
-                    adapters::sketchui::ToolContext tctx{ doc->sketches[(size_t)m_activeSketchIndex], m_cmdHistory, &m_activeConstraintIcon, &m_sketchNeedsSolve, &m_sketchChangeSerial , &m_uiPickedIds, &m_uiHoverId };
+                    if (m_activeSketchIndex >= (int)doc2->sketches.size()) m_activeSketchIndex = (int)doc2->sketches.size() - 1;
+
+                    adapters::sketchui::ToolContext tctx{
+                        doc2->sketches[(size_t)m_activeSketchIndex],
+                        m_cmdHistory,
+                        &m_activeConstraintIcon,
+                        &m_sketchNeedsSolve,
+                        &m_sketchChangeSerial,
+                        &m_uiPickedIds,
+                        &m_uiHoverId
+                    };
+
                     if (m_activeConstraintIcon >= 0)
                         m_toolManager.Activate(adapters::sketchui::ToolKind::Constraint, tctx);
                 }
             }
             if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tip);
             ImGui::SameLine();
-        };
+            };
+
         iconBtn("##c_fixed", ConstraintIcon::Fixed, "Fixed");
         iconBtn("##c_tangent", ConstraintIcon::Tangent, "Tangent");
         iconBtn("##c_h", ConstraintIcon::Horizontal, "Horizontal");
@@ -718,7 +734,6 @@ auto& sketch = doc->sketches[(size_t)m_activeSketchIndex];
         iconBtn("##c_equal", ConstraintIcon::Equal, "Equal");
         ImGui::NewLine();
     }
-
 
     // Canvas region
     ImVec2 canvasPos = ImGui::GetCursorScreenPos();
@@ -733,7 +748,8 @@ auto& sketch = doc->sketches[(size_t)m_activeSketchIndex];
     // Input capture for canvas
     ImGui::InvisibleButton("##SketchCanvas", canvasSize,
         ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonRight | ImGuiButtonFlags_MouseButtonMiddle);
-    bool hovered = ImGui::IsItemHovered();
+
+    const bool hovered = ImGui::IsItemHovered();
 
     // Update canvas mapping
     m_canvas2D.origin_screen = canvasPos;
@@ -750,40 +766,37 @@ auto& sketch = doc->sketches[(size_t)m_activeSketchIndex];
         m_uiHoverId = (hp.type != adapters::sketchui::PickType::None) ? hp.id : (domain::sketch::EntityId)0;
 
         // Draw a yellow highlight over the hovered entity
-        if (m_uiHoverId != 0)
+        if (m_uiHoverId != 0 && sketch.entities.contains(m_uiHoverId))
         {
-            auto WS = [&](const domain::sketch::Vec2& w) { return m_canvas2D.WorldToScreen(ImVec2((float)w.x, (float)w.y)); };
+            auto WS = [&](const domain::sketch::Vec2& w) {
+                return m_canvas2D.WorldToScreen(ImVec2((float)w.x, (float)w.y));
+                };
 
-            if (sketch.entities.contains(m_uiHoverId))
+            auto h = sketch.entities.getHandle(m_uiHoverId);
+            const ImU32 col = IM_COL32(255, 210, 0, 220);
+
+            switch (h.kind)
             {
-                auto h = sketch.entities.getHandle(m_uiHoverId);
-                const ImU32 col = IM_COL32(255, 210, 0, 220);
-
-                switch (h.kind)
-                {
-                case domain::sketch::EntityKind::Point:
-                {
-                    const auto& pt = sketch.entities.point(h.index);
-                    ImVec2 s = WS(pt.p);
-                    dl->AddCircle(s, 6.0f, col, 16, 2.0f);
-                } break;
-                case domain::sketch::EntityKind::Line:
-                {
-                    const auto& ln = sketch.entities.line(h.index);
-                    dl->AddLine(WS(ln.a), WS(ln.b), col, 3.0f);
-                } break;
-                case domain::sketch::EntityKind::Circle:
-                {
-                    const auto& cc = sketch.entities.circle(h.index);
-                    ImVec2 c = WS(cc.center);
-                    float r = (float)cc.radius * m_canvas2D.pixels_per_unit;
-                    dl->AddCircle(c, r, col, 64, 3.0f);
-                } break;
-                default:
-                    // Fallback: small cursor ring
-                    dl->AddCircle(ImGui::GetMousePos(), 10.0f, col, 16, 2.0f);
-                    break;
-                }
+            case domain::sketch::EntityKind::Point:
+            {
+                const auto& pt = sketch.entities.point(h.index);
+                ImVec2 s = WS(pt.p);
+                dl->AddCircle(s, 6.0f, col, 16, 2.0f);
+            } break;
+            case domain::sketch::EntityKind::Line:
+            {
+                const auto& ln = sketch.entities.line(h.index);
+                dl->AddLine(WS(ln.a), WS(ln.b), col, 3.0f);
+            } break;
+            case domain::sketch::EntityKind::Circle:
+            {
+                const auto& cc = sketch.entities.circle(h.index);
+                ImVec2 c = WS(cc.center);
+                float r = (float)cc.radius * m_canvas2D.pixels_per_unit;
+                dl->AddCircle(c, r, col, 64, 3.0f);
+            } break;
+            default:
+                break; // no cursor drawing here
             }
         }
 
@@ -803,6 +816,11 @@ auto& sketch = doc->sketches[(size_t)m_activeSketchIndex];
             m_sketchNeedsSolve = true;
             ++m_sketchChangeSerial;
         }
+    }
+    else
+    {
+        // Not hovering canvas; clear hover id so highlights don't stick
+        m_uiHoverId = 0;
     }
 
     // Pan with MMB drag
@@ -819,72 +837,10 @@ auto& sketch = doc->sketches[(size_t)m_activeSketchIndex];
         if (next != old) {
             ImVec2 mouseS = ImGui::GetIO().MousePos;
             ImVec2 beforeW = m_canvas2D.ScreenToWorld(mouseS);
+
             m_sketchZoom = next;
             m_canvas2D.pixels_per_unit = m_sketchZoom;
 
-    // === Hover picking (for delete + visual feedback) ===
-    if (hovered)
-    {
-        const float tolW = 6.0f / std::max(m_canvas2D.pixels_per_unit, 1.0f);
-        ImVec2 mouseW = m_canvas2D.ScreenToWorld(ImGui::GetMousePos());
-        adapters::sketchui::PickResult hp = adapters::sketchui::PickGeometry(sketch, mouseW, tolW);
-        m_uiHoverId = (hp.type != adapters::sketchui::PickType::None) ? hp.id : (domain::sketch::EntityId)0;
-
-        // Draw a yellow highlight over the hovered entity
-        if (m_uiHoverId != 0)
-        {
-            auto WS = [&](const domain::sketch::Vec2& w) { return m_canvas2D.WorldToScreen(ImVec2((float)w.x, (float)w.y)); };
-
-            if (sketch.entities.contains(m_uiHoverId))
-            {
-                auto h = sketch.entities.getHandle(m_uiHoverId);
-                const ImU32 col = IM_COL32(255, 210, 0, 220);
-
-                switch (h.kind)
-                {
-                case domain::sketch::EntityKind::Point:
-                {
-                    const auto& pt = sketch.entities.point(h.index);
-                    ImVec2 s = WS(pt.p);
-                    dl->AddCircle(s, 6.0f, col, 16, 2.0f);
-                } break;
-                case domain::sketch::EntityKind::Line:
-                {
-                    const auto& ln = sketch.entities.line(h.index);
-                    dl->AddLine(WS(ln.a), WS(ln.b), col, 3.0f);
-                } break;
-                case domain::sketch::EntityKind::Circle:
-                {
-                    const auto& cc = sketch.entities.circle(h.index);
-                    ImVec2 c = WS(cc.center);
-                    float r = (float)cc.radius * m_canvas2D.pixels_per_unit;
-                    dl->AddCircle(c, r, col, 64, 3.0f);
-                } break;
-                default:
-                    // Fallback: small cursor ring
-                    dl->AddCircle(ImGui::GetMousePos(), 10.0f, col, 16, 2.0f);
-                    break;
-                }
-            }
-        }
-
-        // Delete hovered entity (single entity) with undo/redo
-        if (m_uiHoverId != 0
-            && !ImGui::IsAnyItemActive()
-            && !ImGui::GetIO().WantTextInput
-            && (ImGui::IsKeyPressed(ImGuiKey_Delete) || ImGui::IsKeyPressed(ImGuiKey_Backspace)))
-        {
-            m_cmdHistory.Execute(std::make_unique<core::commands::DeleteEntityCommand>(sketch, m_uiHoverId));
-
-            // Clear UI picks (so tools don't think the entity is still there)
-            m_uiPickedIds.clear();
-            m_uiHoverId = 0;
-
-            // Force solve + redraw
-            m_sketchNeedsSolve = true;
-            ++m_sketchChangeSerial;
-        }
-    }
             ImVec2 afterS = m_canvas2D.WorldToScreen(beforeW);
             ImVec2 delta = ImVec2(mouseS.x - afterS.x, mouseS.y - afterS.y);
             m_sketchPan.x += delta.x;
@@ -894,7 +850,6 @@ auto& sketch = doc->sketches[(size_t)m_activeSketchIndex];
 
     // Draw grid
     {
-        // major lines each 1 unit, minor each 0.25 (optional)
         const float ppu = m_canvas2D.pixels_per_unit;
         const ImVec2 origin = canvasPos;
         const ImVec2 end = ImVec2(canvasPos.x + canvasSize.x, canvasPos.y + canvasSize.y);
@@ -902,13 +857,12 @@ auto& sketch = doc->sketches[(size_t)m_activeSketchIndex];
             canvasPos.x + canvasSize.x * 0.5f + m_sketchPan.x,
             canvasPos.y + canvasSize.y * 0.5f + m_sketchPan.y);
 
-        // Determine visible range in world units
         ImVec2 w0 = m_canvas2D.ScreenToWorld(origin);
         ImVec2 w1 = m_canvas2D.ScreenToWorld(end);
         float xmin = std::floor((std::min)(w0.x, w1.x)) - 1.0f;
-        float xmax = std::ceil ((std::max)(w0.x, w1.x)) + 1.0f;
+        float xmax = std::ceil((std::max)(w0.x, w1.x)) + 1.0f;
         float ymin = std::floor((std::min)(w0.y, w1.y)) - 1.0f;
-        float ymax = std::ceil ((std::max)(w0.y, w1.y)) + 1.0f;
+        float ymax = std::ceil((std::max)(w0.y, w1.y)) + 1.0f;
 
         for (int x = (int)xmin; x <= (int)xmax; ++x) {
             ImVec2 a = ImVec2(center.x + x * ppu, origin.y);
@@ -919,7 +873,7 @@ auto& sketch = doc->sketches[(size_t)m_activeSketchIndex];
 
         for (int y = (int)ymin; y <= (int)ymax; ++y) {
             ImVec2 a = ImVec2(origin.x, center.y - y * ppu);
-            ImVec2 b = ImVec2(end.x,   center.y - y * ppu);
+            ImVec2 b = ImVec2(end.x, center.y - y * ppu);
             ImU32 col = (y == 0) ? IM_COL32(255, 80, 80, 255) : IM_COL32(40, 40, 40, 255);
             dl->AddLine(a, b, col, (y == 0) ? 2.0f : 1.0f);
         }
@@ -927,15 +881,14 @@ auto& sketch = doc->sketches[(size_t)m_activeSketchIndex];
 
     // Render existing entities
     {
+        auto isHi = [&](domain::sketch::EntityId id) -> bool {
+            if (m_uiHoverId != 0 && id == m_uiHoverId) return true;
+            for (auto pid : m_uiPickedIds) if (pid == id) return true;
+            return false;
+            };
 
-auto isHi = [&](domain::sketch::EntityId id) -> bool {
-    if (m_uiHoverId != 0 && id == m_uiHoverId) return true;
-    for (auto pid : m_uiPickedIds) if (pid == id) return true;
-    return false;
-};
-
-const ImU32 baseCol = IM_COL32(60, 90, 180, 255);
-const ImU32 hiCol   = IM_COL32(255, 220, 0, 255);
+        const ImU32 baseCol = IM_COL32(60, 90, 180, 255);
+        const ImU32 hiCol = IM_COL32(255, 220, 0, 255);
 
         // Lines
         for (const auto& l : sketch.entities.lines()) {
@@ -960,21 +913,22 @@ const ImU32 hiCol   = IM_COL32(255, 220, 0, 255);
         // Constraint glyphs (geometric)
         {
             using namespace domain::sketch;
+
             auto findLine = [&](EntityId id) -> const Line2D* {
                 for (const auto& l : sketch.entities.lines()) if (l.h.id == id) return &l;
                 return nullptr;
-            };
+                };
             auto findCircle = [&](EntityId id) -> const Circle2D* {
                 for (const auto& c : sketch.entities.circles()) if (c.h.id == id) return &c;
                 return nullptr;
-            };
+                };
 
             auto norm2 = [](ImVec2 v) { return v.x * v.x + v.y * v.y; };
             auto len = [&](ImVec2 v) { return std::sqrt(norm2(v)); };
             auto norm = [&](ImVec2 v) {
                 float l = len(v);
                 return (l > 1e-6f) ? ImVec2(v.x / l, v.y / l) : ImVec2(1, 0);
-            };
+                };
             auto sub = [&](ImVec2 a, ImVec2 b) { return ImVec2(a.x - b.x, a.y - b.y); };
             auto add = [&](ImVec2 a, ImVec2 b) { return ImVec2(a.x + b.x, a.y + b.y); };
             auto mul = [&](ImVec2 a, float s) { return ImVec2(a.x * s, a.y * s); };
@@ -1016,17 +970,17 @@ const ImU32 hiCol   = IM_COL32(255, 220, 0, 255);
                     ImVec2 d = sub(B, A);
                     float d2 = norm2(d);
                     if (d2 > 1e-8f) {
-                        // Closest point on infinite line to circle center
                         float t = dot(sub(C, A), d) / d2;
-                        ImVec2 P = add(A, mul(d, t));     // tangent point on the line (and circle when satisfied)
+                        ImVec2 P = add(A, mul(d, t));
 
-                        // Place icon slightly off the geometry towards the circle center
                         ImVec2 Ps = m_canvas2D.WorldToScreen(P);
                         ImVec2 Cs = m_canvas2D.WorldToScreen(C);
                         ImVec2 nS = norm(sub(Cs, Ps));
                         ImVec2 iconPos = add(Ps, mul(nS, 14.0f));
 
-                        adapters::sketchui::DrawConstraintIcon(dl, iconPos, iconSizePx, iconCol, adapters::sketchui::ConstraintIcon::Tangent);
+                        adapters::sketchui::DrawConstraintIcon(
+                            dl, iconPos, iconSizePx, iconCol, adapters::sketchui::ConstraintIcon::Tangent);
+
                         drawn = true;
                     }
                 }
@@ -1043,15 +997,15 @@ const ImU32 hiCol   = IM_COL32(255, 220, 0, 255);
                     float L = len(v);
                     if (L > 1e-6f) {
                         ImVec2 dir = mul(v, 1.0f / L);
-                        // contact point on circle 1 toward circle 2
                         ImVec2 P = add(C1, mul(dir, (float)c1->radius));
 
                         ImVec2 Ps = m_canvas2D.WorldToScreen(P);
                         ImVec2 C1s = m_canvas2D.WorldToScreen(C1);
-                        ImVec2 nS = norm(sub(Ps, C1s)); // outward from circle
+                        ImVec2 nS = norm(sub(Ps, C1s));
                         ImVec2 iconPos = add(Ps, mul(nS, 12.0f));
 
-                        adapters::sketchui::DrawConstraintIcon(dl, iconPos, iconSizePx, iconCol, adapters::sketchui::ConstraintIcon::Tangent);
+                        adapters::sketchui::DrawConstraintIcon(
+                            dl, iconPos, iconSizePx, iconCol, adapters::sketchui::ConstraintIcon::Tangent);
                     }
                 }
             }
@@ -1060,8 +1014,39 @@ const ImU32 hiCol   = IM_COL32(255, 220, 0, 255);
 
     // Tool update/draw (draft geometry + in-canvas dimension editing)
     {
-        adapters::sketchui::ToolContext tctx{ sketch, m_cmdHistory, &m_activeConstraintIcon, &m_sketchNeedsSolve, &m_sketchChangeSerial , &m_uiPickedIds, &m_uiHoverId };
+        adapters::sketchui::ToolContext tctx{
+            sketch,
+            m_cmdHistory,
+            &m_activeConstraintIcon,
+            &m_sketchNeedsSolve,
+            &m_sketchChangeSerial,
+            &m_uiPickedIds,
+            &m_uiHoverId
+        };
         m_toolManager.UpdateAndDraw(tctx, m_canvas2D, dl);
+    }
+
+    // ---- Always-on sketch cursor (draw last so it's on top) ----
+    if (hovered)
+    {
+        const ImVec2 p = ImGui::GetMousePos();
+        const ImVec2 cmin = canvasPos;
+        const ImVec2 cmax = ImVec2(canvasPos.x + canvasSize.x, canvasPos.y + canvasSize.y);
+        const bool inside =
+            (p.x >= cmin.x && p.x <= cmax.x && p.y >= cmin.y && p.y <= cmax.y);
+
+        if (inside)
+        {
+            const ImU32 col = (m_uiHoverId != 0)
+                ? IM_COL32(255, 210, 0, 255)
+                : IM_COL32(220, 220, 220, 255);
+
+            const float s = 7.0f;
+            const float thickness = 2.0f;
+
+            dl->AddLine(ImVec2(p.x - s, p.y - s), ImVec2(p.x + s, p.y + s), col, thickness);
+            dl->AddLine(ImVec2(p.x - s, p.y + s), ImVec2(p.x + s, p.y - s), col, thickness);
+        }
     }
 
     // Update OCCT overlay from the active sketch (so the 3D viewport reflects edits)
