@@ -826,6 +826,106 @@ const ImU32 hiCol   = IM_COL32(255, 220, 0, 255);
             ImVec2 pW{ (float)p.p.x, (float)p.p.y };
             dl->AddCircleFilled(m_canvas2D.WorldToScreen(pW), 3.0f, IM_COL32(200, 200, 200, 255));
         }
+
+        // Constraint glyphs (geometric)
+        {
+            using namespace domain::sketch;
+            auto findLine = [&](EntityId id) -> const Line2D* {
+                for (const auto& l : sketch.entities.lines()) if (l.h.id == id) return &l;
+                return nullptr;
+            };
+            auto findCircle = [&](EntityId id) -> const Circle2D* {
+                for (const auto& c : sketch.entities.circles()) if (c.h.id == id) return &c;
+                return nullptr;
+            };
+
+            auto norm2 = [](ImVec2 v) { return v.x * v.x + v.y * v.y; };
+            auto len = [&](ImVec2 v) { return std::sqrt(norm2(v)); };
+            auto norm = [&](ImVec2 v) {
+                float l = len(v);
+                return (l > 1e-6f) ? ImVec2(v.x / l, v.y / l) : ImVec2(1, 0);
+            };
+            auto sub = [&](ImVec2 a, ImVec2 b) { return ImVec2(a.x - b.x, a.y - b.y); };
+            auto add = [&](ImVec2 a, ImVec2 b) { return ImVec2(a.x + b.x, a.y + b.y); };
+            auto mul = [&](ImVec2 a, float s) { return ImVec2(a.x * s, a.y * s); };
+            auto dot = [&](ImVec2 a, ImVec2 b) { return a.x * b.x + a.y * b.y; };
+
+            const ImU32 iconCol = IM_COL32(255, 255, 255, 220);
+            const float iconSizePx = 18.0f;
+
+            for (const auto& cvar : sketch.constraints) {
+                if (!std::holds_alternative<GeometricConstraint>(cvar))
+                    continue;
+
+                const auto& gc = std::get<GeometricConstraint>(cvar);
+                if (!gc.meta.enabled || gc.meta.suppressed)
+                    continue;
+                if (gc.type != GeometricConstraintType::Tangent)
+                    continue;
+                if (gc.refs.size() < 2)
+                    continue;
+
+                const EntityId aId = gc.refs[0].id;
+                const EntityId bId = gc.refs[1].id;
+
+                // Try Line-Circle first (either order)
+                const Line2D* line = findLine(aId);
+                const Circle2D* cir = findCircle(bId);
+                if (!line || !cir) {
+                    line = findLine(bId);
+                    cir = findCircle(aId);
+                }
+
+                bool drawn = false;
+
+                if (line && cir) {
+                    ImVec2 A{ (float)line->a.x, (float)line->a.y };
+                    ImVec2 B{ (float)line->b.x, (float)line->b.y };
+                    ImVec2 C{ (float)cir->center.x, (float)cir->center.y };
+
+                    ImVec2 d = sub(B, A);
+                    float d2 = norm2(d);
+                    if (d2 > 1e-8f) {
+                        // Closest point on infinite line to circle center
+                        float t = dot(sub(C, A), d) / d2;
+                        ImVec2 P = add(A, mul(d, t));     // tangent point on the line (and circle when satisfied)
+
+                        // Place icon slightly off the geometry towards the circle center
+                        ImVec2 Ps = m_canvas2D.WorldToScreen(P);
+                        ImVec2 Cs = m_canvas2D.WorldToScreen(C);
+                        ImVec2 nS = norm(sub(Cs, Ps));
+                        ImVec2 iconPos = add(Ps, mul(nS, 14.0f));
+
+                        adapters::sketchui::DrawConstraintIcon(dl, iconPos, iconSizePx, iconCol, adapters::sketchui::ConstraintIcon::Tangent);
+                        drawn = true;
+                    }
+                }
+
+                if (drawn) continue;
+
+                // Circle-Circle (external tangency)
+                const Circle2D* c1 = findCircle(aId);
+                const Circle2D* c2 = findCircle(bId);
+                if (c1 && c2) {
+                    ImVec2 C1{ (float)c1->center.x, (float)c1->center.y };
+                    ImVec2 C2{ (float)c2->center.x, (float)c2->center.y };
+                    ImVec2 v = sub(C2, C1);
+                    float L = len(v);
+                    if (L > 1e-6f) {
+                        ImVec2 dir = mul(v, 1.0f / L);
+                        // contact point on circle 1 toward circle 2
+                        ImVec2 P = add(C1, mul(dir, (float)c1->radius));
+
+                        ImVec2 Ps = m_canvas2D.WorldToScreen(P);
+                        ImVec2 C1s = m_canvas2D.WorldToScreen(C1);
+                        ImVec2 nS = norm(sub(Ps, C1s)); // outward from circle
+                        ImVec2 iconPos = add(Ps, mul(nS, 12.0f));
+
+                        adapters::sketchui::DrawConstraintIcon(dl, iconPos, iconSizePx, iconCol, adapters::sketchui::ConstraintIcon::Tangent);
+                    }
+                }
+            }
+        }
     }
 
     // Tool update/draw (draft geometry + in-canvas dimension editing)
