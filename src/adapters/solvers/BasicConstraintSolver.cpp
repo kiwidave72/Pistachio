@@ -159,6 +159,97 @@ namespace adapters {
         return d > 0.0;
     }
 
+// --- Tangent constraint (Phase 2 minimal) ---
+// Supports:
+//   - Line <-> Circle: move the circle center so distance(center, line) == radius
+//   - Circle <-> Circle: move the second circle so center distance == r1 + r2 (external tangent)
+static bool applyTangent(EntityStore& store, const GeometricConstraint& c, double& maxDelta)
+{
+    if (c.refs.size() < 2) return false;
+    if (!store.contains(c.refs[0].id) || !store.contains(c.refs[1].id)) return false;
+
+    const EntityHandle ha = store.getHandle(c.refs[0].id);
+    const EntityHandle hb = store.getHandle(c.refs[1].id);
+
+    auto tangentLineCircle = [&](const EntityHandle& hLine, const EntityHandle& hCircle) -> bool
+    {
+        if (hLine.kind != EntityKind::Line || hCircle.kind != EntityKind::Circle) return false;
+
+        auto& ln = store.line(hLine.index);
+        auto& cc = store.circle(hCircle.index);
+
+        const Vec2 a = ln.a;
+        const Vec2 b = ln.b;
+
+        const double vx = b.x - a.x;
+        const double vy = b.y - a.y;
+        const double len = std::sqrt(vx * vx + vy * vy);
+        if (len < 1e-12) return false;
+
+        // Signed distance from point to infinite line (a->b)
+        const double nx = -vy / len; // unit normal
+        const double ny =  vx / len;
+
+        const double px = cc.center.x - a.x;
+        const double py = cc.center.y - a.y;
+
+        const double signedD = px * nx + py * ny;         // positive on one side, negative on the other
+        const double absD = std::abs(signedD);
+
+        const double err = cc.radius - absD;
+        if (std::abs(err) < 1e-9) return false;
+
+        // Preserve the current side of the line (sign of signedD).
+        const double side = (signedD >= 0.0) ? 1.0 : -1.0;
+
+        Vec2 old = cc.center;
+        cc.center.x += nx * side * err;
+        cc.center.y += ny * side * err;
+
+        const double d = std::sqrt(dist2(old, cc.center));
+        maxDelta = std::max(maxDelta, d);
+        return d > 0.0;
+    };
+
+    auto tangentCircleCircle = [&](const EntityHandle& hC1, const EntityHandle& hC2) -> bool
+    {
+        if (hC1.kind != EntityKind::Circle || hC2.kind != EntityKind::Circle) return false;
+
+        auto& c1 = store.circle(hC1.index);
+        auto& c2 = store.circle(hC2.index);
+
+        const double dx = c2.center.x - c1.center.x;
+        const double dy = c2.center.y - c1.center.y;
+        const double d = std::sqrt(dx * dx + dy * dy);
+        if (d < 1e-12) return false;
+
+        const double target = c1.radius + c2.radius; // external tangency
+        const double err = target - d;
+        if (std::abs(err) < 1e-9) return false;
+
+        const double ux = dx / d;
+        const double uy = dy / d;
+
+        Vec2 old = c2.center;
+        c2.center.x += ux * err;
+        c2.center.y += uy * err;
+
+        const double moved = std::sqrt(dist2(old, c2.center));
+        maxDelta = std::max(maxDelta, moved);
+        return moved > 0.0;
+    };
+
+    // Try both orderings (user can pick in any order)
+    if (tangentLineCircle(ha, hb)) return true;
+    if (tangentLineCircle(hb, ha)) return true;
+    if (tangentCircleCircle(ha, hb)) return true;
+    if (tangentCircleCircle(hb, ha)) return true;
+
+    return false;
+}
+
+
+
     bool applyGeometric(EntityStore& store, const GeometricConstraint& gc, double& maxDelta) {
         if (!gc.meta.enabled || gc.meta.suppressed) return false;
 
@@ -166,7 +257,8 @@ namespace adapters {
         case GeometricConstraintType::Coincident: return applyCoincident(store, gc, maxDelta);
         case GeometricConstraintType::Horizontal: return applyHorizontal(store, gc, maxDelta);
         case GeometricConstraintType::Vertical:   return applyVertical(store, gc, maxDelta);
-        default: return false; // Phase 2 = only these three for now
+        case GeometricConstraintType::Tangent:    return applyTangent(store, gc, maxDelta);
+        default: return false; // Phase 2 = minimal set implemented
         }
     }
 

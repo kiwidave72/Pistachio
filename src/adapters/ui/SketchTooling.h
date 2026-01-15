@@ -1,14 +1,16 @@
 #pragma once
 
+#include <cstdint>
+
 #include <algorithm>
 #include <cmath>
 #include <memory>
 #include <vector>
 #include <cstdlib>
-#include <cstdio>
 
 #include <imgui.h>
-#include <imgui_internal.h>
+
+#include "ConstraintIcons.h"
 
 #include "core/commands/CommandHistory.h"
 #include "core/commands/SketchCommands.h"
@@ -57,12 +59,100 @@ namespace adapters::sketchui {
         }
     };
 
-    enum class ToolKind { None, Select, Line2Pt, Circle2Pt };
+    
+    // --------------------------------------------------------------------
+    // Picking / hit-testing helpers (screen -> world already handled by Canvas2D)
+    // --------------------------------------------------------------------
+    enum class PickType : int { None=0, Point, Line, Circle, Arc };
+
+    struct PickResult
+    {
+        PickType type{ PickType::None };
+        domain::sketch::EntityId id{ 0 };
+        float distance{ 1e30f }; // world units
+    };
+
+    static inline float VLen2(ImVec2 v) { return v.x*v.x + v.y*v.y; }
+    static inline float VLen(ImVec2 v) { return std::sqrt(VLen2(v)); }
+
+    static inline float DistancePointToSegment(ImVec2 p, ImVec2 a, ImVec2 b)
+    {
+        ImVec2 ab = VSub(b, a);
+        float ab2 = VLen2(ab);
+        if (ab2 <= 1e-12f) return VLen(VSub(p, a));
+        float t = ( (p.x - a.x)*ab.x + (p.y - a.y)*ab.y ) / ab2;
+        t = std::clamp(t, 0.0f, 1.0f);
+        ImVec2 q = ImVec2(a.x + ab.x*t, a.y + ab.y*t);
+        return VLen(VSub(p, q));
+    }
+
+    static inline float DistancePointToCircle(ImVec2 p, ImVec2 c, float r)
+    {
+        float d = VLen(VSub(p, c));
+        return std::fabs(d - r);
+    }
+
+    static inline PickResult PickGeometry(const domain::sketch::Sketch& sketch, ImVec2 mouseW, float tolW)
+    {
+        PickResult best;
+
+        // points
+        for (const auto& pt : sketch.entities.points())
+        {
+            ImVec2 pw = ImVec2((float)pt.p.x, (float)pt.p.y);
+            float d = VLen(VSub(mouseW, pw));
+            if (d <= tolW && d < best.distance)
+                best = { PickType::Point, pt.h.id, d };
+        }
+
+        // lines
+        for (const auto& ln : sketch.entities.lines())
+        {
+            ImVec2 a = ImVec2((float)ln.a.x, (float)ln.a.y);
+            ImVec2 b = ImVec2((float)ln.b.x, (float)ln.b.y);
+            float d = DistancePointToSegment(mouseW, a, b);
+            if (d <= tolW && d < best.distance)
+                best = { PickType::Line, ln.h.id, d };
+        }
+
+        // circles
+        for (const auto& cc : sketch.entities.circles())
+        {
+            ImVec2 c = ImVec2((float)cc.center.x, (float)cc.center.y);
+            float d = DistancePointToCircle(mouseW, c, (float)cc.radius);
+            if (d <= tolW && d < best.distance)
+                best = { PickType::Circle, cc.h.id, d };
+        }
+
+        // arcs (optional: treat as circle hit on radius around center; angle window ignored for now)
+        for (const auto& ac : sketch.entities.arcs())
+        {
+            ImVec2 c = ImVec2((float)ac.center.x, (float)ac.center.y);
+            float d = DistancePointToCircle(mouseW, c, (float)ac.radius);
+            if (d <= tolW && d < best.distance)
+                best = { PickType::Arc, ac.h.id, d };
+        }
+
+        return best;
+    }
+enum class ToolKind { None, Line2Pt, CircleCenterRadius, Constraint };
     enum class DraftStage { Idle, PickingStart, PickingEnd, AdjustingValue };
 
     struct ToolContext {
         domain::sketch::Sketch& sketch;
         core::commands::CommandHistory& history;
+        int* activeConstraintIcon = nullptr;
+        bool* needsSolve = nullptr;
+        uint64_t* changeSerial = nullptr;
+
+        // UI-only selection feedback (no persistence in the sketch model)
+        std::vector<domain::sketch::EntityId>* uiPickedIds = nullptr; // current pick sequence
+        domain::sketch::EntityId* uiHoverId = nullptr;               // current hover (0 = none)
+
+        void MarkDirty() {
+            if (needsSolve) *needsSolve = true;
+            if (changeSerial) ++(*changeSerial);
+        }
     };
 
     class ISketchTool {
@@ -95,21 +185,10 @@ namespace adapters::sketchui {
 
         ToolKind ActiveKind() const { return m_active ? m_active->Kind() : ToolKind::None; }
 
-        void UpdateAndDraw(ToolContext& ctx, const Canvas2D& c, ImDrawList* dl)
+        void UpdateAndDraw(ToolContext& ctx, const Canvas2D& canvas, ImDrawList* dl)
         {
-            if (!m_active) return;
-
-            if (!m_active->IsActive())
-            {
-                m_active = nullptr;
-                return;
-            }
-
-            m_active->UpdateAndDraw(ctx, c, dl);
-
-            // If tool became inactive during UpdateAndDraw (Esc/cancel), clear it
-            if (m_active && !m_active->IsActive())
-                m_active = nullptr;
+            if (m_active && m_active->IsActive())
+                m_active->UpdateAndDraw(ctx, canvas, dl);
         }
 
     private:
@@ -166,294 +245,6 @@ namespace adapters::sketchui {
         return enter;
     }
 
-    inline void DrawDimensionLabel(
-        const Canvas2D& canvas,
-        ImDrawList* dl,
-        const ImVec2& aW,
-        const ImVec2& bW,
-        const char* units = "mm"
-    )
-    {
-        ImVec2 midW{ (aW.x + bW.x) * 0.5f, (aW.y + bW.y) * 0.5f };
-        ImVec2 midS = canvas.WorldToScreen(midW);
-        const float dx = bW.x - aW.x;
-        const float dy = bW.y - aW.y;
-        const double len = std::sqrt((double)dx * (double)dx + (double)dy * (double)dy);
-
-        char buf[64];
-        std::snprintf(buf, sizeof(buf), "%.2f %s", len, units);
-
-        ImVec2 textSize = ImGui::CalcTextSize(buf);
-        ImVec2 pad{ 6.0f, 3.0f };
-        ImRect r(ImVec2(midS.x - textSize.x * 0.5f - pad.x, midS.y - textSize.y * 0.5f - pad.y),
-                 ImVec2(midS.x + textSize.x * 0.5f + pad.x, midS.y + textSize.y * 0.5f + pad.y));
-        dl->AddRectFilled(r.Min, r.Max, IM_COL32(10, 10, 10, 220), 4.0f);
-        dl->AddRect(r.Min, r.Max, IM_COL32(180, 180, 180, 180), 4.0f);
-        dl->AddText(ImVec2(r.Min.x + pad.x, r.Min.y + pad.y), IM_COL32(230, 230, 230, 255), buf);
-    }
-
-    // Visual-only diameter label for a circle, rendered similarly to line length.
-    inline void DrawCircleDiameterLabel(
-        const Canvas2D& canvas,
-        ImDrawList* dl,
-        const ImVec2& centerW,
-        float radiusW,
-        const char* units = "mm"
-    )
-    {
-        const double dia = (double)radiusW * 2.0;
-
-        char buf[64];
-        // Use ASCII-safe "Dia" instead of the diameter symbol to avoid font issues.
-        std::snprintf(buf, sizeof(buf), "Dia: %.2f %s", dia, units);
-
-        ImVec2 centerS = canvas.WorldToScreen(centerW);
-        const float rpx = radiusW * canvas.pixels_per_unit;
-        // Place label just above the circle.
-        ImVec2 midS{ centerS.x, centerS.y - rpx - 14.0f };
-
-        ImVec2 textSize = ImGui::CalcTextSize(buf);
-        ImVec2 pad{ 6.0f, 3.0f };
-        ImRect r(ImVec2(midS.x - textSize.x * 0.5f - pad.x, midS.y - textSize.y * 0.5f - pad.y),
-                 ImVec2(midS.x + textSize.x * 0.5f + pad.x, midS.y + textSize.y * 0.5f + pad.y));
-        dl->AddRectFilled(r.Min, r.Max, IM_COL32(10, 10, 10, 220), 4.0f);
-        dl->AddRect(r.Min, r.Max, IM_COL32(180, 180, 180, 180), 4.0f);
-        dl->AddText(ImVec2(r.Min.x + pad.x, r.Min.y + pad.y), IM_COL32(230, 230, 230, 255), buf);
-    }
-
-    inline float DistPointToSegment(const ImVec2& p, const ImVec2& a, const ImVec2& b)
-    {
-        const float vx = b.x - a.x;
-        const float vy = b.y - a.y;
-        const float wx = p.x - a.x;
-        const float wy = p.y - a.y;
-        const float vv = vx * vx + vy * vy;
-        float t = 0.0f;
-        if (vv > 1e-12f) {
-            t = (wx * vx + wy * vy) / vv;
-            t = std::max(0.0f, std::min(1.0f, t));
-        }
-        const float px = a.x + t * vx;
-        const float py = a.y + t * vy;
-        const float dx = p.x - px;
-        const float dy = p.y - py;
-        return std::sqrt(dx * dx + dy * dy);
-    }
-
-    inline bool IsSelected(const domain::sketch::Sketch& sk, domain::sketch::EntityId id)
-    {
-        const auto& v = sk.selectedEntities;
-        return std::find(v.begin(), v.end(), id) != v.end();
-    }
-
-    inline void ClearSelection(domain::sketch::Sketch& sk)
-    {
-        sk.selectedEntities.clear();
-    }
-
-    inline void AddSelected(domain::sketch::Sketch& sk, domain::sketch::EntityId id)
-    {
-        auto& v = sk.selectedEntities;
-        if (std::find(v.begin(), v.end(), id) == v.end())
-            v.push_back(id);
-    }
-
-    inline void ToggleSelected(domain::sketch::Sketch& sk, domain::sketch::EntityId id)
-    {
-        auto& v = sk.selectedEntities;
-        auto it = std::find(v.begin(), v.end(), id);
-        if (it == v.end()) v.push_back(id);
-        else v.erase(it);
-    }
-
-    inline void SetSingleSelection(domain::sketch::Sketch& sk, domain::sketch::EntityId id)
-    {
-        sk.selectedEntities.clear();
-        sk.selectedEntities.push_back(id);
-    }
-
-    inline domain::sketch::EntityId HitTestEntity(const domain::sketch::Sketch& sk, const ImVec2& mouseW, float tolW)
-    {
-        // Points first
-        for (auto const& p : sk.entities.points()) {
-            if (!p.h.visible || !p.h.selectable) continue;
-            const float dx = (float)p.p.x - mouseW.x;
-            const float dy = (float)p.p.y - mouseW.y;
-            if (dx * dx + dy * dy <= tolW * tolW)
-                return p.h.id;
-        }
-
-        // Lines
-        for (auto const& l : sk.entities.lines()) {
-            if (!l.h.visible || !l.h.selectable) continue;
-            ImVec2 a{ (float)l.a.x, (float)l.a.y };
-            ImVec2 b{ (float)l.b.x, (float)l.b.y };
-            if (DistPointToSegment(mouseW, a, b) <= tolW)
-                return l.h.id;
-        }
-
-        // Circles (hit-test against the circumference)
-        for (auto const& c : sk.entities.circles()) {
-            if (!c.h.visible || !c.h.selectable) continue;
-            const float cx = (float)c.center.x;
-            const float cy = (float)c.center.y;
-            const float r  = (float)c.radius;
-
-            const float dx = mouseW.x - cx;
-            const float dy = mouseW.y - cy;
-            const float dist = std::sqrt(dx * dx + dy * dy);
-
-            if (std::fabs(dist - r) <= tolW)
-                return c.h.id;
-        }
-
-        return 0; // 0 = none (EntityId starts at 1)
-    }
-
-        // Select tool:
-    //  - Click to select (Shift=toggle)
-    //  - Drag a marquee rectangle to select everything fully inside
-    //      * Points: inside
-    //      * Lines: both endpoints inside
-    //      * Circles: fully inside (center +/- radius inside)
-    class SelectTool final : public ISketchTool {
-    public:
-        ToolKind Kind() const override { return ToolKind::Select; }
-        bool IsActive() const override { return m_active; }
-
-        void Begin(ToolContext&) override
-        {
-            m_active = true;
-            m_dragging = false;
-        }
-
-        void Cancel(ToolContext& ctx) override
-        {
-            m_active = false;
-            m_dragging = false;
-            /* keep selection */
-        }
-
-        void UpdateAndDraw(ToolContext& ctx, const Canvas2D& canvas, ImDrawList* dl) override
-        {
-            if (!m_active) return;
-
-            const Rect2 r = canvas.rect();
-            const ImVec2 mouseS = ImGui::GetMousePos();
-
-            const bool hovered =
-                ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem) &&
-                ImGui::IsMouseHoveringRect(r.Min, r.Max);
-
-            // Escape clears
-            if (ImGui::IsKeyPressed(ImGuiKey_Escape)) {
-                ClearSelection(ctx.sketch);
-            }
-
-            // Begin drag inside canvas
-            if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
-                m_dragging = true;
-                m_dragStartS = mouseS;
-                m_dragEndS = mouseS;
-            }
-
-            // Update drag
-            if (m_dragging) {
-                m_dragEndS = mouseS;
-
-                // Draw marquee rectangle in screen space
-                ImVec2 a = m_dragStartS;
-                ImVec2 b = m_dragEndS;
-                ImVec2 mn(std::min(a.x, b.x), std::min(a.y, b.y));
-                ImVec2 mx(std::max(a.x, b.x), std::max(a.y, b.y));
-                if (dl) {
-                    dl->AddRectFilled(mn, mx, IM_COL32(80, 140, 255, 35));
-                    dl->AddRect(mn, mx, IM_COL32(80, 140, 255, 220), 0.0f, 0, 1.5f);
-                }
-
-                // Finish drag on mouse up
-                if (ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
-                    m_dragging = false;
-
-                    // If small movement, treat as click-hit-test
-                    const float dx = mx.x - mn.x;
-                    const float dy = mx.y - mn.y;
-                    const float clickThresh = 3.0f; // px
-                    if (dx <= clickThresh && dy <= clickThresh) {
-                        const ImVec2 mouseW = canvas.ScreenToWorld(mouseS);
-                        const float tolW = 6.0f / canvas.pixels_per_unit; // ~6px
-
-                        const auto hit = HitTestEntity(ctx.sketch, mouseW, tolW);
-                        if (hit != 0) {
-                            const bool shift = ImGui::GetIO().KeyShift;
-                            if (shift) ToggleSelected(ctx.sketch, hit);
-                            else SetSingleSelection(ctx.sketch, hit);
-                        } else {
-                            ClearSelection(ctx.sketch);
-                        }
-                        return;
-                    }
-
-                    // Otherwise: marquee select everything fully inside
-                    const bool shift = ImGui::GetIO().KeyShift;
-                    if (!shift) ClearSelection(ctx.sketch);
-
-                    // Build world-space AABB from the screen rectangle
-                    // (Convert all 4 corners, then take min/max to be safe with any axis orientation.)
-                    const ImVec2 p00 = canvas.ScreenToWorld(ImVec2(mn.x, mn.y));
-                    const ImVec2 p10 = canvas.ScreenToWorld(ImVec2(mx.x, mn.y));
-                    const ImVec2 p01 = canvas.ScreenToWorld(ImVec2(mn.x, mx.y));
-                    const ImVec2 p11 = canvas.ScreenToWorld(ImVec2(mx.x, mx.y));
-
-                    const float minx = std::min(std::min(p00.x, p10.x), std::min(p01.x, p11.x));
-                    const float maxx = std::max(std::max(p00.x, p10.x), std::max(p01.x, p11.x));
-                    const float miny = std::min(std::min(p00.y, p10.y), std::min(p01.y, p11.y));
-                    const float maxy = std::max(std::max(p00.y, p10.y), std::max(p01.y, p11.y));
-
-                    auto inside = [&](const ImVec2& pW) -> bool {
-                        return pW.x >= minx && pW.x <= maxx && pW.y >= miny && pW.y <= maxy;
-                    };
-
-                    // Points
-                    for (auto const& p : ctx.sketch.entities.points()) {
-                        if (!p.h.visible || !p.h.selectable) continue;
-                        ImVec2 pw{ (float)p.p.x, (float)p.p.y };
-                        if (inside(pw)) AddSelected(ctx.sketch, p.h.id);
-                    }
-
-                    // Lines: both endpoints inside
-                    for (auto const& l : ctx.sketch.entities.lines()) {
-                        if (!l.h.visible || !l.h.selectable) continue;
-                        ImVec2 aW{ (float)l.a.x, (float)l.a.y };
-                        ImVec2 bW{ (float)l.b.x, (float)l.b.y };
-                        if (inside(aW) && inside(bW)) AddSelected(ctx.sketch, l.h.id);
-                    }
-
-                    // Circles: fully inside (center +/- radius inside)
-                    for (auto const& c : ctx.sketch.entities.circles()) {
-                        if (!c.h.visible || !c.h.selectable) continue;
-                        const float cx = (float)c.center.x;
-                        const float cy = (float)c.center.y;
-                        const float rad = (float)c.radius;
-
-                        if ((cx - rad) >= minx && (cx + rad) <= maxx &&
-                            (cy - rad) >= miny && (cy + rad) <= maxy) {
-                            AddSelected(ctx.sketch, c.h.id);
-                        }
-                    }
-                }
-            }
-        }
-
-    private:
-        bool m_active = false;
-
-        bool m_dragging = false;
-        ImVec2 m_dragStartS{};
-        ImVec2 m_dragEndS{};
-    };
-
-
     // Line: click start, click end, then inline edit length (enter to commit).
     class Line2PtTool final : public ISketchTool {
     public:
@@ -498,7 +289,6 @@ namespace adapters::sketchui {
                     m_aW = mouseW;
                     m_bW = mouseW;
                     m_hasStart = true;
-
                     m_stage = DraftStage::PickingEnd;
                 }
                 break;
@@ -544,11 +334,8 @@ namespace adapters::sketchui {
 
                     // keep tool active for next segment
                     m_aW = m_bW;
-                    ImGui::ClearActiveID();           // releases InputText active state
-                    m_stage = DraftStage::PickingStart; // or PickingEnd if you want chaining
-                    m_hasStart = false;
-                    m_focusEdit = false;
-                    m_buf[0] = '\0';
+                    m_stage = DraftStage::PickingEnd;
+                    m_hasStart = true;
                 }
             }
         }
@@ -566,150 +353,326 @@ namespace adapters::sketchui {
         char m_buf[64]{};
     };
 
-
-    // Two-point circle by diameter endpoints:
-    //  - Click first endpoint (A)
-    //  - Click opposite endpoint (B) to define diameter
-    //  - Inline edit diameter (enter to commit).
-    class Circle2PtTool final : public ISketchTool {
+    // Circle: click center, click radius point, then inline edit radius (enter to commit).
+    class CircleCenterRadiusTool final : public ISketchTool {
     public:
-        ToolKind Kind() const override { return ToolKind::Circle2Pt; }
+        ToolKind Kind() const override { return ToolKind::CircleCenterRadius; }
         bool IsActive() const override { return m_active; }
 
         void Begin(ToolContext&) override
         {
             m_active = true;
-            m_stage = DraftStage::PickingStart;
-            m_hasStart = false;
+            m_stage = DraftStage::PickingStart; // center
+            m_hasCenter = false;
             m_focusEdit = false;
             m_buf[0] = '\0';
+            m_r = 1.0;
         }
 
         void Cancel(ToolContext&) override
         {
             m_active = false;
             m_stage = DraftStage::Idle;
-            m_hasStart = false;
-            m_focusEdit = false;
+            m_hasCenter = false;
         }
 
         void UpdateAndDraw(ToolContext& ctx, const Canvas2D& canvas, ImDrawList* dl) override
         {
-            const Rect2 r = canvas.rect();
-            const bool hovered =
-                ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem) &&
-                ImGui::IsMouseHoveringRect(r.Min, r.Max);
+            if (!m_active) return;
 
-            if (ImGui::IsKeyPressed(ImGuiKey_Escape) ||
-                (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Right))) {
+            const bool hovered = ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem);
+            const ImVec2 mouseW = canvas.ScreenToWorld(ImGui::GetIO().MousePos);
+
+            if (ImGui::IsKeyPressed(ImGuiKey_Escape)) {
                 Cancel(ctx);
                 return;
             }
 
-            ImVec2 mouseW = canvas.ScreenToWorld(ImGui::GetIO().MousePos);
+            if (m_stage == DraftStage::AdjustingValue && ImGui::IsKeyPressed(ImGuiKey_Enter)) {
+                Commit(ctx);
+                // keep tool active for next circle
+                Begin(ctx);
+                return;
+            }
 
-            switch (m_stage) {
-            case DraftStage::PickingStart:
+            // stage progression
+            if (m_stage == DraftStage::PickingStart) {
                 if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
-                    m_aW = mouseW;
-                    m_bW = mouseW;
-                    m_hasStart = true;
-
-                    // reset working diameter (so preview doesn't reuse the previous circle)
-                    m_diam = 0.0;
-                    m_dirW = ImVec2(1, 0);
-
+                    m_centerW = mouseW;
+                    m_hasCenter = true;
                     m_stage = DraftStage::PickingEnd;
                 }
-                break;
-
-            case DraftStage::PickingEnd:
-                if (m_hasStart) {
-                    m_bW = mouseW;
-
-                    // continuously update preview diameter from A->mouse (so preview matches what you're working with)
-                    ImVec2 d = VSub(m_bW, m_aW);
-                    float len = std::sqrt(d.x * d.x + d.y * d.y);
-                    if (len > 1e-6f) {
-                        m_dirW = ImVec2(d.x / len, d.y / len);
-                        m_diam = (double)len;
-                    }
-                    else {
-                        m_diam = 0.0;
-                    }
+            }
+            else if (m_stage == DraftStage::PickingEnd) {
+                if (m_hasCenter) {
+                    ImVec2 d = VSub(mouseW, m_centerW);
+                    double rr = std::sqrt((double)d.x * d.x + (double)d.y * d.y);
+                    if (rr < 1e-6) rr = 1.0;
+                    m_r = rr;
                 }
-
                 if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
-                    // lock in current diameter and jump to edit/commit
-                    if (m_diam < 1e-6) {
-                        m_bW = m_aW; // degenerate: ignore
-                        break;
-                    }
-
-                    std::snprintf(m_buf, sizeof(m_buf), "%.3f", m_diam);
+                    snprintf(m_buf, sizeof(m_buf), "%.3f", m_r);
                     m_focusEdit = true;
                     m_stage = DraftStage::AdjustingValue;
                 }
-                break;
-
-            case DraftStage::AdjustingValue:
-            {
-                // keep diameter preview snapped to entered value if valid
-                double v = m_diam;
-                if (!ParseDouble(m_buf, v)) v = m_diam;
-                if (v > 1e-9) {
-                    m_diam = v;
-                    m_bW = VAdd(m_aW, ImVec2((float)(m_dirW.x * (float)m_diam), (float)(m_dirW.y * (float)m_diam)));
-                }
             }
-                break;
-
-            default: break;
+            else if (m_stage == DraftStage::AdjustingValue) {
+                double v;
+                if (ParseDouble(m_buf, v))
+                    m_r = std::max(0.0001, v);
             }
 
-            if (!m_hasStart) return;
+            if (!m_hasCenter) return;
 
-            // preview: diameter line + circle
-            dl->AddLine(canvas.WorldToScreen(m_aW), canvas.WorldToScreen(m_bW), IM_COL32(255, 255, 0, 255), 2.0f);
+            // preview circle
+            dl->AddCircle(canvas.WorldToScreen(m_centerW), (float)(m_r * canvas.pixels_per_unit), IM_COL32(255, 255, 0, 255), 0, 2.0f);
 
-            ImVec2 cW = VMul(VAdd(m_aW, m_bW), 0.5f);
-            float rW = (float)(m_diam * 0.5);
-            if (rW > 1e-6f) {
-                float rS = rW * canvas.pixels_per_unit;
-                dl->AddCircle(canvas.WorldToScreen(cW), rS, IM_COL32(255, 255, 0, 255), 0, 2.0f);
-            }
+            // preview dimension as radius line and edit box at midpoint
+            ImVec2 edgeW = VAdd(m_centerW, ImVec2((float)m_r, 0.0f));
+            ImVec2 aS = canvas.WorldToScreen(m_centerW);
+            ImVec2 bS = canvas.WorldToScreen(edgeW);
+            dl->AddLine(aS, bS, IM_COL32(255, 255, 0, 255), 1.5f);
+
+            char dimText[64];
+            snprintf(dimText, sizeof(dimText), "R %.3f", m_r);
+            ImVec2 midS = VMul(VAdd(aS, bS), 0.5f);
+            ImVec2 sz = ImGui::CalcTextSize(dimText);
+            dl->AddText(ImVec2(midS.x - sz.x * 0.5f, midS.y - sz.y - 6.0f), IM_COL32(255, 255, 0, 255), dimText);
 
             if (m_stage == DraftStage::AdjustingValue) {
-                bool enter = DrawDimensionEditBox(canvas, dl, "CircleDia", m_aW, m_bW, m_buf, (int)sizeof(m_buf), m_focusEdit);
+                // If user clears, keep a value visible so it doesn't look broken.
+                if (m_buf[0] == '\0')
+                    snprintf(m_buf, sizeof(m_buf), "%.3f", m_r);
+
+                bool enter = DrawDimensionEditBox(canvas, dl, "CircleRad",
+                    m_centerW, edgeW, m_buf, (int)sizeof(m_buf), m_focusEdit);
                 m_focusEdit = false;
+
                 if (enter) {
-                    // commit circle
-                    ImVec2 centerW = VMul(VAdd(m_aW, m_bW), 0.5f);
-                    double radius = m_diam * 0.5;
-
-                    domain::sketch::Vec2 c{ (double)centerW.x, (double)centerW.y };
-                    ctx.history.Execute(std::make_unique<core::commands::AddCircle2DCommand>(ctx.sketch, c, radius));
-
-                    ImGui::ClearActiveID(); // releases InputText active state
-
-                    // reset for next circle
-                    m_stage = DraftStage::PickingStart;
-                    m_hasStart = false;
+                    // handled by Enter keypath above too; keep harmless
                 }
             }
         }
 
     private:
+        void Commit(ToolContext& ctx)
+        {
+            domain::sketch::Vec2 c{ (double)m_centerW.x, (double)m_centerW.y };
+            ctx.history.Execute(std::make_unique<core::commands::AddCircle2DCommand>(ctx.sketch, c, m_r));
+        }
+
         bool m_active = false;
         DraftStage m_stage = DraftStage::Idle;
-        bool m_hasStart = false;
+        bool m_hasCenter = false;
 
-        ImVec2 m_aW{}, m_bW{};
-        ImVec2 m_dirW{ 1,0 };
-        double m_diam = 1.0;
+        ImVec2 m_centerW{};
+        double m_r = 1.0;
 
         bool m_focusEdit = false;
         char m_buf[64]{};
     };
+
+    // Placeholder constraint tool so clicking constraint icons can enter a mode without breaking sketch tools.
+    
+    class ConstraintTool final : public ISketchTool {
+    public:
+        ToolKind Kind() const override { return ToolKind::Constraint; }
+        bool IsActive() const override { return m_active; }
+
+        void Begin(ToolContext& ctx) override
+        {
+            m_active = true;
+            m_picks.clear();
+            if (ctx.uiPickedIds) ctx.uiPickedIds->clear();
+            if (ctx.uiHoverId) *ctx.uiHoverId = (domain::sketch::EntityId)0;
+        }
+
+        void Cancel(ToolContext& ctx) override
+        {
+            // Do not "lock" input after cancel; just clear local state.
+            m_active = false;
+            m_picks.clear();
+            if (ctx.uiPickedIds) ctx.uiPickedIds->clear();
+            if (ctx.uiHoverId) *ctx.uiHoverId = (domain::sketch::EntityId)0;
+        }
+
+        void UpdateAndDraw(ToolContext& ctx, const Canvas2D& canvas, ImDrawList* dl) override
+        {
+            if (!m_active) return;
+
+            // ESC clears current pick sequence (but tool stays active)
+            if (ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+                m_picks.clear();
+            }
+
+            // Need the active constraint icon from the UI
+            if (!ctx.activeConstraintIcon || *ctx.activeConstraintIcon < 0)
+                return;
+
+            ConstraintIcon icon = static_cast<ConstraintIcon>(*ctx.activeConstraintIcon);
+
+            // Determine how many picks are required
+            int required = RequiredPicks(icon);
+
+            // Hover highlight
+            const float tolW = 6.0f / std::max(canvas.pixels_per_unit, 1.0f);
+            ImVec2 mouseW = canvas.ScreenToWorld(ImGui::GetMousePos());
+            PickResult hover = PickGeometry(ctx.sketch, mouseW, tolW);
+
+            if (dl && hover.type != PickType::None)
+            {
+                // simple highlight: small circle around hovered entity location estimate
+                ImVec2 s = canvas.WorldToScreen(mouseW);
+                dl->AddCircle(s, 10.0f, IM_COL32(255, 210, 0, 200), 16, 2.0f);
+            }
+
+            // Click to pick
+            if (ImGui::IsMouseClicked(ImGuiMouseButton_Left))
+            {
+                // Only accept clicks when mouse is over canvas rect
+                if (ImGui::IsMouseHoveringRect(canvas.rect().Min, canvas.rect().Max))
+                {
+                    if (hover.type != PickType::None)
+                    {
+                        // Filter pick types per constraint
+                        if (IsPickAllowed(icon, hover))
+                        {
+                            m_picks.push_back(hover);
+
+                            if ((int)m_picks.size() >= required)
+                            {
+                                Commit(ctx, icon);
+                                ctx.MarkDirty();
+                                m_picks.clear();
+                            }
+                        }
+                    }
+                }
+            }
+
+
+            // Push hover + picked ids out to the renderer so entities can be highlighted.
+            if (ctx.uiHoverId)
+                *ctx.uiHoverId = (hover.type != PickType::None) ? hover.id : (domain::sketch::EntityId)0;
+
+            if (ctx.uiPickedIds) {
+                ctx.uiPickedIds->clear();
+                for (const auto& pk : m_picks) ctx.uiPickedIds->push_back(pk.id);
+            }
+
+            // Tiny on-canvas status (top-left)
+            if (dl)
+            {
+                ImVec2 p = VAdd(canvas.origin_screen, ImVec2(8, 8));
+                char buf[128];
+                snprintf(buf, sizeof(buf), "Constraint: %s  (%d/%d)",
+                         ConstraintIconName(icon), (int)m_picks.size(), required);
+                dl->AddText(p, IM_COL32(200, 200, 200, 220), buf);
+            }
+        }
+
+    private:
+        bool m_active = false;
+        std::vector<PickResult> m_picks;
+
+        static const char* ConstraintIconName(ConstraintIcon ic)
+        {
+            switch (ic)
+            {
+            case ConstraintIcon::Fixed:        return "Fixed";
+            case ConstraintIcon::Horizontal:   return "Horizontal";
+            case ConstraintIcon::Vertical:     return "Vertical";
+            case ConstraintIcon::Parallel:     return "Parallel";
+            case ConstraintIcon::Perpendicular:return "Perpendicular";
+            case ConstraintIcon::Tangent:      return "Tangent";
+            case ConstraintIcon::Coincident:   return "Coincident";
+            case ConstraintIcon::Midpoint:     return "Midpoint";
+            case ConstraintIcon::Equal:        return "Equal";
+            default: return "Constraint";
+            }
+        }
+
+        static int RequiredPicks(ConstraintIcon ic)
+        {
+            switch (ic)
+            {
+            case ConstraintIcon::Fixed:
+            case ConstraintIcon::Horizontal:
+            case ConstraintIcon::Vertical:
+                return 1;
+
+            case ConstraintIcon::Coincident:
+            case ConstraintIcon::Parallel:
+            case ConstraintIcon::Perpendicular:
+            case ConstraintIcon::Tangent:
+            case ConstraintIcon::Midpoint:
+            case ConstraintIcon::Equal:
+            default:
+                return 2;
+            }
+        }
+
+        static bool IsPickAllowed(ConstraintIcon ic, const PickResult& p)
+        {
+            // Minimal filtering so "Horizontal" doesn't accept circles, etc.
+            if (ic == ConstraintIcon::Horizontal || ic == ConstraintIcon::Vertical)
+                return p.type == PickType::Line;
+
+            // Coincident wants points ideally, but allow anything for now (anchors later)
+            if (ic == ConstraintIcon::Coincident)
+                return p.type != PickType::None;
+
+            // Fixed: allow anything (it may become "lock entity" later)
+            if (ic == ConstraintIcon::Fixed)
+                return p.type != PickType::None;
+
+            return p.type != PickType::None;
+        }
+
+        static domain::sketch::GeometricConstraintType MapToGeometricType(ConstraintIcon ic)
+        {
+            using domain::sketch::GeometricConstraintType;
+            switch (ic)
+            {
+            case ConstraintIcon::Horizontal:    return GeometricConstraintType::Horizontal;
+            case ConstraintIcon::Vertical:      return GeometricConstraintType::Vertical;
+            case ConstraintIcon::Coincident:    return GeometricConstraintType::Coincident;
+            case ConstraintIcon::Parallel:      return GeometricConstraintType::Parallel;
+            case ConstraintIcon::Perpendicular: return GeometricConstraintType::Perpendicular;
+            case ConstraintIcon::Tangent:       return GeometricConstraintType::Tangent;
+            case ConstraintIcon::Midpoint:      return GeometricConstraintType::Midpoint;
+            default:                            return GeometricConstraintType::Coincident;
+            }
+        }
+
+        void Commit(ToolContext& ctx, ConstraintIcon icon)
+        {
+            // NOTE: "Fixed" isn't a domain geometric type in the current solver.
+            // For now we treat Fixed as Coincident with a single ref (solver will ignore until implemented).
+            domain::sketch::GeometricConstraint gc;
+            gc.meta.id = ctx.sketch.nextConstraintId++;
+            gc.meta.name = ConstraintIconName(icon);
+            gc.type = MapToGeometricType(icon);
+
+            gc.refs.clear();
+            if (!m_picks.empty())
+            {
+                domain::sketch::EntityRef a{ m_picks[0].id, domain::sketch::EntityAnchor::None };
+                gc.refs.push_back(a);
+            }
+            if (m_picks.size() >= 2)
+            {
+                domain::sketch::EntityRef b{ m_picks[1].id, domain::sketch::EntityAnchor::None };
+                gc.refs.push_back(b);
+            }
+
+            ctx.history.Execute(std::make_unique<core::commands::AddGeometricConstraintCommand>(ctx.sketch, gc));
+        }
+    };
+
+
+
+    // Minimal placeholder constraint tool: makes constraint selection "an active tool"
+
 
 } // namespace adapters::sketchui

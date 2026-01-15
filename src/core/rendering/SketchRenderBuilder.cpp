@@ -1,5 +1,4 @@
 #include "core/rendering/SketchRenderBuilder.h"
-#include <algorithm>
 
 namespace
 {
@@ -31,12 +30,6 @@ namespace core::rendering
 
         const auto& store = sketch.entities;
 
-        auto isSelected = [&](domain::sketch::EntityId id) -> bool {
-            if (!opt.selectedIds) return false;
-            const auto& v = *opt.selectedIds;
-            return std::find(v.begin(), v.end(), id) != v.end();
-        };
-
         // --- Points ---
         for (auto const& p : store.points())
         {
@@ -46,7 +39,7 @@ namespace core::rendering
             pt.id = ToRenderId(p.h.id);
             pt.p = ToWorld((float)p.p.x, (float)p.p.y, opt.z);
             pt.size = opt.pointSize;
-            pt.color = isSelected(p.h.id) ? opt.selectedColor : opt.pointColor;
+            pt.color = opt.pointColor;
             pt.selectable = p.h.selectable;
             scene.points.push_back(pt);
         }
@@ -60,9 +53,8 @@ namespace core::rendering
             ln.id = ToRenderId(l.h.id);
             ln.a = ToWorld((float)l.a.x, (float)l.a.y, opt.z);
             ln.b = ToWorld((float)l.b.x, (float)l.b.y, opt.z);
-            const bool sel = isSelected(l.h.id);
-            ln.thickness = opt.lineThickness * (sel ? opt.selectedThicknessScale : 1.0f);
-            ln.color = sel ? opt.selectedColor : (l.h.construction ? opt.constructionColor : opt.entityColor);
+            ln.thickness = opt.lineThickness;
+            ln.color = l.h.construction ? opt.constructionColor : opt.entityColor;
             ln.selectable = l.h.selectable;
             scene.lines.push_back(ln);
         }
@@ -77,10 +69,9 @@ namespace core::rendering
             cc.center = ToWorld((float)c.center.x, (float)c.center.y, opt.z);
             cc.normal = { 0,0,1 };
             cc.radius = (float)c.radius;
-            const bool sel = isSelected(c.h.id);
-            cc.thickness = opt.lineThickness * (sel ? opt.selectedThicknessScale : 1.0f);
+            cc.thickness = opt.lineThickness;
             cc.construction = c.h.construction;
-            cc.color = sel ? opt.selectedColor : (c.h.construction ? opt.constructionColor : opt.entityColor);
+            cc.color = c.h.construction ? opt.constructionColor : opt.entityColor;
             cc.selectable = c.h.selectable;
 
             scene.circles.push_back(cc);

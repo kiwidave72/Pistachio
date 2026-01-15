@@ -246,17 +246,9 @@ namespace core {
             {
                 if (ImGui::BeginMenu("File"))
                 {
-                    if (ImGui::MenuItem("Open")) {
-                        std::cout << "Load Sketch Document...\n";
-                        loadSketchDocument("test.pistachio.json");
-                        runSolver();
-                    }
+                    if (ImGui::MenuItem("Open")) {}
                     ImGui::Separator();
-                    if (ImGui::MenuItem("Save")) {
-                    
-                        std::cout << "Save Sketch Document...\n";
-                        saveSketchDocument("test.pistachio.json");
-                    }
+                    if (ImGui::MenuItem("Save")) {}
                     if (ImGui::MenuItem("Save as ...")) {}
                     ImGui::Separator();
                     if (ImGui::MenuItem("Import Sketch")) {}
@@ -315,12 +307,7 @@ namespace core {
         std::cout << "  Iterations: " << output.report.iterations << std::endl;
         return true;
     }   
-    bool Application::saveSketchDocument(const std::string& filepath)
-    {
-        adapters::persistence::JsonSketchDocumentAdapter io;
-        io.saveDocument(*getSketchDocument(), filepath);
-        return true;
-    }
+
     bool Application::loadSketchDocument(const std::string& filepath)
     {
         std::cout << "\n=== LOADING SKETCH DOCUMENT ===" << std::endl;
@@ -328,7 +315,7 @@ namespace core {
 
         adapters::persistence::JsonSketchDocumentAdapter io;
         m_sketchDoc = io.loadDocument(filepath);
-        
+
         if (m_sketchDoc) {
             std::cout << "[OK] Sketch document loaded successfully" << std::endl;
             std::cout << "  Sketches in document: " << m_sketchDoc->sketches.size() << std::endl;
