@@ -1,11 +1,12 @@
 ﻿#pragma once
 #include <vector>
 #include <array>
+#include <cstddef>// size_t
 
 namespace domain {
 
     using Point3D = std::array<float, 3>;
-    using Triangle = std::array<size_t, 3>;
+    using Triangle = std::array<std::size_t, 3>;
 
     class Geometry {
     public:
