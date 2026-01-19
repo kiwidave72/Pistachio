@@ -68,6 +68,9 @@ namespace core {
 
     public:
         bool loadSketchDocument(const std::string& filepath);
+        // Creates an in-memory document with a single sketch and a few entities.
+        // Useful when no file is present so the 2D sketch UI always has something to show.
+        void createDefaultSketchDocument();
         bool runSolver();
         std::shared_ptr<domain::sketch::Document> getSketchDocument() const;
 

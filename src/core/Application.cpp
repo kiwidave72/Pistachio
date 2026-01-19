@@ -1,11 +1,13 @@
-﻿#include "core/Application.h"
+#include "core/Application.h"
 #include <algorithm>
 #include <variant>
 #include "adapters/persistence/JsonSketchDocumentAdapter.h"
 #include <iostream>
+#include <sstream>
 #include <imgui.h>
 #include "imgui_internal.h"
 
+#include <cmath>
 
 namespace core {
 
@@ -24,6 +26,7 @@ namespace core {
     void Application::setResolverAdapter(std::unique_ptr<ports::ISketchResolverPort> resolver) {
         m_resolverAdapter = std::move(resolver);
     }
+
     void Application::setUIAdapter(std::unique_ptr<ports::IUIPort> uiAdapter) {
         m_uiAdapter = std::move(uiAdapter);
     }
@@ -43,20 +46,9 @@ namespace core {
     bool Application::initialize() {
         std::cout << "\n=== APPLICATION INITIALIZATION ===" << std::endl;
 
-        if (!m_uiAdapter) {
-            m_statusMessage = "Error: No UI adapter set";
-            std::cout << "[X] No UI adapter" << std::endl;
-            return false;
-        }
-        std::cout << "[OK] UI adapter set" << std::endl;
-
-        if (!m_uiAdapter->initialize()) {
-            m_statusMessage = "Error: Failed to initialize UI";
-            std::cout << "[X] UI initialization failed" << std::endl;
-            return false;
-        }
-        std::cout << "[OK] UI initialized" << std::endl;
-
+        // ------------------------------------------------------------
+        // 1) Renderer FIRST (creates window + GL context)
+        // ------------------------------------------------------------
         if (m_renderer && !m_renderer->initialize()) {
             m_statusMessage = "Error: Failed to initialize renderer";
             std::cout << "[X] Renderer initialization failed" << std::endl;
@@ -71,9 +63,90 @@ namespace core {
                 << std::endl;
         }
 
+        // ------------------------------------------------------------
+        // 2) UI adapter AFTER window/context exists
+        // ------------------------------------------------------------
+        if (!m_uiAdapter) {
+            m_statusMessage = "Error: No UI adapter set";
+            std::cout << "[X] No UI adapter" << std::endl;
+            return false;
+        }
+        std::cout << "[OK] UI adapter set" << std::endl;
+
+        if (!m_uiAdapter->initialize()) {
+            m_statusMessage = "Error: Failed to initialize UI";
+            std::cout << "[X] UI initialization failed" << std::endl;
+            return false;
+        }
+        std::cout << "[OK] UI initialized" << std::endl;
+
+        // Ensure there's always a sketch document so the 2D sketch UI has something to show.
+        if (!m_sketchDoc) {
+            createDefaultSketchDocument();
+        }
+
         m_statusMessage = "Application initialized";
         std::cout << "=================================\n" << std::endl;
         return true;
+    }
+
+    void Application::createDefaultSketchDocument() {
+        auto doc = std::make_shared<domain::sketch::Document>();
+        doc->id = 1;
+        doc->name = "Untitled";
+
+        domain::sketch::Sketch sk;
+        sk.id = 1;
+        sk.name = "Sketch 1";
+        sk.visible = true;
+
+        // A small starter sketch so you can see the 2D viewport immediately.
+        // NOTE: In this data model, entities store geometry directly (Vec2), not references to other entities.
+        {
+            const domain::sketch::EntityId p1Id = sk.nextEntityId++;
+            domain::sketch::Point2D p1;
+            p1.h.id = p1Id;
+            p1.h.name = "P1";
+            p1.p = { 100.0, 100.0 };
+            sk.entities.addPoint(p1);
+
+            const domain::sketch::EntityId p2Id = sk.nextEntityId++;
+            domain::sketch::Point2D p2;
+            p2.h.id = p2Id;
+            p2.h.name = "P2";
+            p2.p = { 250.0, 180.0 };
+            sk.entities.addPoint(p2);
+
+            const domain::sketch::EntityId l1Id = sk.nextEntityId++;
+            domain::sketch::Line2D ln;
+            ln.h.id = l1Id;
+            ln.h.name = "L1";
+            ln.a = p1.p;
+            ln.b = p2.p;
+            sk.entities.addLine(ln);
+
+            const domain::sketch::EntityId c1Id = sk.nextEntityId++;
+            domain::sketch::Circle2D c;
+            c.h.id = c1Id;
+            c.h.name = "C1";
+            c.center = { 200.0, 140.0 };
+            c.radius = 60.0;
+            sk.entities.addCircle(c);
+
+            // Add one example constraint (Fix point P1) to exercise the solver path.
+            domain::sketch::GeometricConstraint fix;
+            fix.meta.id = sk.nextConstraintId++;
+            fix.meta.name = "Fix P1";
+            fix.meta.enabled = true;
+            fix.type = domain::sketch::GeometricConstraintType::Fix;
+            fix.refs.push_back(domain::sketch::EntityRef{ p1Id, domain::sketch::EntityAnchor::Point });
+            sk.constraints.push_back(std::move(fix));
+        }
+
+        doc->sketches.push_back(std::move(sk));
+        m_sketchDoc = std::move(doc);
+
+        updateStatus("Created default sketch document");
     }
 
     void Application::run() {
@@ -241,6 +314,7 @@ namespace core {
         }
         return nullptr;
     }
+
     void Application::setupToolbarMenus() {
         m_uiAdapter->setMenubarCallback([this]()
             {
@@ -269,6 +343,8 @@ namespace core {
                 }
                 if (ImGui::BeginMenu("Tools"))
                 {
+                    // NOTE: you probably want tools here
+                    ImGui::EndMenu();
                 }
                 if (ImGui::BeginMenu("View"))
                 {
@@ -288,25 +364,25 @@ namespace core {
 
     bool Application::runSolver() {
         std::cout << "\n=== RUNING BASIC RESOLVER ===" << std::endl;
-        ports::ResolvedSketch output= m_resolverAdapter->solve(getSketchDocument()->sketches[0]);
+
+        ports::ResolvedSketch output = m_resolverAdapter->solve(getSketchDocument()->sketches[0]);
 
         if (output.report.converged) {
             std::cout << "[OK] Sketch Resolved successfully" << std::endl;
-            
-            output.sketch.name ="Updated with resolver";
+
+            output.sketch.name = "Updated with resolver";
 
             m_sketchDoc->sketches[0] = output.sketch;
             m_sketchDoc->name = "Updated with resolver";
-            
+
         }
         else {
             std::cout << "[X] Resolver failed" << std::endl;
-
         }
 
         std::cout << "  Iterations: " << output.report.iterations << std::endl;
         return true;
-    }   
+    }
 
     bool Application::loadSketchDocument(const std::string& filepath)
     {
@@ -314,9 +390,10 @@ namespace core {
         std::cout << "File: " << filepath << std::endl;
 
         adapters::persistence::JsonSketchDocumentAdapter io;
-        m_sketchDoc = io.loadDocument(filepath);
+        auto loaded = io.loadDocument(filepath);
 
-        if (m_sketchDoc) {
+        if (loaded) {
+            m_sketchDoc = loaded;
             std::cout << "[OK] Sketch document loaded successfully" << std::endl;
             std::cout << "  Sketches in document: " << m_sketchDoc->sketches.size() << std::endl;
 
@@ -339,7 +416,7 @@ namespace core {
                 for (const auto& c : sk.entities.circles())  maxEnt = std::max(maxEnt, c.h.id);
                 for (const auto& a : sk.entities.arcs())     maxEnt = std::max(maxEnt, a.h.id);
                 for (const auto& e : sk.entities.ellipses()) maxEnt = std::max(maxEnt, e.h.id);
-                for (const auto& cu: sk.entities.curves())   maxEnt = std::max(maxEnt, cu.h.id);
+                for (const auto& cu : sk.entities.curves())  maxEnt = std::max(maxEnt, cu.h.id);
                 sk.nextEntityId = maxEnt + 1;
 
                 domain::sketch::ConstraintId maxC = 0;
@@ -348,14 +425,15 @@ namespace core {
                 }
                 sk.nextConstraintId = maxC + 1;
             }
+            updateStatus("Loaded sketch: " + filepath);
         }
         else {
             std::cout << "[X] Failed to load sketch document" << std::endl;
+            updateStatus("Failed to load sketch: " + filepath + " (using current document)");
         }
         std::cout << "===============================\n" << std::endl;
 
-        updateStatus("Loaded sketch: " + filepath);
-        return (m_sketchDoc != nullptr);
+        return (loaded != nullptr);
     }
 
     std::shared_ptr<domain::sketch::Document> Application::getSketchDocument() const
