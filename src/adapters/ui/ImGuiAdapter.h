@@ -53,8 +53,14 @@ namespace adapters {
 
         // fonts
         ::ImFont* m_smallFont = nullptr;
-
-
+        ImTextureID m_iconMinimize = nullptr;
+        ImTextureID m_iconMaximize = nullptr;
+        ImTextureID m_iconRestore = nullptr;
+        ImTextureID m_iconClose = nullptr;
+        unsigned int m_glTexMinimize = 0;
+        unsigned int m_glTexMaximize = 0;
+        unsigned int m_glTexRestore = 0;
+        unsigned int m_glTexClose = 0;
         // rest of your existing members unchanged…
     };
 

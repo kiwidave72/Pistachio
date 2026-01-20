@@ -22,6 +22,109 @@
 #include <cstdio>
 #include <cassert>
 
+
+// HostUI.h (or at top of ImGuiHost.cpp)
+#pragma once
+#include <imgui.h>
+
+namespace HostUI
+{
+
+    struct HorizontalLayout
+    {
+        float startX;
+        float cursorY;
+        float rightX;
+    };
+    inline HorizontalLayout BeginHorizontal()
+    {
+        HorizontalLayout l;
+        l.startX = ImGui::GetCursorPosX();
+        l.cursorY = ImGui::GetCursorPosY();
+        l.rightX = ImGui::GetWindowContentRegionMax().x;
+
+        return l;
+    }
+
+    inline void EndHorizontal(const HorizontalLayout&)
+    {
+        // No-op, kept for symmetry
+    }
+
+    inline void ShiftCursorY(float dy)
+    {
+        ImGui::SetCursorPosY(ImGui::GetCursorPosY() + dy);
+    }
+
+    inline ImRect GetItemRect()
+    {
+        return ImRect(ImGui::GetItemRectMin(), ImGui::GetItemRectMax());
+    }
+
+    inline ImRect RectExpanded(const ImRect& r, float x, float y)
+    {
+        ImRect out = r;
+        out.Min.x -= x; out.Min.y -= y;
+        out.Max.x += x; out.Max.y += y;
+        return out;
+    }
+
+    // Draw an image over the last item rect (usually an InvisibleButton)
+    inline void DrawButtonImage(ImTextureID tex, ImU32 colN, ImU32 colH, ImU32 colP, const ImRect* rectOverride = nullptr)
+    {
+        if (!tex)
+            return;
+
+        const bool hovered = ImGui::IsItemHovered();
+        const bool held = ImGui::IsItemActive();
+        const ImU32 tint = held ? colP : (hovered ? colH : colN);
+
+        ImRect r = rectOverride ? *rectOverride : ImRect(ImGui::GetItemRectMin(), ImGui::GetItemRectMax());
+        ImGui::GetWindowDrawList()->AddImage(tex, r.Min, r.Max, ImVec2(0, 0), ImVec2(1, 1), tint);
+    }
+    inline void Spring(const HorizontalLayout& l, float widthFromRight)
+    {
+        // Move cursor so that the next item is widthFromRight from the right edge
+        ImGui::SetCursorPosX(l.rightX - widthFromRight);
+        ImGui::SetCursorPosY(l.cursorY);
+    }
+
+    inline void Spring(const HorizontalLayout& l)
+    {
+        // Simple version: jump to right edge
+        ImGui::SetCursorPosX(l.rightX);
+        ImGui::SetCursorPosY(l.cursorY);
+    }
+
+    // Equivalent to Walnut's "Spring": push cursor to the right (simple, predictable)
+    inline void SpringRight(float rightPadding = 0.0f)
+    {
+        // Move cursor to the far right of the current content region.
+        float avail = ImGui::GetContentRegionAvail().x;
+        if (avail > rightPadding)
+            ImGui::SetCursorPosX(ImGui::GetCursorPosX() + avail - rightPadding);
+    }
+    inline void Spring(const HorizontalLayout& l, float /*weight*/, float spacing)
+    {
+        // Advance cursor by spacing
+        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + spacing);
+        ImGui::SetCursorPosY(l.cursorY);
+    }
+    //// Simple horizontal group helpers (replacement for BeginHorizontal/EndHorizontal)
+    //inline void BeginHorizontal(const char* id)
+    //{
+    //    ImGui::BeginGroup();
+    //    ImGui::PushID(id);
+    //}
+
+    //inline void EndHorizontal()
+    //{
+    //    ImGui::PopID();
+    //    ImGui::EndGroup();
+    //}
+}
+
+
 namespace adapters {
 
     // Track whether ImGuiHost created the GLFW window (so we can destroy it)
@@ -67,7 +170,7 @@ namespace adapters {
         glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
         glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
         glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
-       // glfwWindowHint(GLFW_TITLEBAR, false);
+        glfwWindowHint(GLFW_TITLEBAR, false);
 
 #if defined(__APPLE__)
         glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE);
@@ -456,10 +559,91 @@ namespace adapters {
             }
 
 
+       
+
+        // Window buttons
+        const ImU32 buttonColN = UI::Colors::ColorWithMultipliedValue(UI::Colors::Theme::text, 0.9f);
+        const ImU32 buttonColH = UI::Colors::ColorWithMultipliedValue(UI::Colors::Theme::text, 1.2f);
+        const ImU32 buttonColP = UI::Colors::Theme::textDarker;
+        const float buttonWidth = 14.0f;
+        const float buttonHeight = 14.0f;
+
+        //// Minimize Button
+        auto layout = HostUI::BeginHorizontal();
+
+        // Minimize
+        HostUI::Spring(layout, 16 * 3 + 32);
+        //HostUI::Spring();
+        HostUI::ShiftCursorY(8.0f);
+        {
+            const int iconWidth = 16;
+            const int iconHeight = 16;
+            const float padY = (buttonHeight - (float)iconHeight) / 2.0f;
+            if (ImGui::InvisibleButton("Minimize", ImVec2(iconWidth, iconHeight)))
+            {
+                // TODO: move this stuff to a better place, like Window class
+                if (m_window)
+                {
+                    glfwIconifyWindow(m_window);
+                    // we need to send the event so that Application knows its minimizing.
+                    //   // Application::Get().QueueEvent([windowHandle = m_Window]() { glfwIconifyWindow(windowHandle); });
+                }
+            }
+
+            HostUI::DrawButtonImage(m_iconMinimize, buttonColN, buttonColH, buttonColP);//, HostUI::RectExpanded(HostUI::GetItemRect(), 0.0f, -padY));
         }
+
+
+        //// Maximize Button
+        HostUI::Spring(layout ,-1.0f, 17.0f);
+        HostUI::ShiftCursorY(8.0f);
+        {
+            const int iconWidth =16;
+            const int iconHeight = 16;
+
+            const bool isMaximized = IsMaximized();
+
+            if (ImGui::InvisibleButton("Maximize", ImVec2(iconWidth, iconHeight)))
+            {
+
+                if (isMaximized)
+                    glfwRestoreWindow(m_window);
+                else
+                    glfwMaximizeWindow(m_window);
+
+                // TOO DN add event queue
+               /* Application::Get().QueueEvent([isMaximized, windowHandle = m_WindowHandle]()
+                    {
+                        if (isMaximized)
+                            glfwRestoreWindow(windowHandle);
+                        else
+                            glfwMaximizeWindow(windowHandle);
+                    });*/
+            }
+
+            HostUI::DrawButtonImage(isMaximized ? m_iconRestore : m_iconMaximize, buttonColN, buttonColH, buttonColP);
+        }
+
+        // Close Button
+        HostUI::Spring(layout ,-1.0f, 15.0f);
+        HostUI::ShiftCursorY(8.0f);
+        {
+            const int iconWidth = 16;//m_iconClose->GetWidth();
+            const int iconHeight = 16;//m_iconClose->GetHeight();
+            if (ImGui::InvisibleButton("Close", ImVec2(iconWidth, iconHeight)))
+            {
+                glfwSetWindowShouldClose(m_window, GLFW_TRUE);
+                // TODO DN send the event to the application
+               //Application::Get().Close();
+            }
+            HostUI::DrawButtonImage(m_iconClose, UI::Colors::Theme::text, UI::Colors::ColorWithMultipliedValue(UI::Colors::Theme::text, 1.4f), buttonColP);
+        }
+
+        HostUI::Spring(layout ,-1.0f, 18.0f);
+        
+    } // toolbar group
         ImGui::End();
         ImGui::PopStyleVar(3);
-
         {
             ImGuiWindowFlags window_flags = ImGuiWindowFlags_NoDocking;
             ImGuiViewport* viewport = ImGui::GetMainViewport();
