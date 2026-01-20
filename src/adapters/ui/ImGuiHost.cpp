@@ -561,85 +561,63 @@ namespace adapters {
 
        
 
-        // Window buttons
-        const ImU32 buttonColN = UI::Colors::ColorWithMultipliedValue(UI::Colors::Theme::text, 0.9f);
-        const ImU32 buttonColH = UI::Colors::ColorWithMultipliedValue(UI::Colors::Theme::text, 1.2f);
-        const ImU32 buttonColP = UI::Colors::Theme::textDarker;
-        const float buttonWidth = 14.0f;
-        const float buttonHeight = 14.0f;
+            // Window buttons (top-right, grouped)
+            const ImU32 buttonColN = UI::Colors::ColorWithMultipliedValue(UI::Colors::Theme::text, 0.9f);
+            const ImU32 buttonColH = UI::Colors::ColorWithMultipliedValue(UI::Colors::Theme::text, 1.2f);
+            const ImU32 buttonColP = UI::Colors::Theme::textDarker;
 
-        //// Minimize Button
-        auto layout = HostUI::BeginHorizontal();
+            auto layout = HostUI::BeginHorizontal();
 
-        // Minimize
-        HostUI::Spring(layout, 16 * 3 + 32);
-        //HostUI::Spring();
-        HostUI::ShiftCursorY(8.0f);
-        {
-            const int iconWidth = 16;
-            const int iconHeight = 16;
-            const float padY = (buttonHeight - (float)iconHeight) / 2.0f;
-            if (ImGui::InvisibleButton("Minimize", ImVec2(iconWidth, iconHeight)))
+            const float iconW = (m_iconSize.x > 0.0f) ? m_iconSize.x : 16.0f;
+            const float iconH = (m_iconSize.y > 0.0f) ? m_iconSize.y : 16.0f;
+
+            // Match your “feel” here (I used small, tight spacing)
+            const float gap = 8.0f;
+            const float rightPadding = 16.0f;
+
+            // total width of 3 buttons + 2 gaps + right padding
+            const float totalFromRight = rightPadding + (iconW * 3.0f) + (gap * 2.0f);
+
+            // Jump cursor so the FIRST button starts at the correct top-right X
+            HostUI::Spring(layout, totalFromRight);
+            HostUI::ShiftCursorY(8.0f);
+
+            ImGui::BeginGroup();
+
+            // Minimize
+            if (ImGui::InvisibleButton("Minimize", ImVec2(iconW, iconH)))
             {
-                // TODO: move this stuff to a better place, like Window class
-                if (m_window)
-                {
-                    glfwIconifyWindow(m_window);
-                    // we need to send the event so that Application knows its minimizing.
-                    //   // Application::Get().QueueEvent([windowHandle = m_Window]() { glfwIconifyWindow(windowHandle); });
-                }
+                if (m_window) glfwIconifyWindow(m_window);
             }
+            HostUI::DrawButtonImage(m_iconMinimize, buttonColN, buttonColH, buttonColP);
 
-            HostUI::DrawButtonImage(m_iconMinimize, buttonColN, buttonColH, buttonColP);//, HostUI::RectExpanded(HostUI::GetItemRect(), 0.0f, -padY));
-        }
+            ImGui::SameLine(0.0f, gap);
 
-
-        //// Maximize Button
-        HostUI::Spring(layout ,-1.0f, 17.0f);
-        HostUI::ShiftCursorY(8.0f);
-        {
-            const int iconWidth =16;
-            const int iconHeight = 16;
-
-            const bool isMaximized = IsMaximized();
-
-            if (ImGui::InvisibleButton("Maximize", ImVec2(iconWidth, iconHeight)))
+            // Maximize / Restore
+           // const bool isMaximized = IsMaximized();
+            if (ImGui::InvisibleButton("Maximize", ImVec2(iconW, iconH)))
             {
-
-                if (isMaximized)
-                    glfwRestoreWindow(m_window);
-                else
-                    glfwMaximizeWindow(m_window);
-
-                // TOO DN add event queue
-               /* Application::Get().QueueEvent([isMaximized, windowHandle = m_WindowHandle]()
-                    {
-                        if (isMaximized)
-                            glfwRestoreWindow(windowHandle);
-                        else
-                            glfwMaximizeWindow(windowHandle);
-                    });*/
+                if (isMaximized) glfwRestoreWindow(m_window);
+                else             glfwMaximizeWindow(m_window);
             }
-
             HostUI::DrawButtonImage(isMaximized ? m_iconRestore : m_iconMaximize, buttonColN, buttonColH, buttonColP);
-        }
 
-        // Close Button
-        HostUI::Spring(layout ,-1.0f, 15.0f);
-        HostUI::ShiftCursorY(8.0f);
-        {
-            const int iconWidth = 16;//m_iconClose->GetWidth();
-            const int iconHeight = 16;//m_iconClose->GetHeight();
-            if (ImGui::InvisibleButton("Close", ImVec2(iconWidth, iconHeight)))
+            ImGui::SameLine(0.0f, gap);
+
+            // Close
+            if (ImGui::InvisibleButton("Close", ImVec2(iconW, iconH)))
             {
                 glfwSetWindowShouldClose(m_window, GLFW_TRUE);
-                // TODO DN send the event to the application
-               //Application::Get().Close();
             }
-            HostUI::DrawButtonImage(m_iconClose, UI::Colors::Theme::text, UI::Colors::ColorWithMultipliedValue(UI::Colors::Theme::text, 1.4f), buttonColP);
-        }
+            HostUI::DrawButtonImage(
+                m_iconClose,
+                UI::Colors::Theme::text,
+                UI::Colors::ColorWithMultipliedValue(UI::Colors::Theme::text, 1.4f),
+                buttonColP
+            );
 
-        HostUI::Spring(layout ,-1.0f, 18.0f);
+            ImGui::EndGroup();
+
         
     } // toolbar group
         ImGui::End();
