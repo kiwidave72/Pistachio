@@ -61,7 +61,9 @@ private:
     GLFWwindow* m_window = nullptr;
     bool m_initialized = false;
     std::function<void()> m_menubarCallback;
+    bool m_TitleBarHovered = false;
 
+    bool IsTitleBarHovered() const { return m_TitleBarHovered; }
     // ---- diagnostics ----
     bool m_diagStdout = true;
     uint64_t m_frameIndex = 0;

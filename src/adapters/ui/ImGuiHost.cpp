@@ -468,17 +468,7 @@ namespace adapters {
         }
 
         ImGui::NewFrame();
-
-
-        ImGui::Begin("##HostProof", nullptr, ImGuiWindowFlags_AlwaysAutoResize);
-        ImGui::Text("Frame %llu", (unsigned long long)m_frameIndex);
-        ImGui::Text("DisplaySize %.0f x %.0f", io.DisplaySize.x, io.DisplaySize.y);
-        ImGui::Text("Mouse %.1f %.1f L=%d", io.MousePos.x, io.MousePos.y, io.MouseDown[0]);
-        ImGui::End();
-
-
-
-
+ 
         //// Always ensure our UI window/context is current BEFORE backend NewFrame
         //glfwMakeContextCurrent(m_window);
 
@@ -510,9 +500,13 @@ namespace adapters {
 
         //ImGui::NewFrame();
         float titlebarHeight = 50.0f;
-
+        const bool isMaximized = IsMaximized();
+        float titlebarVerticalOffset = isMaximized ? -6.0f : 0.0f;
+        const ImVec2 windowPadding = ImGui::GetCurrentWindow()->WindowPadding;
+        
         ImGuiWindowFlags titlebar_flags =
             ImGuiWindowFlags_NoTitleBar |
+            ImGuiWindowFlags_MenuBar |
             ImGuiWindowFlags_NoResize |
             ImGuiWindowFlags_NoMove |
             ImGuiWindowFlags_NoScrollbar |
@@ -530,12 +524,6 @@ namespace adapters {
 
         ImGui::Begin("##Titlebar", nullptr, titlebar_flags);
         {
-           // UI_DrawTitlebar(titlebarHeight);
-
-            //const float titlebarHeight = outTitlebarHeight;// 60.0f;
-            const bool isMaximized = IsMaximized();
-            float titlebarVerticalOffset = isMaximized ? -6.0f : 0.0f;
-            const ImVec2 windowPadding = ImGui::GetCurrentWindow()->WindowPadding;
 
             ImGui::SetCursorPos(ImVec2(windowPadding.x, windowPadding.y + titlebarVerticalOffset));
             const ImVec2 titlebarMin = ImGui::GetCursorScreenPos();
@@ -559,7 +547,27 @@ namespace adapters {
             }
 
 
-       
+
+
+            if (m_menubarCallback) {
+
+                //m_menubarCallback();   // menus only, no Begin/End
+
+                ImGui::SuspendLayout();
+                {
+                    ImGui::SetItemAllowOverlap();
+                    const float logoHorizontalOffset = 16.0f * 2.0f + 48.0f + windowPadding.x;
+                    ImGui::SetCursorPos(ImVec2(logoHorizontalOffset, 6.0f + titlebarVerticalOffset));
+                    m_menubarCallback();   // menus only, no Begin/End
+
+                    if (ImGui::IsItemHovered())
+                        m_TitleBarHovered = false;
+                }
+
+                ImGui::ResumeLayout();
+
+            }
+            
 
             // Window buttons (top-right, grouped)
             const ImU32 buttonColN = UI::Colors::ColorWithMultipliedValue(UI::Colors::Theme::text, 0.9f);
@@ -637,9 +645,13 @@ namespace adapters {
             ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
             ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
 
-            window_flags |= ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse |
-                ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove;
-            window_flags |= ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoNavFocus;
+            window_flags |= ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_MenuBar
+                | ImGuiWindowFlags_NoCollapse 
+                | ImGuiWindowFlags_NoResize 
+                | ImGuiWindowFlags_NoMove;
+            
+            window_flags |= ImGuiWindowFlags_NoBringToFrontOnFocus 
+                            | ImGuiWindowFlags_NoNavFocus;
 
             const bool isMaximized = IsMaximized();
             ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, isMaximized ? ImVec2(6.0f, 6.0f) : ImVec2(1.0f, 1.0f));
@@ -688,11 +700,17 @@ namespace adapters {
         //ImGui::Text("Context: %p", (void*)ImGui::GetCurrentContext());
         //ImGui::End();
 
-        if (m_menubarCallback)
-            m_menubarCallback();
+      
 
         /*if (m_diagStdout)
             std::printf("[ImGuiHost] <<< beginFrame\n");*/
+
+        ImGui::Begin("##HostProof", nullptr, ImGuiWindowFlags_AlwaysAutoResize);
+        ImGui::Text("Frame %llu", (unsigned long long)m_frameIndex);
+        ImGui::Text("DisplaySize %.0f x %.0f", io.DisplaySize.x, io.DisplaySize.y);
+        ImGui::Text("Mouse %.1f %.1f L=%d", io.MousePos.x, io.MousePos.y, io.MouseDown[0]);
+        ImGui::End();
+
     }
 
     void ImGuiHost::render()
