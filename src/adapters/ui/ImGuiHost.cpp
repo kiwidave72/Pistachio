@@ -6,7 +6,7 @@
 
 #include <imgui.h>
 #include "imgui_internal.h"
-
+ 
 #include <backends/imgui_impl_glfw.h>
 #include <backends/imgui_impl_opengl3.h>
 #include "../Roboto-Regular.embed"
@@ -110,6 +110,124 @@ namespace HostUI
         ImGui::SetCursorPosX(ImGui::GetCursorPosX() + spacing);
         ImGui::SetCursorPosY(l.cursorY);
     }
+ 
+
+
+     
+   
+        static inline ImRect OffsetRect(const ImRect& r, float dx, float dy)
+        {
+            return ImRect(ImVec2(r.Min.x + dx, r.Min.y + dy),
+                ImVec2(r.Max.x + dx, r.Max.y + dy));
+        }
+
+        bool BeginMenubar(const ImRect& barRectangle)
+        {
+            ImGuiWindow* window = ImGui::GetCurrentWindow();
+            if (!window || window->SkipItems)
+                return false;
+
+            // Walnut had this check but commented out; keep it permissive for host usage.
+            // if (!(window->Flags & ImGuiWindowFlags_MenuBar))
+            //     return false;
+
+            IM_ASSERT(!window->DC.MenuBarAppending);
+
+            // Backup/restore state using group+ID the same way Walnut does.
+            ImGui::BeginGroup();
+            ImGui::PushID("##menubar");
+
+            const ImVec2 padding = window->WindowPadding;
+
+            // The caller passes a rectangle in *window-local coordinates*.
+            // Walnut offsets the rect by padding.y to align nicely under the window padding.
+            ImRect bar_rect = OffsetRect(barRectangle, 0.0f, padding.y);
+
+            // Build a clip rect in *screen coordinates*.
+            // This is essentially Walnut's logic, adapted without Walnut's helper.
+            ImRect clip_rect(
+                ImVec2(
+                    IM_ROUND(ImMax(window->Pos.x,
+                        bar_rect.Min.x + window->WindowBorderSize + window->Pos.x - 10.0f)),
+                    IM_ROUND(bar_rect.Min.y + window->WindowBorderSize + window->Pos.y)
+                ),
+                ImVec2(
+                    IM_ROUND(ImMax(bar_rect.Min.x + window->Pos.x,
+                        bar_rect.Max.x - ImMax(window->WindowRounding, window->WindowBorderSize))),
+                    IM_ROUND(bar_rect.Max.y + window->Pos.y)
+                )
+            );
+
+            clip_rect.ClipWith(window->OuterRectClipped);
+            ImGui::PushClipRect(clip_rect.Min, clip_rect.Max, false);
+
+            // IMPORTANT: BeginGroup() resets CursorMaxPos to CursorPos. Walnut overwrites both.
+            window->DC.CursorPos = window->DC.CursorMaxPos =
+                ImVec2(bar_rect.Min.x + window->Pos.x, bar_rect.Min.y + window->Pos.y);
+
+            window->DC.LayoutType = ImGuiLayoutType_Horizontal;
+            window->DC.NavLayerCurrent = ImGuiNavLayer_Menu;
+            window->DC.MenuBarAppending = true;
+
+            ImGui::AlignTextToFramePadding();
+            return true;
+        }
+
+        void EndMenubar()
+        {
+            ImGuiWindow* window = ImGui::GetCurrentWindow();
+            if (!window || window->SkipItems)
+                return;
+
+            ImGuiContext& g = *GImGui;
+
+            // Nav forwarding among sibling menus (same as Walnut)
+            if (ImGui::NavMoveRequestButNoResultYet() &&
+                (g.NavMoveDir == ImGuiDir_Left || g.NavMoveDir == ImGuiDir_Right) &&
+                (g.NavWindow->Flags & ImGuiWindowFlags_ChildMenu))
+            {
+                ImGuiWindow* nav_earliest_child = g.NavWindow;
+                while (nav_earliest_child->ParentWindow &&
+                    (nav_earliest_child->ParentWindow->Flags & ImGuiWindowFlags_ChildMenu))
+                {
+                    nav_earliest_child = nav_earliest_child->ParentWindow;
+                }
+
+                if (nav_earliest_child->ParentWindow == window &&
+                    nav_earliest_child->DC.ParentLayoutType == ImGuiLayoutType_Horizontal &&
+                    (g.NavMoveFlags & ImGuiNavMoveFlags_Forwarded) == 0)
+                {
+                    const ImGuiNavLayer layer = ImGuiNavLayer_Menu;
+                    IM_ASSERT(window->DC.NavLayersActiveMaskNext & (1 << layer));
+
+                    ImGui::FocusWindow(window);
+                    ImGui::SetNavID(window->NavLastIds[layer], layer, 0, window->NavRectRel[layer]);
+
+                    g.NavDisableHighlight = true;
+                    g.NavDisableMouseHover = g.NavMousePosDirty = true;
+
+                    ImGui::NavMoveRequestForward(
+                        g.NavMoveDir, g.NavMoveClipDir, g.NavMoveFlags, g.NavMoveScrollFlags);
+                }
+            }
+
+            IM_ASSERT(window->DC.MenuBarAppending);
+
+            ImGui::PopClipRect();
+            ImGui::PopID();
+
+            // Save horizontal position so next append can reuse it
+            window->DC.MenuBarOffset.x = window->DC.CursorPos.x - window->Pos.x;
+
+            // Undo group "emit item" hack (Walnut)
+            g.GroupStack.back().EmitItem = false;
+            ImGui::EndGroup();
+
+            window->DC.LayoutType = ImGuiLayoutType_Vertical;
+            window->DC.NavLayerCurrent = ImGuiNavLayer_Main;
+            window->DC.MenuBarAppending = false;
+        }
+    
     //// Simple horizontal group helpers (replacement for BeginHorizontal/EndHorizontal)
     //inline void BeginHorizontal(const char* id)
     //{
@@ -469,36 +587,7 @@ namespace adapters {
 
         ImGui::NewFrame();
  
-        //// Always ensure our UI window/context is current BEFORE backend NewFrame
-        //glfwMakeContextCurrent(m_window);
-
-        //diagCheckAndRestoreGlfwContext("beginFrame");
-
-        //glfwPollEvents();
-
-        //ImGui_ImplOpenGL3_NewFrame();
-        //ImGui_ImplGlfw_NewFrame();
-
-        //// Robust DisplaySize update (don’t rely on backend when other systems swap contexts)
-        //{
-        //    int ww = 0, wh = 0;
-        //    int fbw = 0, fbh = 0;
-        //    glfwGetWindowSize(m_window, &ww, &wh);
-        //    glfwGetFramebufferSize(m_window, &fbw, &fbh);
-
-        //    ImGuiIO& io = ImGui::GetIO();
-        //    io.DisplaySize = ImVec2((float)ww, (float)wh);
-
-        //    if (ww > 0 && wh > 0) {
-        //        io.DisplayFramebufferScale = ImVec2((float)fbw / (float)ww, (float)fbh / (float)wh);
-        //    }
-
-        //    if (m_diagStdout && (m_frameIndex <= 3)) {
-        //        std::printf("[ImGuiHost] DisplaySize set from GLFW = %dx%d (FB=%dx%d)\n", ww, wh, fbw, fbh);
-        //    }
-        //}
-
-        //ImGui::NewFrame();
+         
         float titlebarHeight = 50.0f;
         const bool isMaximized = IsMaximized();
         float titlebarVerticalOffset = isMaximized ? -6.0f : 0.0f;
@@ -506,7 +595,7 @@ namespace adapters {
         
         ImGuiWindowFlags titlebar_flags =
             ImGuiWindowFlags_NoTitleBar |
-            ImGuiWindowFlags_MenuBar |
+             
             ImGuiWindowFlags_NoResize |
             ImGuiWindowFlags_NoMove |
             ImGuiWindowFlags_NoScrollbar |
@@ -546,8 +635,44 @@ namespace adapters {
                 fgDrawList->AddImage(m_AppHeaderIcon->GetDescriptorSet(), logoRectStart, logoRectMax);
             }
 
+           // ImGui::BeginHorizontal("Titlebar-2", { ImGui::GetWindowWidth() - windowPadding.y * 2.0f, ImGui::GetFrameHeightWithSpacing() });
+            //HostUI::BeginHorizontal("Titlebar-2", { ImGui::GetWindowWidth() - windowPadding.y * 2.0f, ImGui::GetFrameHeightWithSpacing() });
+
+            static float moveOffsetX;
+            static float moveOffsetY;
+            const float w = ImGui::GetContentRegionAvail().x;
+            const float buttonsAreaWidth = 94;
 
 
+            // Title bar drag area
+            // On Windows we hook into the GLFW win32 window internals
+            ImGui::SetCursorPos(ImVec2(windowPadding.x, windowPadding.y + titlebarVerticalOffset)); // Reset cursor pos
+            // DEBUG DRAG BOUNDS
+            //fgDrawList->AddRect(ImGui::GetCursorScreenPos(), ImVec2(ImGui::GetCursorScreenPos().x + w - buttonsAreaWidth, ImGui::GetCursorScreenPos().y + titlebarHeight), UI::Colors::Theme::invalidPrefab);
+            ImGui::InvisibleButton("##titleBarDragZone", ImVec2(w - buttonsAreaWidth, titlebarHeight));
+
+            m_TitleBarHovered = ImGui::IsItemHovered();
+
+            const bool dragZoneHovered = ImGui::IsItemHovered(ImGuiHoveredFlags_RectOnly);
+            const bool dragZoneClicked = ImGui::IsItemClicked(ImGuiMouseButton_Left); // first press
+            // or: const bool dragZoneActive = ImGui::IsItemActive();
+
+#ifdef _WIN32
+            if (dragZoneClicked)  // only begin a drag when click begins in the zone
+            {
+                HWND hwnd = glfwGetWin32Window(m_window);
+
+                // Optional: ignore double-click if you use it for maximize/restore
+                // if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) { ... }
+
+                ReleaseCapture();
+                SendMessage(hwnd, WM_NCLBUTTONDOWN, HTCAPTION, 0);
+            }
+#endif
+
+          // ImGui::End();
+           // ImGui::PopStyleColor();
+           // ImGui::PopStyleVar(2);
 
             if (m_menubarCallback) {
 
@@ -558,7 +683,18 @@ namespace adapters {
                     ImGui::SetItemAllowOverlap();
                     const float logoHorizontalOffset = 16.0f * 2.0f + 48.0f + windowPadding.x;
                     ImGui::SetCursorPos(ImVec2(logoHorizontalOffset, 6.0f + titlebarVerticalOffset));
-                    m_menubarCallback();   // menus only, no Begin/End
+                   
+                    const ImRect menuBarRect = { ImGui::GetCursorPos(), { ImGui::GetContentRegionAvail().x + ImGui::GetCursorScreenPos().x, ImGui::GetFrameHeightWithSpacing() } };
+
+                    ImGui::BeginGroup();
+                    if (HostUI::BeginMenubar(menuBarRect))
+                    {
+                        m_menubarCallback();   // menus only, no Begin/End
+                    }
+
+                    HostUI::EndMenubar();
+                    ImGui::EndGroup();
+                    
 
                     if (ImGui::IsItemHovered())
                         m_TitleBarHovered = false;
@@ -568,11 +704,22 @@ namespace adapters {
 
             }
             
+            {
+                // Centered Window title
+                ImVec2 currentCursorPos = ImGui::GetCursorPos();
+                ImVec2 textSize = ImGui::CalcTextSize("m_Specification");
+                ImGui::SetCursorPos(ImVec2(ImGui::GetWindowWidth() * 0.5f - textSize.x * 0.5f, 2.0f + windowPadding.y + 6.0f));
+                ImGui::Text("%s", "m_Specification"); // Draw title
+                ImGui::SetCursorPos(currentCursorPos);
+            }
 
             // Window buttons (top-right, grouped)
             const ImU32 buttonColN = UI::Colors::ColorWithMultipliedValue(UI::Colors::Theme::text, 0.9f);
             const ImU32 buttonColH = UI::Colors::ColorWithMultipliedValue(UI::Colors::Theme::text, 1.2f);
             const ImU32 buttonColP = UI::Colors::Theme::textDarker;
+
+            
+            ImGui::SetCursorPosY(ImGui::GetFrameHeightWithSpacing() /2 );
 
             auto layout = HostUI::BeginHorizontal();
 

@@ -318,9 +318,7 @@ namespace core {
     void Application::setupToolbarMenus() {
         m_uiAdapter->setMenubarCallback([this]()
             {
-                if (ImGui::BeginMenuBar())
-                {
-
+               
                     if (ImGui::BeginMenu("File"))
                     {
                         if (ImGui::MenuItem("Open")) {}
@@ -362,8 +360,8 @@ namespace core {
                         }
                         ImGui::EndMenu();
                     }
-                    ImGui::EndMenuBar();
-                }
+                    
+                
             });
     }
 
