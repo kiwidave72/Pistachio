@@ -14,6 +14,9 @@ public:
     virtual void endFrame() = 0;
     virtual void render() = 0;
     virtual void setMenubarCallback(const std::function<void()>& menubarCallback) = 0;
+    // Hot reload the UI plugin module, if the current UI adapter supports it.
+    // Returns true on success; false if unsupported or reload failed.
+    virtual bool hotReloadUiPlugin() = 0;
 
 };
 

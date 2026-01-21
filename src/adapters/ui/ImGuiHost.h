@@ -32,6 +32,7 @@ public:
     void endFrame() override;
     void render() override;
     void setMenubarCallback(const std::function<void()>& menubarCallback) override;
+    bool hotReloadUiPlugin() override; // unsupported in raw host
 
     // IGuiHost
     void setWindowControlIcons(

@@ -344,7 +344,13 @@ namespace core {
                     }
                     if (ImGui::BeginMenu("Tools"))
                     {
-                        // NOTE: you probably want tools here
+                        // Host-side tooling
+                        if (ImGui::MenuItem("Hot Reload UI Plugin", "Ctrl+R"))
+                        {
+                            const bool ok = m_uiAdapter->hotReloadUiPlugin();
+                            updateStatus(ok ? "UI plugin hot reloaded" : "UI plugin hot reload failed/unsupported");
+                        }
+
                         ImGui::EndMenu();
                     }
                     if (ImGui::BeginMenu("View"))
@@ -359,6 +365,24 @@ namespace core {
                             //exampleLayer->ShowAboutModal();
                         }
                         ImGui::EndMenu();
+                    }
+
+                    // "Toolbar" style quick action
+                    ImGui::SameLine();
+                    if (ImGui::SmallButton("Reload UI"))
+                    {
+                        const bool ok = m_uiAdapter->hotReloadUiPlugin();
+                        updateStatus(ok ? "UI plugin hot reloaded" : "UI plugin hot reload failed/unsupported");
+                    }
+
+                    // Shortcut: Ctrl+R (avoid firing while typing into inputs)
+                    {
+                        ImGuiIO& io = ImGui::GetIO();
+                        if (!io.WantTextInput && io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_R))
+                        {
+                            const bool ok = m_uiAdapter->hotReloadUiPlugin();
+                            updateStatus(ok ? "UI plugin hot reloaded" : "UI plugin hot reload failed/unsupported");
+                        }
                     }
                     
                 

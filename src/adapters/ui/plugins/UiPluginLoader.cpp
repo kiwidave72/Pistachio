@@ -6,6 +6,7 @@
 #endif
 #include <filesystem>
 #include <chrono>
+#include <thread>
 #include <iostream>
 
 namespace fs = std::filesystem;
@@ -28,6 +29,41 @@ static std::string nowStamp() {
     return std::to_string(ms);
 }
 
+#ifdef _WIN32
+static bool CopyFileWithRetryWin(const std::filesystem::path& src, const std::filesystem::path& dst, int retries = 40, int sleepMs = 10)
+{
+    // When the debugger is attached, VS/linker/AV may briefly hold the DLL with restrictive share flags.
+    // We retry and also require only read access with maximal sharing.
+    std::wstring srcW = src.wstring();
+    std::wstring dstW = dst.wstring();
+
+    for (int i = 0; i < retries; ++i)
+    {
+        HANDLE h = CreateFileW(
+            srcW.c_str(),
+            GENERIC_READ,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            nullptr,
+            OPEN_EXISTING,
+            FILE_ATTRIBUTE_NORMAL,
+            nullptr);
+
+        if (h != INVALID_HANDLE_VALUE)
+        {
+            CloseHandle(h);
+
+            // CopyFileW will still fail if src is mid-write; retry in that case.
+            if (CopyFileW(srcW.c_str(), dstW.c_str(), FALSE))
+                return true;
+        }
+
+        std::this_thread::sleep_for(std::chrono::milliseconds(sleepMs));
+    }
+    return false;
+}
+#endif
+
+
 bool UiPluginLoader::shadowCopyFile(const std::string& sourceDllPath, std::string& outLoadedPath) {
     try {
         fs::path src(sourceDllPath);
@@ -43,20 +79,39 @@ bool UiPluginLoader::shadowCopyFile(const std::string& sourceDllPath, std::strin
 #endif
 
         fs::path dst = loadedDir / (src.stem().string() + "_" + nowStamp() + "_" + std::to_string((int)pid) + src.extension().string());
-        fs::copy_file(src, dst, fs::copy_options::overwrite_existing);
 
-        fs::path srcPdb = src; srcPdb.replace_extension(".pdb");
+#ifdef _WIN32
+        if (!CopyFileWithRetryWin(src, dst)) {
+            return false;
+        }
+#else
+        fs::copy_file(src, dst, fs::copy_options::overwrite_existing);
+#endif
+
+        fs::path srcPdb = src;
+        srcPdb.replace_extension(".pdb");
         if (fs::exists(srcPdb)) {
-            fs::path dstPdb = dst; dstPdb.replace_extension(".pdb");
+            fs::path dstPdb = dst;
+            dstPdb.replace_extension(".pdb");
+#ifdef _WIN32
+            // PDBs can also be held by the debugger/symbol loader.
+            if (!CopyFileWithRetryWin(srcPdb, dstPdb)) {
+                // Not fatal to load UI, but symbols will be missing. Treat as non-fatal.
+            }
+#else
             fs::copy_file(srcPdb, dstPdb, fs::copy_options::overwrite_existing);
+#endif
         }
 
         outLoadedPath = dst.string();
         return true;
-    } catch (...) {
+    }
+    catch (...) {
         return false;
     }
 }
+
+
 
 bool UiPluginLoader::load(const std::string& sourceDllPath, UiHostServices& svc) {
 #ifdef _WIN32
@@ -79,8 +134,8 @@ bool UiPluginLoader::load(const std::string& sourceDllPath, UiHostServices& svc)
             resolved = e.path();
             break;
         }
-     }
-    
+    }
+
     unload(svc);
 
     if (resolved.empty()) {
@@ -89,7 +144,7 @@ bool UiPluginLoader::load(const std::string& sourceDllPath, UiHostServices& svc)
     }
 
 
-   
+
     // Resolve plugin path reliably:
     // - Visual Studio's working directory is often the project folder, not the EXE folder.
     // - If the user passes a relative path, resolve it against the executable directory.
@@ -134,7 +189,7 @@ bool UiPluginLoader::load(const std::string& sourceDllPath, UiHostServices& svc)
         return false;
     }
 
-    auto createFn = (IUiModule*(*)())GetProcAddress((HMODULE)m_lib, "pistachio_create_ui_module");
+    auto createFn = (IUiModule * (*)())GetProcAddress((HMODULE)m_lib, "pistachio_create_ui_module");
     if (!createFn) {
         DWORD err = GetLastError();
         std::cout << "[Plugin] [ERROR] GetProcAddress(pistachio_create_ui_module) failed. GetLastError=" << err << std::endl;

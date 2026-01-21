@@ -14,6 +14,10 @@
 #include <filesystem>
 #include <iostream>
 
+// For safe hot-reload font texture rebuild
+#include <GLFW/glfw3.h>
+#include <backends/imgui_impl_opengl3.h>
+
 int main(int argc, char** argv) {
     try {
         std::cout << "===========================================\n";
@@ -66,7 +70,30 @@ int main(int argc, char** argv) {
             }
 
             bool shouldClose() override { return m_host.shouldClose(); }
-            void beginFrame() override { m_host.beginFrame(); }
+            void beginFrame() override {
+                // Hot-reload must NOT happen between ImGui::NewFrame() and ImGui::Render(),
+                // because ImFontAtlas is locked during that span.
+                // Defer reloads until the start of a new frame (before host calls ImGui::NewFrame()).
+                if (m_reloadRequested) {
+                    m_reloadRequested = false;
+
+                    // Ensure a valid GL context for any backend font texture rebuild.
+                    // (ImGuiHost::beginFrame will do this again; that's OK.)
+                    glfwMakeContextCurrent(m_host.window());
+
+                    if (m_loaded) {
+                        std::cout << "[HotReloadUiAdapter] Hot reload requested -> reloading plugin now (safe point)" << std::endl;
+                        const bool ok = m_loader.reload(m_svc);
+                        std::cout << "[HotReloadUiAdapter] Reload result: " << (ok ? "OK" : "FAIL") << std::endl;
+
+                        // If the plugin modified fonts (AddFont...), rebuild font texture BEFORE NewFrame.
+                        ImGui_ImplOpenGL3_DestroyFontsTexture();
+                        ImGui_ImplOpenGL3_CreateFontsTexture();
+                    }
+                }
+
+                m_host.beginFrame();
+            }
 
             void render() override {
                 static bool s_warned = false;
@@ -86,6 +113,13 @@ int main(int argc, char** argv) {
                 m_host.setMenubarCallback(menubarCallback);
             }
 
+            bool hotReloadUiPlugin() override {
+                // Do NOT reload immediately (we are typically inside NewFrame..Render).
+                // Schedule it for the next beginFrame() safe point.
+                m_reloadRequested = true;
+                return true;
+            }
+
             bool reload() {
                 if (!m_loaded) return false;
                 return m_loader.reload(m_svc);
@@ -98,6 +132,7 @@ int main(int argc, char** argv) {
             UiPluginLoader m_loader;
             UiHostServices m_svc{};
             bool m_loaded = false;
+            bool m_reloadRequested = false;
         };
 
         app->setUIAdapter(std::make_unique<HotReloadUiAdapter>(app.get()));

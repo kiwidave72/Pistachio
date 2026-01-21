@@ -892,4 +892,10 @@ namespace adapters {
         m_menubarCallback = menubarCallback;
     }
 
+    bool ImGuiHost::hotReloadUiPlugin()
+    {
+        // Raw host has no plugin loader; hot reload is handled by the adapter that owns UiPluginLoader.
+        return false;
+    }
+
 } // namespace adapters
