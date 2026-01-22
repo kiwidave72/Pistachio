@@ -157,11 +157,20 @@ m_reloadPending = false;
 
         void setUiPluginEnabled(bool enabled) override
         {
+            // Update desired state immediately so UI reflects the toggle right away.
+            m_enabled = enabled;
+
             // Defer actual load/unload until endFrame (safe point) to avoid ImFontAtlas lock asserts.
             if (enabled)
+            {
+                m_disableRequested = false;
                 m_enableRequested = true;
+            }
             else
+            {
+                m_enableRequested = false;
                 m_disableRequested = true;
+            }
         }
 
         void requestHotReloadUiPlugin() override
