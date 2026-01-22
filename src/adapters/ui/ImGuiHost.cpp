@@ -27,6 +27,9 @@
 #pragma once
 #include <imgui.h>
 
+
+
+
 namespace HostUI
 {
 
@@ -375,8 +378,7 @@ namespace adapters {
 
         IMGUI_CHECKVERSION();
         ImGui::CreateContext();
-
-        ImGuiIO& io = ImGui::GetIO();
+ImGuiIO& io = ImGui::GetIO();
 
         // Docking is fine
         io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
@@ -519,7 +521,7 @@ namespace adapters {
     // frame lifecycle
     // ============================================================
 
-    bool ImGuiHost::shouldClose()
+    bool ImGuiHost::shouldClose() const
     {
         return m_window ? glfwWindowShouldClose(m_window) : true;
     }
@@ -892,10 +894,32 @@ namespace adapters {
         m_menubarCallback = menubarCallback;
     }
 
-    bool ImGuiHost::hotReloadUiPlugin()
-    {
-        // Raw host has no plugin loader; hot reload is handled by the adapter that owns UiPluginLoader.
-        return false;
-    }
+
+ports::UiPluginStatus ImGuiHost::getUiPluginStatus() const
+{
+    ports::UiPluginStatus s;
+    s.enabled = m_uiPluginEnabled;
+    // This host does not load plugins itself in this build; mark as not-loaded but enabled state is tracked.
+    s.loaded = false;
+    s.id = "pistachio_ui";
+    s.name = "Pistachio UI";
+    s.version = "0.0.0";
+    s.featureGroup = "UI";
+    if (m_uiPluginHotReloadRequested)
+        s.lastError = "Hot reload requested (pending)";
+    return s;
+}
+
+void ImGuiHost::setUiPluginEnabled(bool enabled)
+{
+    m_uiPluginEnabled = enabled;
+}
+
+void ImGuiHost::requestHotReloadUiPlugin()
+{
+    m_uiPluginHotReloadRequested = false; // auto-clear pending after reload trigger
+
+}
 
 } // namespace adapters
+

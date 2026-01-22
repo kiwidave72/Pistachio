@@ -344,13 +344,7 @@ namespace core {
                     }
                     if (ImGui::BeginMenu("Tools"))
                     {
-                        // Host-side tooling
-                        if (ImGui::MenuItem("Hot Reload UI Plugin", "Ctrl+R"))
-                        {
-                            const bool ok = m_uiAdapter->hotReloadUiPlugin();
-                            updateStatus(ok ? "UI plugin hot reloaded" : "UI plugin hot reload failed/unsupported");
-                        }
-
+                        // NOTE: you probably want tools here
                         ImGui::EndMenu();
                     }
                     if (ImGui::BeginMenu("View"))
@@ -367,25 +361,29 @@ namespace core {
                         ImGui::EndMenu();
                     }
 
-                    // "Toolbar" style quick action
-                    ImGui::SameLine();
-                    if (ImGui::SmallButton("Reload UI"))
+                    if (ImGui::BeginMenu("Plugins"))
                     {
-                        const bool ok = m_uiAdapter->hotReloadUiPlugin();
-                        updateStatus(ok ? "UI plugin hot reloaded" : "UI plugin hot reload failed/unsupported");
+                        auto st = m_uiAdapter->getUiPluginStatus();
+                        bool enabled = st.enabled;
+                        if (ImGui::MenuItem("Enabled", nullptr, &enabled))
+                        {
+                            m_uiAdapter->setUiPluginEnabled(enabled);
+                        }
+                        if (ImGui::MenuItem("Hot Reload", "Ctrl+R"))
+                        {
+                            m_uiAdapter->requestHotReloadUiPlugin();
+                        }
+                        ImGui::Separator();
+                        ImGui::TextDisabled("ID: %s", st.id.c_str());
+                        ImGui::TextDisabled("Name: %s", st.name.c_str());
+                        ImGui::TextDisabled("Version: %s", st.version.c_str());
+                        ImGui::TextDisabled("Group: %s", st.featureGroup.c_str());
+                        if (!st.lastError.empty())
+                            ImGui::TextColored(ImVec4(1,0.4f,0.4f,1), "Error: %s", st.lastError.c_str());
+                        ImGui::EndMenu();
                     }
 
-                    // Shortcut: Ctrl+R (avoid firing while typing into inputs)
-                    {
-                        ImGuiIO& io = ImGui::GetIO();
-                        if (!io.WantTextInput && io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_R))
-                        {
-                            const bool ok = m_uiAdapter->hotReloadUiPlugin();
-                            updateStatus(ok ? "UI plugin hot reloaded" : "UI plugin hot reload failed/unsupported");
-                        }
-                    }
-                    
-                
+
             });
     }
 

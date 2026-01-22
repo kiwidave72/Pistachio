@@ -1,10 +1,11 @@
 
 #pragma once
+#include <stdint.h>
 
 struct UiHostServices {
-    void* app;    // core::Application*
-    void* window; // GLFWwindow*
-    void* guiHost; // IGuiHost* (host-owned, stable across hot reload)
+    void* app;     // core::Application*
+    void* window;  // GLFWwindow*
+    void* guiHost; // host UI
 };
 
 struct IUiModule {
@@ -22,3 +23,14 @@ struct IUiModule {
 
 PISTACHIO_UI_EXPORT IUiModule* pistachio_create_ui_module();
 PISTACHIO_UI_EXPORT void       pistachio_destroy_ui_module(IUiModule*);
+
+struct UiPluginManifestV1 {
+    uint32_t struct_size;
+    uint32_t api_version;
+    const char* id;
+    const char* name;
+    const char* version;
+    const char* feature_group;
+};
+
+PISTACHIO_UI_EXPORT const UiPluginManifestV1* pistachio_get_ui_manifest();

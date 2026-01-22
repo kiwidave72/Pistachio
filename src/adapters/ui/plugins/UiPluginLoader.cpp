@@ -2,244 +2,232 @@
 #include "adapters/ui/plugins/UiPluginLoader.h"
 
 #ifdef _WIN32
-#include <windows.h>
+  #include <windows.h>
 #endif
+
 #include <filesystem>
 #include <chrono>
 #include <thread>
-#include <iostream>
 
 namespace fs = std::filesystem;
 
 #ifdef _WIN32
-static std::filesystem::path getExeDir()
+static fs::path getExeDir()
 {
     char buf[MAX_PATH] = {};
     DWORD n = GetModuleFileNameA(nullptr, buf, MAX_PATH);
-    if (n == 0 || n >= MAX_PATH)
-        return {};
-    std::filesystem::path p(buf);
-    return p.parent_path();
+    if (n == 0 || n >= MAX_PATH) return {};
+    return fs::path(buf).parent_path();
+}
+#else
+static fs::path getExeDir()
+{
+    return fs::current_path();
 }
 #endif
 
-static std::string nowStamp() {
+static std::string nowMillis()
+{
     using namespace std::chrono;
     auto ms = duration_cast<milliseconds>(system_clock::now().time_since_epoch()).count();
     return std::to_string(ms);
 }
 
-#ifdef _WIN32
-static bool CopyFileWithRetryWin(const std::filesystem::path& src, const std::filesystem::path& dst, int retries = 40, int sleepMs = 10)
+UiPluginLoader::~UiPluginLoader()
 {
-    // When the debugger is attached, VS/linker/AV may briefly hold the DLL with restrictive share flags.
-    // We retry and also require only read access with maximal sharing.
-    std::wstring srcW = src.wstring();
-    std::wstring dstW = dst.wstring();
-
-    for (int i = 0; i < retries; ++i)
-    {
-        HANDLE h = CreateFileW(
-            srcW.c_str(),
-            GENERIC_READ,
-            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-            nullptr,
-            OPEN_EXISTING,
-            FILE_ATTRIBUTE_NORMAL,
-            nullptr);
-
-        if (h != INVALID_HANDLE_VALUE)
-        {
-            CloseHandle(h);
-
-            // CopyFileW will still fail if src is mid-write; retry in that case.
-            if (CopyFileW(srcW.c_str(), dstW.c_str(), FALSE))
-                return true;
-        }
-
-        std::this_thread::sleep_for(std::chrono::milliseconds(sleepMs));
-    }
-    return false;
+    if (m_module || m_lib)
+        unload();
 }
-#endif
 
+void UiPluginLoader::clearManifest()
+{
+    m_manifestId.clear();
+    m_manifestName.clear();
+    m_manifestVersion.clear();
+    m_manifestFeatureGroup.clear();
+}
 
-bool UiPluginLoader::shadowCopyFile(const std::string& sourceDllPath, std::string& outLoadedPath) {
-    try {
+bool UiPluginLoader::shadowCopyToUnique(const std::string& sourceDllPath, std::string& outLoadedPath)
+{
+    try
+    {
         fs::path src(sourceDllPath);
-        if (!fs::exists(src)) return false;
+        if (!fs::exists(src))
+            return false;
 
         fs::path loadedDir = src.parent_path() / "_loaded";
         fs::create_directories(loadedDir);
 
 #ifdef _WIN32
-        DWORD pid = GetCurrentProcessId();
-#else
-        int pid = 0;
-#endif
+        fs::path dst = loadedDir / (src.stem().string() + "_" + nowMillis() + "_" + std::to_string(::GetCurrentProcessId()) + src.extension().string());
 
-        fs::path dst = loadedDir / (src.stem().string() + "_" + nowStamp() + "_" + std::to_string((int)pid) + src.extension().string());
+        for (int i = 0; i < 50; ++i)
+        {
+            HANDLE h = CreateFileA(
+                src.string().c_str(),
+                GENERIC_READ,
+                FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                nullptr,
+                OPEN_EXISTING,
+                FILE_ATTRIBUTE_NORMAL,
+                nullptr);
 
-#ifdef _WIN32
-        if (!CopyFileWithRetryWin(src, dst)) {
-            return false;
-        }
-#else
-        fs::copy_file(src, dst, fs::copy_options::overwrite_existing);
-#endif
-
-        fs::path srcPdb = src;
-        srcPdb.replace_extension(".pdb");
-        if (fs::exists(srcPdb)) {
-            fs::path dstPdb = dst;
-            dstPdb.replace_extension(".pdb");
-#ifdef _WIN32
-            // PDBs can also be held by the debugger/symbol loader.
-            if (!CopyFileWithRetryWin(srcPdb, dstPdb)) {
-                // Not fatal to load UI, but symbols will be missing. Treat as non-fatal.
+            if (h != INVALID_HANDLE_VALUE)
+            {
+                CloseHandle(h);
+                if (CopyFileA(src.string().c_str(), dst.string().c_str(), FALSE))
+                {
+                    outLoadedPath = dst.string();
+                    return true;
+                }
             }
-#else
-            fs::copy_file(srcPdb, dstPdb, fs::copy_options::overwrite_existing);
-#endif
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
         }
-
+        return false;
+#else
+        fs::path dst = loadedDir / (src.stem().string() + "_" + nowMillis() + src.extension().string());
+        fs::copy_file(src, dst, fs::copy_options::overwrite_existing);
         outLoadedPath = dst.string();
         return true;
+#endif
     }
-    catch (...) {
+    catch (...)
+    {
         return false;
     }
 }
 
+bool UiPluginLoader::load(UiHostServices& svc)
+{
+    m_lastSvc = &svc;
 
+    m_lastError.clear();
+    clearManifest();
 
-bool UiPluginLoader::load(const std::string& sourceDllPath, UiHostServices& svc) {
+    if (m_module)
+        return true;
+
+    fs::path pluginsDir = getExeDir() / "plugins";
 #ifdef _WIN32
-    auto dir = GetPluginDir();
-    std::cout << "[Plugin] Searching in: " << dir.string() << "\n";
+    fs::path src = pluginsDir / "pistachio_ui.dll";
+#else
+    fs::path src = pluginsDir / "libpistachio_ui.so";
+#endif
+    m_sourcePath = src.string();
 
-    fs::path resolved;
-
-    for (auto& e : std::filesystem::directory_iterator(dir))
+    std::string loaded;
+    if (!shadowCopyToUnique(m_sourcePath, loaded))
     {
-        std::cout << "  found: " << e.path().filename().string() << "\n";
+        m_lastError = "Failed to shadow-copy: " + m_sourcePath;
+        return false;
+    }
+    m_loadedPath = loaded;
 
-        if (!e.is_regular_file()) { std::cout << "    skip: not a file\n"; continue; }
-        if (e.path().extension() != ".dll") {
-            std::cout << "    skip: not dll\n";
-            continue;
-        }
-        else
+#ifdef _WIN32
+    HMODULE lib = LoadLibraryA(m_loadedPath.c_str());
+    if (!lib)
+    {
+        m_lastError = "LoadLibrary failed: " + m_loadedPath;
+        return false;
+    }
+
+    auto createFn  = (decltype(&pistachio_create_ui_module))GetProcAddress(lib, "pistachio_create_ui_module");
+    auto destroyFn = (decltype(&pistachio_destroy_ui_module))GetProcAddress(lib, "pistachio_destroy_ui_module");
+    auto manFn     = (decltype(&pistachio_get_ui_manifest))GetProcAddress(lib, "pistachio_get_ui_manifest");
+
+    if (!createFn || !destroyFn)
+    {
+        FreeLibrary(lib);
+        m_lastError = "Missing required exports (create/destroy)";
+        return false;
+    }
+
+    if (manFn)
+    {
+        const UiPluginManifestV1* m = manFn();
+        if (m && m->api_version == 1 && m->struct_size >= sizeof(UiPluginManifestV1))
         {
-            resolved = e.path();
-            break;
+            if (m->id)            m_manifestId = m->id;
+            if (m->name)          m_manifestName = m->name;
+            if (m->version)       m_manifestVersion = m->version;
+            if (m->feature_group) m_manifestFeatureGroup = m->feature_group;
         }
     }
 
-    unload(svc);
-
-    if (resolved.empty()) {
-        std::cout << "[Plugin] [ERROR] No .dll found in plugins directory." << std::endl;
+    IUiModule* mod = createFn();
+    if (!mod)
+    {
+        FreeLibrary(lib);
+        m_lastError = "Create module returned null";
         return false;
     }
 
-
-
-    // Resolve plugin path reliably:
-    // - Visual Studio's working directory is often the project folder, not the EXE folder.
-    // - If the user passes a relative path, resolve it against the executable directory.
-    //fs::path resolved = fs::path(sourceDllPath);
-    //if (!resolved.is_absolute()) {
-    //    fs::path exeDir = getExeDir();
-    //    if (!exeDir.empty()) {
-    //        fs::path candidate = exeDir / resolved;
-    //        if (fs::exists(candidate))
-    //            resolved = candidate;
-    //        else {
-    //            // Common convention: plugins live next to the EXE in a "plugins" folder.
-    //            fs::path candidate2 = exeDir / "plugins" / resolved.filename();
-    //            if (fs::exists(candidate2))
-    //                resolved = candidate2;
-    //            else
-    //                resolved = fs::absolute(resolved);
-    //        }
-    //    } else {
-    //        resolved = fs::absolute(resolved);
-    //    }
-    //}
-
-    m_sourcePath = resolved.string();
-    m_loadedPath.clear();
-
-    std::cout << "[Plugin] Using source: " << m_sourcePath << std::endl;
-
-    std::string shadowPath;
-    if (!shadowCopyFile(m_sourcePath, shadowPath)) {
-        std::cout << "[Plugin] [ERROR] Failed to shadow-copy: " << m_sourcePath << std::endl;
-        return false;
-    }
-    m_loadedPath = shadowPath;
-
-    std::cout << "[Plugin] Shadow copy: " << m_loadedPath << std::endl;
-
-    m_lib = (void*)LoadLibraryA(m_loadedPath.c_str());
-    if (!m_lib) {
-        DWORD err = GetLastError();
-        std::cout << "[Plugin] [ERROR] LoadLibraryA failed. GetLastError=" << err << std::endl;
-        return false;
-    }
-
-    auto createFn = (IUiModule * (*)())GetProcAddress((HMODULE)m_lib, "pistachio_create_ui_module");
-    if (!createFn) {
-        DWORD err = GetLastError();
-        std::cout << "[Plugin] [ERROR] GetProcAddress(pistachio_create_ui_module) failed. GetLastError=" << err << std::endl;
-        FreeLibrary((HMODULE)m_lib);
-        m_lib = nullptr;
-        return false;
-    }
-
-    m_module = createFn();
-    if (!m_module) {
-        std::cout << "[Plugin] [ERROR] createFn() returned null module" << std::endl;
-        FreeLibrary((HMODULE)m_lib);
-        m_lib = nullptr;
-        return false;
-    }
-
-    std::cout << "[Plugin] Module created: " << m_module << std::endl;
+    m_lib = (void*)lib;
+    m_module = mod;
 
     m_module->onLoad(svc);
-    std::cout << "[Plugin] onLoad() completed" << std::endl;
     return true;
 #else
-    (void)sourceDllPath; (void)svc;
+    m_lastError = "Non-Windows loader not implemented.";
     return false;
 #endif
 }
 
-bool UiPluginLoader::reload(UiHostServices& svc) {
-    if (m_sourcePath.empty()) return false;
-    return load(m_sourcePath, svc);
+void UiPluginLoader::unload(UiHostServices& svc)
+{
+    (void)svc;
+    unload();
 }
 
-void UiPluginLoader::unload(UiHostServices& svc) {
-#ifdef _WIN32
-    if (m_module) {
-        m_module->onUnload(svc);
+void UiPluginLoader::unload()
+{
+    if (!m_module || !m_lib)
+        return;
 
-        auto destroyFn = (void(*)(IUiModule*))GetProcAddress((HMODULE)m_lib, "pistachio_destroy_ui_module");
-        if (destroyFn) destroyFn(m_module);
-        m_module = nullptr;
-    }
-    if (m_lib) {
-        FreeLibrary((HMODULE)m_lib);
-        m_lib = nullptr;
-    }
-#else
-    (void)svc;
+#ifdef _WIN32
+    auto lib = (HMODULE)m_lib;
+    auto destroyFn = (decltype(&pistachio_destroy_ui_module))GetProcAddress(lib, "pistachio_destroy_ui_module");
+
+    if (m_lastSvc)
+        m_module->onUnload(*m_lastSvc);
+
+    if (destroyFn)
+        destroyFn(m_module);
+
+    m_module = nullptr;
+
+    FreeLibrary(lib);
+    m_lib = nullptr;
+
+    clearManifest();
 #endif
 }
 
-void UiPluginLoader::render(UiHostServices& svc) {
-    if (m_module) m_module->render(svc);
+bool UiPluginLoader::reload(UiHostServices& svc)
+{
+    (void)svc;
+    return reload();
+}
+
+bool UiPluginLoader::reload()
+{
+    if (!m_lastSvc)
+    {
+        m_lastError = "Reload called before load() bound services";
+        return false;
+    }
+    unload();
+    return load(*m_lastSvc);
+}
+
+void UiPluginLoader::render(UiHostServices& svc)
+{
+    (void)svc;
+    render();
+}
+
+void UiPluginLoader::render()
+{
+    if (m_module && m_lastSvc)
+        m_module->render(*m_lastSvc);
 }

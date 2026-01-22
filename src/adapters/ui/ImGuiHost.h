@@ -27,12 +27,16 @@ public:
 
     bool initialize() override;
     void shutdown() override;
-    bool shouldClose() override;
+    bool shouldClose() const override;
     void beginFrame() override;
     void endFrame() override;
     void render() override;
     void setMenubarCallback(const std::function<void()>& menubarCallback) override;
-    bool hotReloadUiPlugin() override; // unsupported in raw host
+
+    // IUIPort plugin controls (host-level stubs; real plugin manager lives elsewhere)
+    ports::UiPluginStatus getUiPluginStatus() const override;
+    void setUiPluginEnabled(bool enabled) override;
+    void requestHotReloadUiPlugin() override;
 
     // IGuiHost
     void setWindowControlIcons(
@@ -80,6 +84,12 @@ private:
     ImTextureID m_iconClose    = nullptr;
     ImVec2      m_iconSize     = ImVec2(16.0f, 16.0f);
    
+
+private:
+    // Host-level UI plugin control (stubbed)
+    bool m_uiPluginEnabled = true;
+    mutable bool m_uiPluginHotReloadRequested = false;
+
 };
 
 } // namespace adapters

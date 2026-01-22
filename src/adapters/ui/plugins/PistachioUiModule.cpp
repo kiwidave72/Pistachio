@@ -65,3 +65,22 @@ PISTACHIO_UI_EXPORT void pistachio_destroy_ui_module(IUiModule* m)
 {
     delete m;
 }
+
+
+// ------------------------------
+// Embedded manifest
+// ------------------------------
+static const UiPluginManifestV1 g_manifest = {
+    sizeof(UiPluginManifestV1),
+    1,
+    "pistachio.ui",
+    "Pistachio UI",
+    "0.1.0",
+    "Sketching"
+};
+
+PISTACHIO_UI_EXPORT const UiPluginManifestV1* pistachio_get_ui_manifest()
+{
+    return &g_manifest;
+}
+
