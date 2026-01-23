@@ -9,6 +9,12 @@
 #include "core/Application.h"
 #include "ports/IUIPort.h"
 
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#include <windows.h>
+#endif
+
 #include "adapters/ui/ImGuiHost.h"
 
 // UI plugin loader (loads pistachio_ui.dll and calls PistachioUiModule)
@@ -136,6 +142,11 @@ m_reloadPending = false;
         void setMenubarCallback(const std::function<void()>& menubarCallback) override
         {
             m_host.setMenubarCallback(menubarCallback);
+        }
+
+        void setRibbonbarCallback(const std::function<void()>& ribbonbarCallback) override
+        {
+            m_host.setRibbonbarCallback(ribbonbarCallback);
         }
 
         // ----- plugin controls -----

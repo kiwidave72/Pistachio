@@ -185,9 +185,17 @@ namespace core {
         m_statusMessage = message;
     }
 
+    void Application::setRibbonbarCallback(const std::function<void()>& ribbonbarCallback)
+    {
+        if (m_uiAdapter)
+            m_uiAdapter->setRibbonbarCallback(ribbonbarCallback);
+    }
+
     bool Application::loadFile(const std::string& filepath) {
         return loadFileAsync(filepath);
     }
+
+
 
     bool Application::loadFileAsync(const std::string& filepath) {
         if (m_isLoading) {

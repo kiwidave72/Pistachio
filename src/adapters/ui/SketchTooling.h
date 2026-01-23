@@ -24,8 +24,6 @@ namespace adapters::sketchui {
     inline ImVec2 VMul(const ImVec2& a, float s) { return ImVec2(a.x * s, a.y * s); }
     inline ImVec2 VDiv(const ImVec2& a, float s) { return ImVec2(a.x / s, a.y / s); }
 
-
-
     // ImGui's ImRect lives in imgui_internal.h; keep a tiny local rect to avoid that include.
     struct Rect2 {
         ImVec2 Min{ 0,0 };
@@ -218,7 +216,8 @@ enum class ToolKind { None, Line2Pt, CircleCenterRadius, Constraint };
         const Canvas2D& canvas, ImDrawList* dl, const char* id,
         ImVec2 aW, ImVec2 bW,
         char* buf, int bufSize,
-        bool requestFocus)
+        bool requestFocus,
+        bool* outActive)
     {
         ImVec2 aS = canvas.WorldToScreen(aW);
         ImVec2 bS = canvas.WorldToScreen(bW);
@@ -238,11 +237,22 @@ enum class ToolKind { None, Line2Pt, CircleCenterRadius, Constraint };
         ImGui::PushID(id);
         ImGui::SetNextItemWidth(w);
         if (requestFocus) ImGui::SetKeyboardFocusHere();
-        bool enter = ImGui::InputText("##dim", buf, bufSize,
+
+        // InputText returns true when Enter is used to validate with EnterReturnsTrue.
+        const bool inputEnter = ImGui::InputText("##dim", buf, bufSize,
             ImGuiInputTextFlags_AutoSelectAll | ImGuiInputTextFlags_EnterReturnsTrue);
+
+        const bool inputActive = ImGui::IsItemActive();
+        // Some ImGui versions only reliably report deactivation (not "after edit"),
+        // so we return active state for the caller to detect focus loss.
+        const bool inputDeactivatedAfterEdit = ImGui::IsItemDeactivatedAfterEdit();
+
         ImGui::PopID();
 
-        return enter;
+        if (outActive) *outActive = inputActive;
+
+        // Commit if InputText explicitly validated, or if ImGui reports deactivated-after-edit.
+        return inputEnter || inputDeactivatedAfterEdit;
     }
 
     // Line: click start, click end, then inline edit length (enter to commit).
@@ -312,7 +322,7 @@ enum class ToolKind { None, Line2Pt, CircleCenterRadius, Constraint };
             case DraftStage::AdjustingValue: {
                 double v;
                 if (ParseDouble(m_buf, v))
-                    m_len = std::max(0.0001, v);
+                    m_len = (std::max)(0.0001, v);
                 m_bW = VAdd(m_aW, VMul(m_dirW, (float)m_len));
             } break;
 
@@ -325,18 +335,22 @@ enum class ToolKind { None, Line2Pt, CircleCenterRadius, Constraint };
             dl->AddLine(canvas.WorldToScreen(m_aW), canvas.WorldToScreen(m_bW), IM_COL32(255, 255, 0, 255), 2.0f);
 
             if (m_stage == DraftStage::AdjustingValue) {
-                bool enter = DrawDimensionEditBox(canvas, dl, "LineLen", m_aW, m_bW, m_buf, (int)sizeof(m_buf), m_focusEdit);
+                bool activeNow = false;
+                bool enter = DrawDimensionEditBox(canvas, dl, "LineLen", m_aW, m_bW, m_buf, (int)sizeof(m_buf), m_focusEdit, &activeNow);
+                if (!enter && m_editWasActive && !activeNow) enter = true;
+                m_editWasActive = activeNow;
                 m_focusEdit = false;
                 if (enter) {
                     domain::sketch::Vec2 a{ (double)m_aW.x, (double)m_aW.y };
                     domain::sketch::Vec2 b{ (double)m_bW.x, (double)m_bW.y };
                     ctx.history.Execute(std::make_unique<core::commands::AddLine2DCommand>(ctx.sketch, a, b));
+                    ctx.MarkDirty();
 
-                    // keep tool active for next segment
-                    m_aW = m_bW;
-                    m_stage = DraftStage::PickingEnd;
-                    m_hasStart = true;
-                }
+                    // Reset to start a new line (separate entity)
+                    m_stage = DraftStage::PickingStart;
+                    m_hasStart = false;
+                    m_editWasActive = false;
+}
             }
         }
 
@@ -350,6 +364,7 @@ enum class ToolKind { None, Line2Pt, CircleCenterRadius, Constraint };
         double m_len = 1.0;
 
         bool m_focusEdit = false;
+        bool m_editWasActive = false;
         char m_buf[64]{};
     };
 
@@ -388,12 +403,8 @@ enum class ToolKind { None, Line2Pt, CircleCenterRadius, Constraint };
                 return;
             }
 
-            if (m_stage == DraftStage::AdjustingValue && ImGui::IsKeyPressed(ImGuiKey_Enter)) {
-                Commit(ctx);
-                // keep tool active for next circle
-                Begin(ctx);
-                return;
-            }
+            // Commit is driven by the inline edit box (see DrawDimensionEditBox). Do not rely on
+            // raw Enter polling here because an active InputText can own the keyboard.
 
             // stage progression
             if (m_stage == DraftStage::PickingStart) {
@@ -419,7 +430,7 @@ enum class ToolKind { None, Line2Pt, CircleCenterRadius, Constraint };
             else if (m_stage == DraftStage::AdjustingValue) {
                 double v;
                 if (ParseDouble(m_buf, v))
-                    m_r = std::max(0.0001, v);
+                    m_r = (std::max)(0.0001, v);
             }
 
             if (!m_hasCenter) return;
@@ -444,12 +455,19 @@ enum class ToolKind { None, Line2Pt, CircleCenterRadius, Constraint };
                 if (m_buf[0] == '\0')
                     snprintf(m_buf, sizeof(m_buf), "%.3f", m_r);
 
+                bool activeNow = false;
                 bool enter = DrawDimensionEditBox(canvas, dl, "CircleRad",
-                    m_centerW, edgeW, m_buf, (int)sizeof(m_buf), m_focusEdit);
+                    m_centerW, edgeW, m_buf, (int)sizeof(m_buf), m_focusEdit, &activeNow);
                 m_focusEdit = false;
+                if (!enter && m_editWasActive && !activeNow) enter = true;
+                m_editWasActive = activeNow;
 
                 if (enter) {
-                    // handled by Enter keypath above too; keep harmless
+                    Commit(ctx);
+                    m_editWasActive = false;
+                    // Keep tool active for the next circle
+                    Begin(ctx);
+                    return;
                 }
             }
         }
@@ -459,6 +477,7 @@ enum class ToolKind { None, Line2Pt, CircleCenterRadius, Constraint };
         {
             domain::sketch::Vec2 c{ (double)m_centerW.x, (double)m_centerW.y };
             ctx.history.Execute(std::make_unique<core::commands::AddCircle2DCommand>(ctx.sketch, c, m_r));
+                    ctx.MarkDirty();
         }
 
         bool m_active = false;
@@ -469,6 +488,7 @@ enum class ToolKind { None, Line2Pt, CircleCenterRadius, Constraint };
         double m_r = 1.0;
 
         bool m_focusEdit = false;
+        bool m_editWasActive = false;
         char m_buf[64]{};
     };
 
@@ -515,7 +535,7 @@ enum class ToolKind { None, Line2Pt, CircleCenterRadius, Constraint };
             int required = RequiredPicks(icon);
 
             // Hover highlight
-            const float tolW = 6.0f / std::max(canvas.pixels_per_unit, 1.0f);
+            const float tolW = 6.0f / (std::max)(canvas.pixels_per_unit, 1.0f);
             ImVec2 mouseW = canvas.ScreenToWorld(ImGui::GetMousePos());
             PickResult hover = PickGeometry(ctx.sketch, mouseW, tolW);
 
@@ -549,7 +569,6 @@ enum class ToolKind { None, Line2Pt, CircleCenterRadius, Constraint };
                     }
                 }
             }
-
 
             // Push hover + picked ids out to the renderer so entities can be highlighted.
             if (ctx.uiHoverId)
@@ -670,9 +689,6 @@ enum class ToolKind { None, Line2Pt, CircleCenterRadius, Constraint };
         }
     };
 
-
-
     // Minimal placeholder constraint tool: makes constraint selection "an active tool"
-
 
 } // namespace adapters::sketchui

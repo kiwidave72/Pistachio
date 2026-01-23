@@ -32,6 +32,7 @@ public:
     void endFrame() override;
     void render() override;
     void setMenubarCallback(const std::function<void()>& menubarCallback) override;
+    void setRibbonbarCallback(const std::function<void()>& ribbonbarCallback) override;
 
     // IUIPort plugin controls (host-level stubs; real plugin manager lives elsewhere)
     ports::UiPluginStatus getUiPluginStatus() const override;
@@ -66,6 +67,7 @@ private:
     GLFWwindow* m_window = nullptr;
     bool m_initialized = false;
     std::function<void()> m_menubarCallback;
+    std::function<void()> m_ribbonbarCallback;
     bool m_TitleBarHovered = false;
 
     bool IsTitleBarHovered() const { return m_TitleBarHovered; }

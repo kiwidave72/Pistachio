@@ -30,9 +30,16 @@ public:
         // IMPORTANT: only do resource/font setup BEFORE first NewFrame
         // Your host must call module->onLoad() before ImGui::NewFrame().
         m_adapter->initializeResources();
+
+        // Provide ribbon bar contents via host callback (like menubar)
+        if (app)
+            app->setRibbonbarCallback([this]() { if (m_adapter) m_adapter->renderRibbonBar(); });
     }
 
-    void onUnload(UiHostServices&) override {
+    void onUnload(UiHostServices& svc) override {
+        auto* app = reinterpret_cast<core::Application*>(svc.app);
+        if (app)
+            app->setRibbonbarCallback([](){});
         delete m_adapter;
         m_adapter = nullptr;
     }

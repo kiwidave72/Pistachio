@@ -240,7 +240,7 @@ private:
 
             for (const auto& [idx, c] : m_removedConstraints)
             {
-                const size_t ins = std::min(idx, m_sketch.constraints.size());
+                const size_t ins = (std::min)(idx, m_sketch.constraints.size());
                 m_sketch.constraints.insert(m_sketch.constraints.begin() + (std::ptrdiff_t)ins, c);
 
                 // Ensure nextConstraintId won't collide.

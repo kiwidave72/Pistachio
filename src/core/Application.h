@@ -36,6 +36,7 @@ namespace core {
         void shutdown();
 
         void setupToolbarMenus();
+        void setRibbonbarCallback(const std::function<void()>& ribbonbarCallback);
         bool loadFile(const std::string& filepath);
         bool loadFileAsync(const std::string& filepath);
         bool exportFile(const std::string& filepath, const std::string& format);

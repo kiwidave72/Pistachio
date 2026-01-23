@@ -33,6 +33,7 @@ struct IUIPort {
     virtual void render() = 0;
     virtual void endFrame() = 0;
     virtual void setMenubarCallback(const std::function<void()>& menubarCallback) = 0;
+    virtual void setRibbonbarCallback(const std::function<void()>& ribbonbarCallback) = 0;
 
     // ----- Plugin manager controls (new) -----
     virtual UiPluginStatus getUiPluginStatus() const = 0;

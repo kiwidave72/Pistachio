@@ -590,7 +590,7 @@ ImGuiIO& io = ImGui::GetIO();
         ImGui::NewFrame();
 
 
-        float titlebarHeight = 50.0f;
+        float titlebarHeight = 96.0f; // includes menu row + ribbon row
         const bool isMaximized = IsMaximized();
         float titlebarVerticalOffset = isMaximized ? -6.0f : 0.0f;
         const ImVec2 windowPadding = ImGui::GetCurrentWindow()->WindowPadding;
@@ -653,14 +653,33 @@ ImGuiIO& io = ImGui::GetIO();
             //fgDrawList->AddRect(ImGui::GetCursorScreenPos(), ImVec2(ImGui::GetCursorScreenPos().x + w - buttonsAreaWidth, ImGui::GetCursorScreenPos().y + titlebarHeight), UI::Colors::Theme::invalidPrefab);
             ImGui::InvisibleButton("##titleBarDragZone", ImVec2(w - buttonsAreaWidth, titlebarHeight));
 
-            m_TitleBarHovered = ImGui::IsItemHovered();
+            
+            ImGui::SetItemAllowOverlap(); // allow menubar/buttons drawn on top to receive clicks
+m_TitleBarHovered = ImGui::IsItemHovered();
 
             const bool dragZoneHovered = ImGui::IsItemHovered(ImGuiHoveredFlags_RectOnly);
             const bool dragZoneClicked = ImGui::IsItemClicked(ImGuiMouseButton_Left); // first press
+
+            // IMPORTANT:
+            // The titlebar drag-zone covers the entire titlebar area. Even with SetItemAllowOverlap(),
+            // it can still "eat" the first click intended for the menubar/ribbon buttons.
+            // Suppress dragging when the mouse is over the menu/ribbon strip.
+            const ImVec2 mouse = ImGui::GetMousePos();
+            const float logoHorizontalOffset = 16.0f * 2.0f + 48.0f + windowPadding.x;
+            const float menuTopY = viewport->Pos.y + (windowPadding.y + titlebarVerticalOffset);
+            const float menuHeight = ImGui::GetFrameHeightWithSpacing();
+            const float ribbonTopY = menuTopY + menuHeight;
+            const float ribbonHeight = menuHeight; // one row of buttons
+
+            const bool mouseOverMenu = (mouse.x >= viewport->Pos.x + logoHorizontalOffset) &&
+                                      (mouse.y >= menuTopY) && (mouse.y <= menuTopY + menuHeight);
+            const bool mouseOverRibbon = (mouse.x >= viewport->Pos.x + logoHorizontalOffset) &&
+                                        (mouse.y >= ribbonTopY) && (mouse.y <= ribbonTopY + ribbonHeight);
+            const bool mouseOverMenuOrRibbon = mouseOverMenu || mouseOverRibbon;
             // or: const bool dragZoneActive = ImGui::IsItemActive();
 
 #ifdef _WIN32
-            if (dragZoneClicked)  // only begin a drag when click begins in the zone
+            if (dragZoneClicked && !mouseOverMenuOrRibbon)  // only begin a drag when click begins in the zone
             {
                 HWND hwnd = glfwGetWin32Window(m_window);
 
@@ -696,6 +715,19 @@ ImGuiIO& io = ImGui::GetIO();
 
                     HostUI::EndMenubar();
                     ImGui::EndGroup();
+
+                    // Ribbon bar (second row)
+                    if (m_ribbonbarCallback) {
+                        ImGui::SetCursorPos(ImVec2(logoHorizontalOffset, 6.0f + titlebarVerticalOffset + ImGui::GetFrameHeightWithSpacing()));
+                        const ImRect ribbonRect = { ImGui::GetCursorPos(), { ImGui::GetContentRegionAvail().x + ImGui::GetCursorScreenPos().x, ImGui::GetFrameHeightWithSpacing() * 2.0f } };
+                        ImGui::BeginGroup();
+                        // Ribbon callback draws content only (no Begin/End)
+                        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(6.0f, 4.0f));
+                        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(6.0f, 4.0f));
+                        m_ribbonbarCallback();
+                        ImGui::PopStyleVar(2);
+                        ImGui::EndGroup();
+                    }
 
 
                     if (ImGui::IsItemHovered())
@@ -894,6 +926,12 @@ ImGuiIO& io = ImGui::GetIO();
         m_menubarCallback = menubarCallback;
     }
 
+void ImGuiHost::setRibbonbarCallback(const std::function<void()>& ribbonbarCallback)
+{
+    m_ribbonbarCallback = ribbonbarCallback;
+}
+
+
 
 ports::UiPluginStatus ImGuiHost::getUiPluginStatus() const
 {
@@ -922,4 +960,3 @@ void ImGuiHost::requestHotReloadUiPlugin()
 }
 
 } // namespace adapters
-
