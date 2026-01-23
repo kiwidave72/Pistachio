@@ -172,4 +172,127 @@ Limits:
 
 ---
 
+## 7. Building & Running the Application
+
+The project uses **CMake** and builds on Windows, macOS, and Linux.
+
+### Prerequisites
+
+- CMake **3.20+**
+- A C++17-compatible compiler
+  - Windows: Visual Studio 2022 (MSVC)
+  - macOS: Xcode / clang
+  - Linux: gcc or clang
+- Git
+
+The following libraries are included as part of the repository:
+- GLFW
+- Dear ImGui
+- OpenGL loader (as provided in the repo)
+
+No system-wide package installation is required beyond a compiler and CMake.
+
+---
+
+### Clone the Repository
+
+```bash
+git clone <repo-url>
+cd <repo-folder>
+```
+
+---
+
+### Configure with CMake
+
+Create a build directory and generate the build files:
+
+```bash
+cmake -S . -B build
+```
+
+#### Windows (Visual Studio)
+
+```bash
+cmake -S . -B build -G "Visual Studio 17 2022" -A x64
+```
+
+#### macOS / Linux (Makefiles or Ninja)
+
+```bash
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug
+```
+
+(Optional) Ninja:
+
+```bash
+cmake -S . -B build -G Ninja
+```
+
+---
+
+### Build
+
+```bash
+cmake --build build
+```
+
+Windows configuration-specific build:
+
+```bash
+cmake --build build --config Debug
+```
+
+or
+
+```bash
+cmake --build build --config Release
+```
+
+---
+
+### Run
+
+After a successful build, the executable will be located in:
+
+- **Windows**
+  ```text
+  build/bin/Debug/
+  build/bin/Release/
+  ```
+
+- **macOS / Linux**
+  ```text
+  build/bin/
+  ```
+
+Run it directly:
+
+```bash
+./build/bin/Sketcher
+```
+
+(Executable name may vary slightly depending on platform.)
+
+---
+
+### Clean & Reconfigure
+
+```bash
+rm -rf build
+cmake -S . -B build
+```
+
+---
+
+### Notes
+
+- The application creates its own GLFW window and OpenGL context
+- UI is rendered entirely with Dear ImGui
+- The solver runs immediately after each committed tool or constraint action
+- Debug builds are recommended during active development
+
+---
+
 This document intentionally describes **current behavior only**.
+
