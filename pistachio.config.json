@@ -1,0 +1,14 @@
+{
+  "pistachio.render": {
+    "msaa.samples": 4
+  },
+  "pistachio.sketch": {
+    "grid.spacing": 10.0,
+    "snap.enabled": true
+  },
+  "pistachio.ui": {
+    "config.showAdvanced": true,
+    "config.windowOpen": true,
+    "theme": "Pistachio"
+  }
+}

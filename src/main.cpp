@@ -64,6 +64,7 @@ namespace
             m_svc.app     = m_app;
             m_svc.window  = m_host.window();
             m_svc.guiHost = static_cast<IGuiHost*>(&m_host);
+            m_svc.config  = (m_app ? (void*)m_app->getConfig() : nullptr);
 
             // Default expected location (matches your build output)
             // Source DLL is copied to a unique "shadow" DLL so rebuilds don't get file-locked.

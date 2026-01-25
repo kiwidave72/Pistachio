@@ -10,6 +10,10 @@
 #include "ports/IExporterPort.h"
 #include "ports/IRendererPort.h"
 #include "ports/ISketchResolverPort.h"
+#include "ports/IConfigPort.h"
+
+// Host-owned config store
+#include "core/ConfigStore.h"
 #include "domain/Model.h"
 #include "domain/SketchModel.h"
 
@@ -43,6 +47,13 @@ namespace core {
         std::shared_ptr<domain::Model> getCurrentModel() const;
         ports::IRendererPort* getRenderer() const;
 
+        // Host-owned configuration registry (persists across UI hot-reloads)
+        ports::IConfigPort* getConfig() { return &m_config; }
+        const ports::IConfigPort* getConfig() const { return &m_config; }
+
+        // Optional helper for plugins: persist configuration immediately.
+        void saveConfigNow();
+
         std::string getStatus() const;
         bool isLoading() const;
         float getLoadingProgress() const;
@@ -54,6 +65,9 @@ namespace core {
         std::vector<std::unique_ptr<ports::IExporterPort>> m_exporters;
         std::shared_ptr<domain::Model> m_currentModel;
         std::unique_ptr<ports::ISketchResolverPort> m_resolverAdapter;
+
+        core::ConfigStore m_config;
+        std::string m_configPath = "pistachio.config.json";
 
         std::string m_statusMessage;
         std::atomic<bool> m_isLoading;

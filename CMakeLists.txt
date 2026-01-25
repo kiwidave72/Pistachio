@@ -165,6 +165,7 @@ add_library(pistachio_core SHARED
 
     # Core
     src/core/Application.cpp
+    src/core/ConfigStore.cpp
     src/core/rendering/SketchRenderBuilder.cpp
 
     # Adapters

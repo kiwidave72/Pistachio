@@ -6,6 +6,7 @@ struct UiHostServices {
     void* app;     // core::Application*
     void* window;  // GLFWwindow*
     void* guiHost; // host UI
+    void* config;  // ports::IConfigPort* (host-owned)
 };
 
 struct IUiModule {

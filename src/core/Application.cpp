@@ -15,6 +15,26 @@ namespace core {
         : m_statusMessage("Ready"),
         m_isLoading(false),
         m_loadingProgress(0.0f) {
+
+        // Register a few host-level settings.
+        // These persist even if the UI plugin hot-reloads.
+        using ports::SettingInfo;
+        using ports::SettingType;
+
+        m_config.registerSetting(SettingInfo(
+            "pistachio.ui", "theme", "Theme", "UI theme name", "UI", SettingType::String, "Pistachio", false
+        ));
+
+        m_config.registerSetting(SettingInfo(
+            "pistachio.sketch", "grid.spacing", "Grid spacing", "Grid spacing in sketch units", "Sketch", SettingType::Float, 10.0, false
+        ));
+        m_config.registerSetting(SettingInfo(
+            "pistachio.sketch", "snap.enabled", "Snap", "Enable snapping in the sketch canvas", "Sketch", SettingType::Bool, true, false
+        ));
+
+        m_config.registerSetting(SettingInfo(
+            "pistachio.render", "msaa.samples", "MSAA samples", "Multisample AA samples (restart may be required)", "Rendering", SettingType::Int, 4, true
+        ));
     }
 
     Application::~Application() {
@@ -45,6 +65,10 @@ namespace core {
 
     bool Application::initialize() {
         std::cout << "\n=== APPLICATION INITIALIZATION ===" << std::endl;
+
+        // Load persisted config (values only). Settings metadata is registered
+        // by the host and by plugins at runtime.
+        (void)m_config.loadFromFile(m_configPath);
 
         // ------------------------------------------------------------
         // 1) Renderer FIRST (creates window + GL context)
@@ -177,6 +201,9 @@ namespace core {
             m_uiAdapter->shutdown();
         }
 
+        // Best-effort persist user config values.
+        (void)m_config.saveToFile(m_configPath);
+
         m_statusMessage = "Application shut down";
     }
 
@@ -189,6 +216,11 @@ namespace core {
     {
         if (m_uiAdapter)
             m_uiAdapter->setRibbonbarCallback(ribbonbarCallback);
+    }
+
+    void Application::saveConfigNow()
+    {
+        (void)m_config.saveToFile(m_configPath);
     }
 
     bool Application::loadFile(const std::string& filepath) {
