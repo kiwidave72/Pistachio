@@ -36,6 +36,11 @@ namespace adapters {
 
         void setMenubarCallback(const std::function<void()>& menubarCallback);
 
+        // Fonts (Roboto) created by initializeResources()
+        ::ImFont* fontBody() const { return m_bodyFont; }
+        ::ImFont* fontGroup() const { return m_groupFont; }
+        ::ImFont* fontTitle() const { return m_titleFont; }
+
     private:
         void renderMainMenu();
         void renderStatusBar();
@@ -74,7 +79,10 @@ namespace adapters {
         adapters::sketchui::Canvas2D m_canvas2D{};
 
         // fonts
+        ::ImFont* m_bodyFont = nullptr;
         ::ImFont* m_smallFont = nullptr;
+        ::ImFont* m_groupFont = nullptr;
+        ::ImFont* m_titleFont = nullptr;
         ImTextureID m_iconMinimize = nullptr;
         ImTextureID m_iconMaximize = nullptr;
         ImTextureID m_iconRestore = nullptr;

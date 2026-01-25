@@ -101,7 +101,7 @@ namespace adapters {
         // Default font
         if (!io.FontDefault)
         {
-            io.FontDefault = io.Fonts->AddFontFromMemoryTTF(
+            m_bodyFont = io.FontDefault = io.Fonts->AddFontFromMemoryTTF(
                 (void*)g_RobotoRegular,
                 sizeof(g_RobotoRegular),
                 17.0f,
@@ -119,6 +119,29 @@ namespace adapters {
                 &cfg
             );
         }
+
+// Group header font (UE-style section header)
+if (!m_groupFont)
+{
+    m_groupFont = io.Fonts->AddFontFromMemoryTTF(
+        (void*)g_RobotoRegular,
+        sizeof(g_RobotoRegular),
+        19.0f,
+        &cfg
+    );
+}
+
+// Title font (UE-style page title)
+if (!m_titleFont)
+{
+    m_titleFont = io.Fonts->AddFontFromMemoryTTF(
+        (void*)g_RobotoRegular,
+        sizeof(g_RobotoRegular),
+        24.0f,
+        &cfg
+    );
+}
+
         
             
             ImVec2 szMin, szMax, szRes, szClose;

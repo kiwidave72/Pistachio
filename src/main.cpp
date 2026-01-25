@@ -249,7 +249,7 @@ int main(int argc, char** argv)
         app->setUIAdapter(std::make_unique<HotReloadUiAdapter>(app.get()));
 
         // Renderer / IO / Solver
-        app->setRenderer(std::make_unique<adapters::OcctRenderer>());
+        //app->setRenderer(std::make_unique<adapters::OcctRenderer>());
         app->addFileLoader(std::make_unique<adapters::StepFileLoader>());
         app->addExporter(std::make_unique<adapters::ObjExporter>());
         app->addExporter(std::make_unique<adapters::StlExporter>());
