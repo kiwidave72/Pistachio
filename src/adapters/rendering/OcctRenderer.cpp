@@ -7,6 +7,9 @@
 #include "adapters/rendering/OcctRenderer.h"
 #include "domain/Model.h"
 
+#define GLFW_INCLUDE_NONE
+#include <GLFW/glfw3.h>
+
 // OpenCASCADE includes
 #include <OpenGl_GraphicDriver.hxx>
 #include <Aspect_DisplayConnection.hxx>

@@ -1,28 +1,74 @@
-﻿#define WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
 #include <Windows.h>
-#include <GL/gl.h>
+
+// IMPORTANT: we use glad as the OpenGL loader.
+// Do NOT include <GL/gl.h> anywhere in the program, otherwise glad will
+// trigger "OpenGL header already included".
+#include <glad/glad.h>
 
 #include "adapters/ui/ImGuiAdapter.h"
 #include "core/Application.h"
 
 #include <imgui.h>
 #include <imgui_internal.h>
-#include <GLFW/glfw3.h>
-#define GLFW_EXPOSE_NATIVE_WIN32
-#include <GLFW/glfw3native.h>
 
 #include <cstring>
 #include <algorithm>
+#include <cmath>
+#include <glm/glm.hpp>
+
+#include <nlohmann/json.hpp>
 
 #include "../Roboto-Regular.embed"
 #include "../../../Walnut-Icon.embed"
 #include "../../../WindowImages.embed"
 
-#define STB_IMAGE_IMPLEMENTATION
-#include "stb_image.h" // or wherever you include it (likely already in your project)
+// stb_image implementation must live in exactly one compilation unit.
+// We keep the implementation in imgui/StbImageImpl.cpp (linked into imgui.dll).
+#include "stb_image.h"
+
+// -----------------------------------------------------------------------------
+// OpenGL function loader for the UI plugin.
+//
+// IMPORTANT: The UI plugin is a separate DLL. If it links to glad, it has its own
+// glad function-pointer table and MUST load them itself.
+// We intentionally do NOT call any GLFW functions here (to avoid having a second
+// copy of GLFW state inside the plugin DLL).
+// -----------------------------------------------------------------------------
+static void* GetOpenGLProcAddress(const char* name)
+{
+    // Try WGL first (requires a current context).
+    void* p = (void*)wglGetProcAddress(name);
+
+    // wglGetProcAddress returns small sentinel values on failure.
+    if (p == nullptr || p == (void*)0x1 || p == (void*)0x2 || p == (void*)0x3 || p == (void*)-1)
+    {
+        static HMODULE s_opengl32 = ::GetModuleHandleA("opengl32.dll");
+        if (!s_opengl32)
+            s_opengl32 = ::LoadLibraryA("opengl32.dll");
+        if (s_opengl32)
+            p = (void*)::GetProcAddress(s_opengl32, name);
+    }
+    return p;
+}
+
+static bool EnsureGladLoaded()
+{
+    static bool s_loaded = false;
+    if (s_loaded)
+        return true;
+
+    if (!gladLoadGLLoader((GLADloadproc)GetOpenGLProcAddress))
+        return false;
+
+    s_loaded = true;
+    return true;
+}
 
 static GLuint CreateGLTextureRGBA_Minimal(const unsigned char* rgba, int w, int h)
 {
+    if (!EnsureGladLoaded())
+        return 0;
     GLuint tex = 0;
     glGenTextures(1, &tex);
     glBindTexture(GL_TEXTURE_2D, tex);
@@ -77,9 +123,21 @@ namespace adapters {
     // ctor / dtor
     // ------------------------------------------------------------
 
-    ImGuiAdapter::ImGuiAdapter(core::Application* app, GLFWwindow* hostWindow, IGuiHost* host)
-        : m_app(app), m_window(hostWindow), m_host(host)
+    ImGuiAdapter::ImGuiAdapter(core::Application* app, GLFWwindow* hostWindow, IGuiHost* host, ports::IConfigPort* config)
+        : m_app(app), m_window(hostWindow), m_host(host), m_config(config)
     {
+        // Pull persisted view state from config (if available)
+        auto readBool = [&](const char* ns, const char* key, bool defVal) -> bool {
+            if (!m_config) return defVal;
+            nlohmann::json v = m_config->get(ns, key);
+            return v.is_boolean() ? v.get<bool>() : defVal;
+        };
+
+        m_viewFileOperations = readBool("pistachio.ui", "views.fileOperations", true);
+        m_viewStatus         = readBool("pistachio.ui", "views.status",         true);
+        m_viewModelInfo      = readBool("pistachio.ui", "views.modelInfo",      true);
+        m_view3DViewport     = readBool("pistachio.ui", "views.viewport3d",     true);
+        m_viewSketchEditor   = readBool("pistachio.ui", "views.sketchEditor",   true);
     }
 
     ImGuiAdapter::~ImGuiAdapter() = default;
@@ -205,6 +263,21 @@ if (!m_titleFont)
 
         // ⚠️ DO NOT touch ImGuiIO.Fonts here
 
+        // Sync view visibility every frame so the "Views" menu (which updates the
+        // shared config store) can re-open windows after the user closes them via
+        // the window close button (X).
+        auto readBool = [&](const char* ns, const char* key, bool defVal) -> bool {
+            if (!m_config) return defVal;
+            nlohmann::json v = m_config->get(ns, key);
+            return v.is_boolean() ? v.get<bool>() : defVal;
+        };
+
+        m_viewFileOperations = readBool("pistachio.ui", "views.fileOperations", m_viewFileOperations);
+        m_viewStatus         = readBool("pistachio.ui", "views.status",         m_viewStatus);
+        m_viewModelInfo      = readBool("pistachio.ui", "views.modelInfo",      m_viewModelInfo);
+        m_view3DViewport     = readBool("pistachio.ui", "views.viewport3d",     m_view3DViewport);
+        m_viewSketchEditor   = readBool("pistachio.ui", "views.sketchEditor",   m_viewSketchEditor);
+
         renderMainMenu();
         renderStatusBar();
         renderModelInfo();
@@ -223,7 +296,11 @@ if (!m_titleFont)
 
     void ImGuiAdapter::renderMainMenu()
     {
-        ImGui::Begin("File Operations");
+        if (!m_viewFileOperations)
+            return;
+
+        bool wasOpen = m_viewFileOperations;
+        ImGui::Begin("File Operations", &m_viewFileOperations);
 
         static char filePath[512] = {};
         ImGui::InputTextWithHint("##file", "STEP file path...", filePath, sizeof(filePath));
@@ -235,26 +312,43 @@ if (!m_titleFont)
         }
 
         ImGui::End();
+
+        // Persist close/open state
+        if (m_config && wasOpen != m_viewFileOperations)
+            m_config->set("pistachio.ui", "views.fileOperations", m_viewFileOperations);
     }
 
     void ImGuiAdapter::renderStatusBar()
     {
-        ImGui::Begin("Status", nullptr, ImGuiWindowFlags_NoScrollbar);
+        if (!m_viewStatus)
+            return;
+
+        bool wasOpen = m_viewStatus;
+        ImGui::Begin("Status", &m_viewStatus, ImGuiWindowFlags_NoScrollbar);
 
         if (m_app)
             ImGui::Text("Status: %s", m_app->getStatus().c_str());
 
         ImGui::End();
+
+        if (m_config && wasOpen != m_viewStatus)
+            m_config->set("pistachio.ui", "views.status", m_viewStatus);
     }
 
     void ImGuiAdapter::renderModelInfo()
     {
-        ImGui::Begin("Model Info");
+        if (!m_viewModelInfo)
+            return;
+
+        bool wasOpen = m_viewModelInfo;
+        ImGui::Begin("Model Info", &m_viewModelInfo);
 
         if (!m_app)
         {
             ImGui::TextDisabled("No application");
             ImGui::End();
+            if (m_config && wasOpen != m_viewModelInfo)
+                m_config->set("pistachio.ui", "views.modelInfo", m_viewModelInfo);
             return;
         }
 
@@ -263,33 +357,112 @@ if (!m_titleFont)
         {
             ImGui::TextDisabled("No model loaded");
             ImGui::End();
+            if (m_config && wasOpen != m_viewModelInfo)
+                m_config->set("pistachio.ui", "views.modelInfo", m_viewModelInfo);
             return;
         }
 
         ImGui::Text("Model loaded");
         ImGui::End();
+        if (m_config && wasOpen != m_viewModelInfo)
+            m_config->set("pistachio.ui", "views.modelInfo", m_viewModelInfo);
     }
 
+    
     void ImGuiAdapter::render3DView()
     {
-        ImGui::Begin("3D Viewport");
+        if (!m_view3DViewport)
+            return;
+
+        bool wasOpen = m_view3DViewport;
+        ImGui::Begin("3D Viewport", &m_view3DViewport , ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
 
         if (m_app && m_app->getRenderer())
         {
             ImVec2 size = ImGui::GetContentRegionAvail();
-            void* tex = m_app->getRenderer()->getFramebufferTexture();
-            if (tex)
-                ImGui::Image(tex, size);
+
+            if (size.x > 0 && size.y > 0)
+            {
+                const uint32_t w = (uint32_t)ImMax(1.0f, size.x);
+                const uint32_t h = (uint32_t)ImMax(1.0f, size.y);
+
+                m_app->getRenderer()->renderToFramebuffer(m_window, w, h);
+
+                void* tex = m_app->getRenderer()->getFramebufferTexture();
+                if (tex) {
+                    // Get position BEFORE drawing
+                    ImVec2 imageMin = ImGui::GetCursorScreenPos();
+
+                    // === CRITICAL: Use InvisibleButton to capture ALL input ===
+                    ImGui::InvisibleButton("##viewport3d", size,
+                        ImGuiButtonFlags_MouseButtonLeft |
+                        ImGuiButtonFlags_MouseButtonRight |
+                        ImGuiButtonFlags_MouseButtonMiddle);
+
+                    bool hovered = ImGui::IsItemHovered();
+                    bool active = ImGui::IsItemActive();
+
+                    // Draw the texture ON TOP using the drawlist
+                    ImVec2 imageMax = ImVec2(imageMin.x + size.x, imageMin.y + size.y);
+                    ImGui::GetWindowDrawList()->AddImage(
+                        tex,
+                        imageMin,
+                        imageMax,
+                        ImVec2(0, 0),
+                        ImVec2(1, 1)
+                    );
+
+                    // Record for gizmo
+                    m_viewportImageMin = imageMin;
+                    m_viewportImageMax = imageMax;
+                    m_viewportImageValid = true;
+
+                    // === ROTATE: Right mouse button drag ===
+                    if (hovered && ImGui::IsMouseDragging(ImGuiMouseButton_Right, 0.0f)) {
+                        ImVec2 delta = ImGui::GetIO().MouseDelta;
+                        m_app->getRenderer()->rotate(delta.x, delta.y);
+                    }
+
+                    //// === ZOOM: Mouse wheel - NOW IT WILL WORK! ===
+                    //if (hovered) {
+                    //    float wheel = ImGui::GetIO().MouseWheel;
+                    //    if (wheel != 0.0f) {
+                    //        m_app->getRenderer()->zoom(wheel);
+                    //    }
+                    //}
+
+                   // Middle-drag = zoom (no modifier needed!)
+                    if (hovered && ImGui::IsMouseDragging(ImGuiMouseButton_Middle, 0.0f)) {
+                        ImVec2 delta = ImGui::GetIO().MouseDelta;
+                        m_app->getRenderer()->zoom(-delta.y * 0.05f);
+                    }
+
+                    // Render camera gizmo overlay
+                    renderCameraGizmo();
+
+                }
+                else {
+                    m_viewportImageValid = false;
+                    ImGui::TextColored(ImVec4(1, 0, 0, 1), "ERROR: No texture from renderer");
+                }
+            }
+            else
+            {
+                m_viewportImageValid = false;
+                ImGui::TextDisabled("Viewport too small");
+            }
         }
         else
         {
+            m_viewportImageValid = false;
             ImGui::TextDisabled("No renderer");
         }
 
         ImGui::End();
-    }
 
-    
+        if (m_config && wasOpen != m_view3DViewport)
+            m_config->set("pistachio.ui", "views.viewport3d", m_view3DViewport);
+    }
     void ImGuiAdapter::renderRibbonBar()
     {
         // Called from host via RibbonBar callback. No Begin/End here.
@@ -374,15 +547,237 @@ if (!m_titleFont)
         ImGui::TextDisabled(" | Sketch tools");
     }
 
+
+void ImGuiAdapter::renderCameraGizmo()
+{
+    if (!m_viewportImageValid || !m_app || !m_app->getRenderer())
+        return;
+
+    // Draw a small "view cube" in the top-right of the 3D viewport image.
+    // Click faces to snap the camera to +/-X +/-Y +/-Z.
+    // This is intentionally lightweight (no ImGuizmo dependency).
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    if (!dl) return;
+
+    const float pad = 10.0f;
+    const float size = 96.0f; // pixels
+    const ImVec2 imgMin = m_viewportImageMin;
+    const ImVec2 imgMax = m_viewportImageMax;
+
+    // Clamp gizmo to image rect
+    ImVec2 gmax(imgMax.x - pad, imgMin.y + pad + size);
+    ImVec2 gmin(gmax.x - size, gmax.y - size);
+
+    if (gmin.x < imgMin.x + pad) gmin.x = imgMin.x + pad;
+    if (gmin.y < imgMin.y + pad) gmin.y = imgMin.y + pad;
+    if (gmax.x > imgMax.x - pad) gmax.x = imgMax.x - pad;
+    if (gmax.y > imgMax.y - pad) gmax.y = imgMax.y - pad;
+
+    const ImVec2 center((gmin.x + gmax.x) * 0.5f, (gmin.y + gmax.y) * 0.5f);
+    const float radius = (gmax.x - gmin.x) * 0.5f;
+
+    // Background card
+    dl->AddRectFilled(gmin, gmax, IM_COL32(25, 25, 28, 210), 10.0f);
+    dl->AddRect(gmin, gmax, IM_COL32(255, 255, 255, 40), 10.0f);
+
+    // Get current camera direction (from target to camera)
+    ports::CameraState cam = m_app->getRenderer()->getCameraState();
+    glm::vec3 fwd = glm::normalize(cam.target - cam.position); // camera forward (look direction)
+
+    // Approximate yaw/pitch consistent with GlCubeViewRenderer orbit math
+    // yaw rotates around +Y, pitch rotates around +X.
+    float yaw = std::atan2(fwd.x, fwd.z);            // -pi..pi
+    float pitch = std::asin(ImClamp(fwd.y, -1.0f, 1.0f)); // -pi/2..pi/2
+
+    struct V3 { float x,y,z; };
+    auto v3 = [](float x,float y,float z){ return V3{x,y,z}; };
+    auto add = [](V3 a,V3 b){ return V3{a.x+b.x,a.y+b.y,a.z+b.z}; };
+    auto sub = [](V3 a,V3 b){ return V3{a.x-b.x,a.y-b.y,a.z-b.z}; };
+    auto mul = [](V3 a,float s){ return V3{a.x*s,a.y*s,a.z*s}; };
+    auto dot = [](V3 a,V3 b){ return a.x*b.x+a.y*b.y+a.z*b.z; };
+    auto cross = [](V3 a,V3 b){ return V3{a.y*b.z-a.z*b.y, a.z*b.x-a.x*b.z, a.x*b.y-a.y*b.x}; };
+    auto len = [&](V3 a){ return std::sqrt(dot(a,a)); };
+    auto norm = [&](V3 a){ float l=len(a); return (l>1e-6f)?mul(a,1.0f/l):v3(0,0,0); };
+
+    auto rotX = [](V3 p,float a){
+        float c=std::cos(a), s=std::sin(a);
+        return V3{p.x, c*p.y - s*p.z, s*p.y + c*p.z};
+    };
+    auto rotY = [](V3 p,float a){
+        float c=std::cos(a), s=std::sin(a);
+        return V3{c*p.x + s*p.z, p.y, -s*p.x + c*p.z};
+    };
+
+    // Cube vertices in object space
+    V3 P[8] = {
+        v3(-1,-1,-1), v3( 1,-1,-1), v3( 1, 1,-1), v3(-1, 1,-1),
+        v3(-1,-1, 1), v3( 1,-1, 1), v3( 1, 1, 1), v3(-1, 1, 1)
+    };
+
+    // Rotate cube opposite the camera so it represents world axes relative to view
+    V3 W[8];
+    for (int i=0;i<8;i++){
+        V3 p=P[i];
+        p = rotY(p, -yaw);
+        p = rotX(p, -pitch);
+        W[i]=p;
+    }
+
+    // Simple ortho projection for the widget
+    auto project = [&](V3 p)->ImVec2{
+        // p in -1..1; map to widget space with a bit of perspective-ish scaling
+        float z = p.z;
+        float s = 0.75f + 0.25f * (z + 1.0f) * 0.5f; // nearer faces slightly larger
+        float x = p.x * s;
+        float y = p.y * s;
+        return ImVec2(center.x + x * radius * 0.75f, center.y - y * radius * 0.75f);
+    };
+
+    // Faces, each as quad indices
+    const int F[6][4] = {
+        {0,1,2,3}, // -Z (back)
+        {4,5,6,7}, // +Z (front)
+        {0,1,5,4}, // -Y (bottom)
+        {3,2,6,7}, // +Y (top)
+        {1,2,6,5}, // +X (right)
+        {0,3,7,4}  // -X (left)
+    };
+
+    struct FacePoly{
+        ImVec2 p[4];
+        float depth;
+        int dir;
+        ImU32 col;
+        const char* label;
+    };
+
+    FacePoly faces[6];
+    // Map face to GlCubeViewRenderer::setViewDirection indices
+    // dir: 0 +X, 1 -X, 2 +Z, 3 -Z, 4 +Y, 5 -Y
+    const int dirMap[6]   = {3, 2, 5, 4, 0, 1};
+    const ImU32 baseCol[6]= {
+        IM_COL32(180,  80,  80, 255), // -Z
+        IM_COL32( 80, 170,  90, 255), // +Z
+        IM_COL32( 90, 130, 210, 255), // -Y
+        IM_COL32(210, 190,  90, 255), // +Y
+        IM_COL32( 90, 190, 190, 255), // +X
+        IM_COL32(190,  90, 200, 255)  // -X
+    };
+    const char* labels[6] = {"-Z","+Z","-Y","+Y","+X","-X"};
+
+    // Build face polys with depth for painter's algorithm
+    for (int fi=0;fi<6;fi++){
+        float dz = 0.0f;
+        for (int k=0;k<4;k++){
+            V3 wp = W[F[fi][k]];
+            dz += wp.z;
+            faces[fi].p[k] = project(wp);
+        }
+        faces[fi].depth = dz / 4.0f;
+        faces[fi].dir   = dirMap[fi];
+        faces[fi].col   = baseCol[fi];
+        faces[fi].label = labels[fi];
+    }
+
+    // Sort faces back-to-front (smaller depth first)
+    int order[6] = {0,1,2,3,4,5};
+    std::sort(order, order+6, [&](int a,int b){ return faces[a].depth < faces[b].depth; });
+
+    // Helper: point in triangle
+    auto pointInTri = [&](ImVec2 p, ImVec2 a, ImVec2 b, ImVec2 c)->bool{
+        auto sign = [](ImVec2 p1, ImVec2 p2, ImVec2 p3){
+            return (p1.x - p3.x)*(p2.y - p3.y) - (p2.x - p3.x)*(p1.y - p3.y);
+        };
+        float d1 = sign(p,a,b);
+        float d2 = sign(p,b,c);
+        float d3 = sign(p,c,a);
+        bool has_neg = (d1 < 0) || (d2 < 0) || (d3 < 0);
+        bool has_pos = (d1 > 0) || (d2 > 0) || (d3 > 0);
+        return !(has_neg && has_pos);
+    };
+
+    ImVec2 mouse = ImGui::GetIO().MousePos;
+    bool mouseOver = (mouse.x >= gmin.x && mouse.x <= gmax.x && mouse.y >= gmin.y && mouse.y <= gmax.y);
+
+    // Determine clicked face: test from frontmost to backmost so the visible face wins.
+    int hoveredDir = -1;
+    if (mouseOver)
+    {
+        for (int oi=5; oi>=0; --oi) {
+            int fi = order[oi];
+            ImVec2 a = faces[fi].p[0];
+            ImVec2 b = faces[fi].p[1];
+            ImVec2 c = faces[fi].p[2];
+            ImVec2 d = faces[fi].p[3];
+            if (pointInTri(mouse, a,b,c) || pointInTri(mouse, a,c,d)) {
+                hoveredDir = faces[fi].dir;
+                break;
+            }
+        }
+    }
+
+    // Draw faces
+    for (int oi=0; oi<6; ++oi)
+    {
+        int fi = order[oi];
+
+        ImU32 col = faces[fi].col;
+        if (faces[fi].dir == hoveredDir)
+            col = IM_COL32(
+                ImMin(255, (int)((col >> IM_COL32_R_SHIFT) & 0xFF) + 25),
+                ImMin(255, (int)((col >> IM_COL32_G_SHIFT) & 0xFF) + 25),
+                ImMin(255, (int)((col >> IM_COL32_B_SHIFT) & 0xFF) + 25),
+                255);
+
+        dl->AddConvexPolyFilled(faces[fi].p, 4, col);
+        dl->AddPolyline(faces[fi].p, 4, IM_COL32(0,0,0,120), true, 1.0f);
+    }
+
+    // Labels (only for the hovered face, to keep it clean)
+    if (hoveredDir != -1)
+    {
+        const char* lbl = nullptr;
+        switch (hoveredDir) {
+            case 0: lbl = "+X"; break;
+            case 1: lbl = "-X"; break;
+            case 2: lbl = "+Z"; break;
+            case 3: lbl = "-Z"; break;
+            case 4: lbl = "+Y"; break;
+            case 5: lbl = "-Y"; break;
+            default: break;
+        }
+        if (lbl) {
+            ImVec2 tp = ImVec2(gmin.x + 10.0f, gmin.y + 8.0f);
+            dl->AddText(tp, IM_COL32(255,255,255,220), lbl);
+        }
+    }
+
+    // Click -> snap camera
+    if (hoveredDir != -1 && ImGui::IsMouseClicked(ImGuiMouseButton_Left))
+    {
+        m_app->getRenderer()->setViewDirection(hoveredDir);
+    }
+
+    if (mouseOver)
+        ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+}
+
+
 void ImGuiAdapter::renderSketchEditor()
 {
-    ImGui::Begin("Sketch Editor");
+    if (!m_viewSketchEditor)
+        return;
+
+    bool wasOpen = m_viewSketchEditor;
+    ImGui::Begin("Sketch Editor", &m_viewSketchEditor);
 
     auto doc = m_app->getSketchDocument();
     static int s_lastSketchIdx = -1;
     if (!doc || doc->sketches.empty()) {
         ImGui::TextDisabled("No sketch document loaded");
         ImGui::End();
+        if (m_config && wasOpen != m_viewSketchEditor)
+            m_config->set("pistachio.ui", "views.sketchEditor", m_viewSketchEditor);
         return;
     }
 
@@ -800,6 +1195,9 @@ void ImGuiAdapter::renderSketchEditor()
 
     // (OCCT overlay sync disabled in plugin-hotload build)
     ImGui::End();
+
+    if (m_config && wasOpen != m_viewSketchEditor)
+        m_config->set("pistachio.ui", "views.sketchEditor", m_viewSketchEditor);
 }
 
 } // namespace adapters

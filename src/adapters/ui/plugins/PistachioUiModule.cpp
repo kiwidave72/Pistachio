@@ -36,7 +36,7 @@ public:
         auto* cfg = reinterpret_cast<ports::IConfigPort*>(svc.config);
         m_config = cfg; // host-owned
 
-        m_adapter = new adapters::ImGuiAdapter(app, win, host);
+        m_adapter = new adapters::ImGuiAdapter(app, win, host, cfg);
 
         // Register UI-plugin settings (idempotent).
         if (cfg) {
@@ -49,6 +49,28 @@ public:
             cfg->registerSetting(SettingInfo(
                 "pistachio.ui", "config.windowOpen", "Config window open",
                 "Whether the configuration editor window is visible.", "Configuration", SettingType::Bool, true, true
+            ));
+
+            // Views (dockable windows)
+            cfg->registerSetting(SettingInfo(
+                "pistachio.ui", "views.fileOperations", "File Operations",
+                "Show/hide the File Operations window.", "Views", SettingType::Bool, true, true
+            ));
+            cfg->registerSetting(SettingInfo(
+                "pistachio.ui", "views.status", "Status",
+                "Show/hide the Status window.", "Views", SettingType::Bool, true, true
+            ));
+            cfg->registerSetting(SettingInfo(
+                "pistachio.ui", "views.modelInfo", "Model Info",
+                "Show/hide the Model Info window.", "Views", SettingType::Bool, true, true
+            ));
+            cfg->registerSetting(SettingInfo(
+                "pistachio.ui", "views.viewport3d", "3D Viewport",
+                "Show/hide the 3D Viewport window.", "Views", SettingType::Bool, true, true
+            ));
+            cfg->registerSetting(SettingInfo(
+                "pistachio.ui", "views.sketchEditor", "Sketch Editor",
+                "Show/hide the Sketch Editor window.", "Views", SettingType::Bool, true, true
             ));
         }
 

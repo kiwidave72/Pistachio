@@ -9,13 +9,17 @@
 struct GLFWwindow;
 struct ImFont;
 
+namespace ports { class IConfigPort; }
+
 namespace core { class Application; }
 
 namespace adapters {
 
     class ImGuiAdapter {
     public:
-        ImGuiAdapter(core::Application* app, GLFWwindow* hostWindow, IGuiHost* host);
+        // config is optional (may be nullptr). When provided, ImGuiAdapter will
+        // persist view visibility state (close buttons / Views menu toggles).
+        ImGuiAdapter(core::Application* app, GLFWwindow* hostWindow, IGuiHost* host, ports::IConfigPort* config = nullptr);
         ~ImGuiAdapter();
 
         // NEW: must be called once, before first ImGui::NewFrame()
@@ -53,6 +57,14 @@ namespace adapters {
         core::Application* m_app = nullptr;
         GLFWwindow* m_window = nullptr;
         IGuiHost* m_host = nullptr;
+        ports::IConfigPort* m_config = nullptr;
+
+        // View visibility (defaults to true; persisted via config when available)
+        bool m_viewFileOperations = true;
+        bool m_viewStatus = true;
+        bool m_viewModelInfo = true;
+        bool m_view3DViewport = true;
+        bool m_viewSketchEditor = true;
 
         bool m_resourcesInitialized = false; // NEW
 
@@ -91,7 +103,12 @@ namespace adapters {
         unsigned int m_glTexMaximize = 0;
         unsigned int m_glTexRestore = 0;
         unsigned int m_glTexClose = 0;
-        // rest of your existing members unchanged…
+        
+        // Last drawn 3D viewport image rect (screen-space). Used for overlays like the camera gizmo.
+        ImVec2 m_viewportImageMin{0,0};
+        ImVec2 m_viewportImageMax{0,0};
+        bool   m_viewportImageValid = false;
+// rest of your existing members unchanged…
     };
 
 } // namespace adapters

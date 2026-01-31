@@ -24,7 +24,11 @@
 #include "adapters/loaders/StepFileLoader.h"
 #include "adapters/exporters/ObjExporter.h"
 #include "adapters/exporters/StlExporter.h"
-#include "adapters/rendering/OcctRenderer.h"
+// Default renderer for the 3D viewport.
+// OCCT is still available, but this OpenGL renderer guarantees we see a 3D scene
+// even when OCCT isn't wired up yet.
+#include "adapters/rendering/GlCubeViewRenderer.h"
+// #include "adapters/rendering/OcctRenderer.h"
 #include "adapters/persistence/JsonSketchDocumentAdapter.h"
 #include "adapters/solvers/BasicConstraintSolver.h"
 #include "imgui_impl_opengl3.h"
@@ -249,7 +253,9 @@ int main(int argc, char** argv)
         app->setUIAdapter(std::make_unique<HotReloadUiAdapter>(app.get()));
 
         // Renderer / IO / Solver
-        //app->setRenderer(std::make_unique<adapters::OcctRenderer>());
+        // For now we default to a lightweight OpenGL demo renderer so the 3D viewport
+        // always shows a scene (grid + cube) even before OCCT is fully wired up.
+        app->setRenderer(std::make_unique<adapters::GlCubeViewRenderer>());
         app->addFileLoader(std::make_unique<adapters::StepFileLoader>());
         app->addExporter(std::make_unique<adapters::ObjExporter>());
         app->addExporter(std::make_unique<adapters::StlExporter>());

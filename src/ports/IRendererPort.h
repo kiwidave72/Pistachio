@@ -8,7 +8,10 @@
 #include "domain/Model.h"
 
 #include <glm/glm.hpp>
-#include <GLFW/glfw3.h>
+
+// Forward declare GLFW types to avoid pulling OpenGL headers in before glad.
+struct GLFWwindow;
+
 
 namespace ports {
 
@@ -72,7 +75,12 @@ namespace ports {
         virtual bool initialize() = 0;
         virtual void shutdown() = 0;
         virtual void render(GLFWwindow* m_window) = 0;
-
+        virtual void renderToFramebuffer(void* nativeWindow, uint32_t width, uint32_t height)
+        {
+            (void)nativeWindow; (void)width; (void)height;
+        }
+        
+        virtual void* getFramebufferTexture() const { return nullptr; }
         // Optional: BRep / model rendering (OCCT-backed)
         virtual void setModel(std::shared_ptr<domain::Model> model) = 0;
         virtual void fitAll() = 0;

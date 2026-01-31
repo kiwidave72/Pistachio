@@ -8,7 +8,12 @@
   },
   "pistachio.ui": {
     "config.showAdvanced": true,
-    "config.windowOpen": true,
-    "theme": "Pistachio"
+    "config.windowOpen": false,
+    "theme": "Pistachio",
+    "views.fileOperations": false,
+    "views.modelInfo": false,
+    "views.sketchEditor": true,
+    "views.status": false,
+    "views.viewport3d": true
   }
 }

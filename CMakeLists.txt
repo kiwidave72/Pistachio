@@ -65,6 +65,54 @@ message(STATUS "OpenCASCADE binaries: ${OpenCASCADE_BINARY_DIR}")
 # -------------------------
 find_package(OpenGL REQUIRED)
 
+
+## GLAD (OpenGL loader)
+# We keep OpenGL 3.x symbols/defines available on Windows by using GLAD.
+# Expected layout (generated GLAD files):
+#   external/glad/include/glad/glad.h
+#   external/glad/include/KHR/khrplatform.h
+#   external/glad/src/glad.c
+set(GLAD_DIR ${CMAKE_SOURCE_DIR}/external/glad)
+if (EXISTS ${GLAD_DIR}/include/glad/glad.h AND EXISTS ${GLAD_DIR}/src/glad.c)
+    add_library(glad STATIC ${GLAD_DIR}/src/glad.c)
+    target_include_directories(glad PUBLIC ${GLAD_DIR}/include)
+    target_compile_definitions(glad PUBLIC GLFW_INCLUDE_NONE)
+else()
+    message(FATAL_ERROR
+        "GLAD not found or not generated.
+"
+        "Expected:
+"
+        "  external/glad/include/glad/glad.h
+"
+        "  external/glad/src/glad.c
+"
+        "Add GLAD as a submodule (or folder) under external/glad and generate GLAD files for OpenGL 3.3 core.
+")
+endif()
+
+# -------------------------
+# Walnut (Image helper)
+# -------------------------
+# ImGuiHost uses Walnut::Image (Decode + ctor/dtor). Build it as a tiny static
+# library and link it into the host EXE (and plugin, if desired).
+set(WALNUT_IMAGE_CPP "${CMAKE_CURRENT_SOURCE_DIR}/Walnut/Image.cpp")
+set(WALNUT_IMAGE_H   "${CMAKE_CURRENT_SOURCE_DIR}/Walnut/Image.h")
+if(NOT EXISTS "${WALNUT_IMAGE_CPP}")
+    # Fallback if Walnut is vendored under src/
+    set(WALNUT_IMAGE_CPP "${CMAKE_CURRENT_SOURCE_DIR}/src/Walnut/Image.cpp")
+    set(WALNUT_IMAGE_H   "${CMAKE_CURRENT_SOURCE_DIR}/src/Walnut/Image.h")
+endif()
+
+add_library(walnut STATIC ${WALNUT_IMAGE_CPP} ${WALNUT_IMAGE_H})
+target_include_directories(walnut PUBLIC
+    "${CMAKE_CURRENT_SOURCE_DIR}"
+    "${CMAKE_CURRENT_SOURCE_DIR}/Walnut"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src"
+    "${CMAKE_CURRENT_SOURCE_DIR}/external/stb"
+)
+target_link_libraries(walnut PUBLIC glad OpenGL::GL)
+
 # -------------------------
 # External deps: GLFW + ImGui + GLM + STB + nlohmann-json
 # -------------------------
@@ -109,8 +157,9 @@ add_library(imgui SHARED
     "${IMGUI_CUSTOM_DIR}/ImGuiTheme.cpp"
     "${IMGUI_CUSTOM_DIR}/Image.cpp"
 
-    # Image.cpp already provides stb_image implementation in this codebase.
-    # Building StbImpl.cpp as well causes duplicate stbi_* symbols.
+
+    # stb_image implementation TU (required for stbi_* exports)
+    "${IMGUI_CUSTOM_DIR}/StbImageImpl.cpp"
 )
 
 target_include_directories(imgui PUBLIC
@@ -121,7 +170,8 @@ target_include_directories(imgui PUBLIC
     "${STB_DIR}"
 )
 
-target_link_libraries(imgui PUBLIC OpenGL::GL glfw)
+target_include_directories(imgui PUBLIC ${GLAD_DIR}/include)
+target_link_libraries(imgui PUBLIC OpenGL::GL glfw glad)
 
 # IMPORTANT (Windows / hot-reload):
 # Host EXE and UI plugin DLL must share a single ImGui context (GImGui).
@@ -134,10 +184,9 @@ target_link_libraries(imgui PUBLIC OpenGL::GL glfw)
 # We define IMGUI_USER_CONFIG to point at our own config header (in ./ImGui)
 # and set IMGUI_BUILD_DLL on the imgui target to enable __declspec(dllexport).
 if(WIN32)
-    target_compile_definitions(imgui PUBLIC
-        IMGUI_USER_CONFIG=\"imconfig_pistachio.h\"
+    target_compile_definitions(imgui PUBLIC IMGUI_USER_CONFIG=\"imconfig_pistachio.h\"
         IMGUI_DLL
-    )
+     IMGUI_IMPL_OPENGL_LOADER_GLAD)
     target_compile_definitions(imgui PRIVATE
         IMGUI_BUILD_DLL
     )
@@ -232,6 +281,9 @@ add_library(pistachio_ui SHARED
     src/adapters/ui/ImGuiAdapter.cpp
     src/adapters/ui/UI.cpp
 
+    # Defines UI::Colors::Theme::* (used by ImGuiHost drawing code)
+    src/adapters/ui/ThemeColors.cpp
+
     src/adapters/ui/plugins/PistachioUiModule.cpp
 )
 
@@ -247,10 +299,12 @@ target_include_directories(pistachio_ui PRIVATE
 target_link_libraries(pistachio_ui PRIVATE
     pistachio_core
     imgui
-    glfw
     OpenGL::GL
     nlohmann_json
+    glad
+    walnut
 )
+
 
 
 # Put the plugin DLL next to the exe in bin/<cfg>/plugins
@@ -269,7 +323,14 @@ endforeach()
 add_executable(${PROJECT_NAME}
     src/main.cpp
     src/adapters/ui/ImGuiHost.cpp
+    src/adapters/ui/ThemeColors.cpp
     src/adapters/ui/plugins/UiPluginLoader.cpp
+
+    # --- OpenGL 3D viewport (offscreen FBO -> ImGui::Image) ---
+    src/adapters/rendering/GLLoader.cpp
+    src/adapters/rendering/FramebufferManager.cpp
+    src/adapters/rendering/OpenGlRenderer.cpp
+    src/adapters/rendering/GlCubeViewRenderer.cpp
 )
 
 target_include_directories(${PROJECT_NAME} PRIVATE
@@ -283,7 +344,10 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
     OpenGL::GL
     glfw
     nlohmann_json
+    glad
+    walnut
 )
+
 
 if(WIN32)
     target_link_libraries(${PROJECT_NAME} PRIVATE opengl32)

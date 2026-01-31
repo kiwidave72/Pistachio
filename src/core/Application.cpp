@@ -387,8 +387,29 @@ namespace core {
                         // NOTE: you probably want tools here
                         ImGui::EndMenu();
                     }
-                    if (ImGui::BeginMenu("View"))
+                    if (ImGui::BeginMenu("Views"))
                     {
+                        auto getBool = [&](const char* ns, const char* key, bool defVal) {
+                            nlohmann::json v = m_config.get(ns, key);
+                            return v.is_boolean() ? v.get<bool>() : defVal;
+                        };
+
+                        auto toggle = [&](const char* key, const char* label) {
+                            bool open = getBool("pistachio.ui", key, true);
+                            if (ImGui::MenuItem(label, nullptr, open))
+                                m_config.set("pistachio.ui", key, !open);
+                        };
+
+                        toggle("views.fileOperations", "File Operations");
+                        toggle("views.status", "Status");
+                        toggle("views.modelInfo", "Model Info");
+                        toggle("views.viewport3d", "3D Viewport");
+                        toggle("views.sketchEditor", "Sketch Editor");
+
+                        ImGui::Separator();
+                        if (ImGui::MenuItem("Settings"))
+                            m_config.set("pistachio.ui", "config.windowOpen", true);
+
                         ImGui::EndMenu();
                     }
 

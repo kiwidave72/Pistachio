@@ -13,6 +13,8 @@
 #include "../../../Walnut-Icon.embed"
 #include "../../../WindowImages.embed"
 
+#define GLFW_INCLUDE_NONE
+#include <glad/glad.h>
 #include <GLFW/glfw3.h>
 #include "stb_image.h"
 
@@ -304,6 +306,12 @@ namespace adapters {
         }
 
         glfwMakeContextCurrent(w);
+        // Load OpenGL function pointers (GLAD)
+        if (!gladLoadGLLoader((GLADloadproc)glfwGetProcAddress)) {
+            std::printf("[ImGuiHost][ERROR] gladLoadGLLoader() failed\n");
+
+            return nullptr;
+        }
         glfwSwapInterval(1); // vsync
 
 
