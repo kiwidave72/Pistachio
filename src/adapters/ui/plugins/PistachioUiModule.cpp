@@ -69,6 +69,10 @@ public:
                 "Show/hide the 3D Viewport window.", "Views", SettingType::Bool, true, true
             ));
             cfg->registerSetting(SettingInfo(
+                "pistachio.ui", "views.sketch3dViewport", "Sketch 3D View",
+                "Show/hide the Sketch 3D View window.", "Views", SettingType::Bool, true, true
+            ));
+            cfg->registerSetting(SettingInfo(
                 "pistachio.ui", "views.sketchEditor", "Sketch Editor",
                 "Show/hide the Sketch Editor window.", "Views", SettingType::Bool, true, true
             ));

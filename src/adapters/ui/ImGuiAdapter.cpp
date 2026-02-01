@@ -7,6 +7,7 @@
 #include <glad/glad.h>
 
 #include "adapters/ui/ImGuiAdapter.h"
+#include "adapters/rendering/GlSketch3DViewRenderer.h"
 #include "core/Application.h"
 
 #include <imgui.h>
@@ -15,6 +16,7 @@
 #include <cstring>
 #include <algorithm>
 #include <cmath>
+#include <functional>
 #include <glm/glm.hpp>
 
 #include <nlohmann/json.hpp>
@@ -138,6 +140,10 @@ namespace adapters {
         m_viewModelInfo      = readBool("pistachio.ui", "views.modelInfo",      true);
         m_view3DViewport     = readBool("pistachio.ui", "views.viewport3d",     true);
         m_viewSketchEditor   = readBool("pistachio.ui", "views.sketchEditor",   true);
+        m_viewSketch3DViewport = readBool("pistachio.ui", "views.sketch3dViewport", true);
+
+        // Phase 2: dedicated renderer for the Sketch 3D View (kept separate from the app\'s primary renderer)
+        m_sketch3dRenderer = std::make_unique<adapters::GlSketch3DViewRenderer>();
     }
 
     ImGuiAdapter::~ImGuiAdapter() = default;
@@ -276,14 +282,201 @@ if (!m_titleFont)
         m_viewStatus         = readBool("pistachio.ui", "views.status",         m_viewStatus);
         m_viewModelInfo      = readBool("pistachio.ui", "views.modelInfo",      m_viewModelInfo);
         m_view3DViewport     = readBool("pistachio.ui", "views.viewport3d",     m_view3DViewport);
+        m_viewSketch3DViewport = readBool("pistachio.ui", "views.sketch3dViewport", m_viewSketch3DViewport);
         m_viewSketchEditor   = readBool("pistachio.ui", "views.sketchEditor",   m_viewSketchEditor);
 
         renderMainMenu();
         renderStatusBar();
         renderModelInfo();
         render3DView();
+        renderSketch3DView();
         renderSketchEditor();
     }
+
+    void ImGuiAdapter::renderSketch3DView()
+    {
+        if (!m_viewSketch3DViewport)
+            return;
+
+        bool wasOpen = m_viewSketch3DViewport;
+        ImGui::Begin("Sketch 3D View", &m_viewSketch3DViewport, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+
+        if (m_sketch3dRenderer)
+        {
+            ImVec2 size = ImGui::GetContentRegionAvail();
+
+            if (size.x > 0 && size.y > 0)
+            {
+                const uint32_t w = (uint32_t)ImMax(1.0f, size.x);
+                const uint32_t h = (uint32_t)ImMax(1.0f, size.y);
+
+                // Phase 2: build a renderer-agnostic overlay scene from the current sketch document.
+                // This does NOT affect the existing cube renderer/view.
+                {
+                    ports::RenderScene scene;
+
+                    auto packRgba = [](uint8_t r, uint8_t g, uint8_t b, uint8_t a) -> uint32_t {
+                        return (uint32_t(r) << 24) | (uint32_t(g) << 16) | (uint32_t(b) << 8) | uint32_t(a);
+                    };
+
+                    auto addGrid = [&](const glm::vec3& origin,
+                                       const glm::vec3& u,
+                                       const glm::vec3& v,
+                                       float spacing,
+                                       int linesPerSide,
+                                       uint32_t color,
+                                       float depthBias,
+                                       const glm::vec3& normal)
+                    {
+                        ports::RenderPrimitive prim;
+                        prim.kind = ports::RenderPrimitiveKind::LineList;
+                        prim.rgba = color;
+                        prim.size = 1.0f;
+                        prim.depthTest = true;
+
+                        const float half = float(linesPerSide) * spacing;
+                        const glm::vec3 O = origin + normal * depthBias;
+
+                        for (int i = -linesPerSide; i <= linesPerSide; ++i)
+                        {
+                            const float t = float(i) * spacing;
+
+                            // Line parallel to u axis (varying v)
+                            prim.positions.push_back(O + u * (-half) + v * t);
+                            prim.positions.push_back(O + u * ( half) + v * t);
+
+                            // Line parallel to v axis (varying u)
+                            prim.positions.push_back(O + u * t + v * (-half));
+                            prim.positions.push_back(O + u * t + v * ( half));
+                        }
+
+                        scene.primitives.push_back(std::move(prim));
+                    };
+
+                    // 3 work planes (XY, YZ, XZ) with gentle depth bias to avoid z-fighting.
+                    const float spacing = 10.0f;
+                    const int lines = 20;
+                    const float bias = 0.25f;
+                    addGrid(glm::vec3(0,0,0), glm::vec3(1,0,0), glm::vec3(0,1,0), spacing, lines, packRgba(90,  90,  95, 255), bias, glm::vec3(0,0,1)); // XY
+                    addGrid(glm::vec3(0,0,0), glm::vec3(0,1,0), glm::vec3(0,0,1), spacing, lines, packRgba(75,  80,  90, 255), bias, glm::vec3(1,0,0)); // YZ
+                    addGrid(glm::vec3(0,0,0), glm::vec3(1,0,0), glm::vec3(0,0,1), spacing, lines, packRgba(80,  75,  90, 255), bias, glm::vec3(0,1,0)); // XZ
+
+                    // Sketch overlays: for now, we project ALL sketch line entities onto all three planes.
+                    // NOTE: We intentionally do NOT gate on any 'visible' flags in Phase 2, because older
+                    // documents / models may default these to false, which would look like "nothing renders".
+                    int totalLineSegments = 0;
+                    bool hasDoc = false;
+                    if (m_app)
+                    {
+                        auto doc = m_app->getSketchDocument();
+                        if (doc)
+                        {
+                            hasDoc = true;
+                            auto addSketchLinesOnPlane = [&](const glm::vec3& normal,
+                                                            uint32_t color,
+                                                            const std::function<glm::vec3(const domain::sketch::Vec2&)>& toWorld)
+                            {
+                                ports::RenderPrimitive l;
+                                l.kind = ports::RenderPrimitiveKind::LineList;
+                                l.rgba = color;
+                                l.size = 2.0f;
+                                l.depthTest = true;
+
+                                for (const auto& sk : doc->sketches)
+                                {
+                                    for (const auto& ln : sk.entities.lines())
+                                    {
+                                        glm::vec3 A = toWorld(ln.a) + normal * 0.35f;
+                                        glm::vec3 B = toWorld(ln.b) + normal * 0.35f;
+                                        l.positions.push_back(A);
+                                        l.positions.push_back(B);
+                                        ++totalLineSegments;
+                                    }
+                                }
+
+                                if (!l.positions.empty())
+                                    scene.primitives.push_back(std::move(l));
+                            };
+
+                            // XY: (u,v)->(x,y)
+                            addSketchLinesOnPlane(glm::vec3(0,0,1), packRgba( 60, 200, 255, 255),
+                                [](const domain::sketch::Vec2& p){ return glm::vec3((float)p.x, (float)p.y, 0.0f); });
+                            // YZ: (u,v)->(y,z)
+                            addSketchLinesOnPlane(glm::vec3(1,0,0), packRgba(255, 180,  60, 255),
+                                [](const domain::sketch::Vec2& p){ return glm::vec3(0.0f, (float)p.x, (float)p.y); });
+                            // XZ: (u,v)->(x,z)
+                            addSketchLinesOnPlane(glm::vec3(0,1,0), packRgba(160, 255,  90, 255),
+                                [](const domain::sketch::Vec2& p){ return glm::vec3((float)p.x, 0.0f, (float)p.y); });
+                        }
+                    }
+
+                    // Give the user a clear hint about why they might not see sketch geometry yet.
+                    if (!hasDoc)
+                        ImGui::TextDisabled("No sketch document loaded (showing grids only)");
+                    else if (totalLineSegments == 0)
+                        ImGui::TextDisabled("No sketch lines found (showing grids only)");
+
+                    m_sketch3dRenderer->setScene(scene);
+                }
+
+                m_sketch3dRenderer->renderToFramebuffer(m_window, w, h);
+
+                void* tex = m_sketch3dRenderer->getFramebufferTexture();
+                if (tex) {
+                    ImVec2 imageMin = ImGui::GetCursorScreenPos();
+
+                    ImGui::InvisibleButton("##viewport3d_sketch3d", size,
+                        ImGuiButtonFlags_MouseButtonLeft |
+                        ImGuiButtonFlags_MouseButtonRight |
+                        ImGuiButtonFlags_MouseButtonMiddle);
+
+                    bool hovered = ImGui::IsItemHovered();
+                    bool active = ImGui::IsItemActive();
+
+                    ImVec2 imageMax = ImVec2(imageMin.x + size.x, imageMin.y + size.y);
+                    ImGui::GetWindowDrawList()->AddImage(
+                        tex,
+                        imageMin,
+                        imageMax,
+                        ImVec2(0, 0),
+                        ImVec2(1, 1)
+                    );
+
+                    if (active || ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows))
+                        m_activeViewport = ActiveViewport::Sketch3D;
+
+                    const bool isActiveViewport = (m_activeViewport == ActiveViewport::Sketch3D);
+
+                    if (isActiveViewport && hovered && ImGui::IsMouseDragging(ImGuiMouseButton_Right, 0.0f)) {
+                        ImVec2 delta = ImGui::GetIO().MouseDelta;
+                        m_sketch3dRenderer->rotate(delta.x, delta.y);
+                    }
+
+                    if (isActiveViewport && hovered && ImGui::IsMouseDragging(ImGuiMouseButton_Middle, 0.0f)) {
+                        ImVec2 delta = ImGui::GetIO().MouseDelta;
+                        m_sketch3dRenderer->zoom(-delta.y * 0.05f);
+                    }
+                }
+                else {
+                    ImGui::TextColored(ImVec4(1, 0, 0, 1), "ERROR: No texture from Sketch3D renderer");
+                }
+            }
+            else
+            {
+                ImGui::TextDisabled("Viewport too small");
+            }
+        }
+        else
+        {
+            ImGui::TextDisabled("No Sketch3D renderer");
+        }
+
+        ImGui::End();
+
+        if (m_config && wasOpen != m_viewSketch3DViewport)
+            m_config->set("pistachio.ui", "views.sketch3dViewport", m_viewSketch3DViewport);
+    }
+
 
     // ------------------------------------------------------------
     // UI SECTIONS (unchanged behavior)
@@ -394,7 +587,7 @@ if (!m_titleFont)
                     ImVec2 imageMin = ImGui::GetCursorScreenPos();
 
                     // === CRITICAL: Use InvisibleButton to capture ALL input ===
-                    ImGui::InvisibleButton("##viewport3d", size,
+                    ImGui::InvisibleButton("##viewport3d_cube", size,
                         ImGuiButtonFlags_MouseButtonLeft |
                         ImGuiButtonFlags_MouseButtonRight |
                         ImGuiButtonFlags_MouseButtonMiddle);
@@ -402,6 +595,12 @@ if (!m_titleFont)
                     bool hovered = ImGui::IsItemHovered();
                     bool active = ImGui::IsItemActive();
 
+
+                    // Mark this viewport as active when focused or clicked
+                    if (active || ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows))
+                        m_activeViewport = ActiveViewport::Cube;
+
+                    const bool isActiveViewport = (m_activeViewport == ActiveViewport::Cube);
                     // Draw the texture ON TOP using the drawlist
                     ImVec2 imageMax = ImVec2(imageMin.x + size.x, imageMin.y + size.y);
                     ImGui::GetWindowDrawList()->AddImage(
@@ -418,7 +617,7 @@ if (!m_titleFont)
                     m_viewportImageValid = true;
 
                     // === ROTATE: Right mouse button drag ===
-                    if (hovered && ImGui::IsMouseDragging(ImGuiMouseButton_Right, 0.0f)) {
+                    if (isActiveViewport && hovered && ImGui::IsMouseDragging(ImGuiMouseButton_Right, 0.0f)) {
                         ImVec2 delta = ImGui::GetIO().MouseDelta;
                         m_app->getRenderer()->rotate(delta.x, delta.y);
                     }
@@ -432,13 +631,13 @@ if (!m_titleFont)
                     //}
 
                    // Middle-drag = zoom (no modifier needed!)
-                    if (hovered && ImGui::IsMouseDragging(ImGuiMouseButton_Middle, 0.0f)) {
+                    if (isActiveViewport && hovered && ImGui::IsMouseDragging(ImGuiMouseButton_Middle, 0.0f)) {
                         ImVec2 delta = ImGui::GetIO().MouseDelta;
                         m_app->getRenderer()->zoom(-delta.y * 0.05f);
                     }
 
                     // Render camera gizmo overlay
-                    renderCameraGizmo();
+                    if (isActiveViewport) renderCameraGizmo();
 
                 }
                 else {
@@ -959,6 +1158,7 @@ void ImGuiAdapter::renderSketchEditor()
     }
 
     // Pan with MMB drag
+    // NOTE: The sketch editor's pan/zoom is independent of the 3D viewport "active renderer" concept.
     if (hovered && ImGui::IsMouseDragging(ImGuiMouseButton_Middle, 0.0f)) {
         ImVec2 d = ImGui::GetIO().MouseDelta;
         m_sketchPan.x += d.x;
@@ -1201,3 +1401,15 @@ void ImGuiAdapter::renderSketchEditor()
 }
 
 } // namespace adapters
+
+// -----------------------------------------------------------------------------
+// Build integration helper
+// -----------------------------------------------------------------------------
+// Some Visual Studio project configurations do not automatically include newly
+// added .cpp files in the pistachio_ui target. If GlSketch3DViewRenderer.cpp is
+// not part of that target, you'll see linker errors for GlSketch3DViewRenderer
+// symbols. Including the implementation here ensures the Sketch3D renderer is
+// compiled into the UI plugin without requiring build-file changes.
+
+#include "../rendering/GlSketch3DViewRenderer.cpp"
+#include "../rendering/FramebufferManager.cpp"

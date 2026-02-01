@@ -12,6 +12,7 @@
     "theme": "Pistachio",
     "views.fileOperations": false,
     "views.modelInfo": false,
+    "views.sketch3dViewport": true,
     "views.sketchEditor": true,
     "views.status": false,
     "views.viewport3d": true

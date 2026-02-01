@@ -9,7 +9,7 @@
 struct GLFWwindow;
 struct ImFont;
 
-namespace ports { class IConfigPort; }
+namespace ports { class IConfigPort; class IRendererPort; }
 
 namespace core { class Application; }
 
@@ -50,6 +50,7 @@ namespace adapters {
         void renderStatusBar();
         void renderModelInfo();
         void render3DView();
+        void renderSketch3DView();
         void renderCameraGizmo();
         void renderSketchEditor();
 
@@ -59,11 +60,15 @@ namespace adapters {
         IGuiHost* m_host = nullptr;
         ports::IConfigPort* m_config = nullptr;
 
+        // New: second docked viewport renderer (kept separate from the app's primary renderer)
+        std::unique_ptr<ports::IRendererPort> m_sketch3dRenderer;
+
         // View visibility (defaults to true; persisted via config when available)
         bool m_viewFileOperations = true;
         bool m_viewStatus = true;
         bool m_viewModelInfo = true;
         bool m_view3DViewport = true;
+        bool m_viewSketch3DViewport = true;
         bool m_viewSketchEditor = true;
 
         bool m_resourcesInitialized = false; // NEW
@@ -104,6 +109,10 @@ namespace adapters {
         unsigned int m_glTexRestore = 0;
         unsigned int m_glTexClose = 0;
         
+        // Active viewport selection: whichever viewport window is focused / clicked receives camera/tool input.
+        enum class ActiveViewport { None, Cube, Sketch3D };
+        ActiveViewport m_activeViewport = ActiveViewport::None;
+
         // Last drawn 3D viewport image rect (screen-space). Used for overlays like the camera gizmo.
         ImVec2 m_viewportImageMin{0,0};
         ImVec2 m_viewportImageMax{0,0};
