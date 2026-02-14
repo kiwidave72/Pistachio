@@ -72,7 +72,7 @@ private:
 
     bool IsTitleBarHovered() const { return m_TitleBarHovered; }
     // ---- diagnostics ----
-    bool m_diagStdout = true;
+    bool m_diagStdout = false;
     uint64_t m_frameIndex = 0;
     uint32_t m_diagOnceMask = 0;
 

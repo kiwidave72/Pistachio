@@ -398,8 +398,66 @@ ImGuiIO& io = ImGui::GetIO();
 
         ImGui::StyleColorsDark();
 
-        ImGui_ImplGlfw_InitForOpenGL(m_window, true);
+        // CRITICAL FIX: Initialize ImGui KeyMap for keyboard navigation
+        // This must be done BEFORE we install callbacks
+        io.KeyMap[ImGuiKey_Tab] = GLFW_KEY_TAB;
+        io.KeyMap[ImGuiKey_LeftArrow] = GLFW_KEY_LEFT;
+        io.KeyMap[ImGuiKey_RightArrow] = GLFW_KEY_RIGHT;
+        io.KeyMap[ImGuiKey_UpArrow] = GLFW_KEY_UP;
+        io.KeyMap[ImGuiKey_DownArrow] = GLFW_KEY_DOWN;
+        io.KeyMap[ImGuiKey_PageUp] = GLFW_KEY_PAGE_UP;
+        io.KeyMap[ImGuiKey_PageDown] = GLFW_KEY_PAGE_DOWN;
+        io.KeyMap[ImGuiKey_Home] = GLFW_KEY_HOME;
+        io.KeyMap[ImGuiKey_End] = GLFW_KEY_END;
+        io.KeyMap[ImGuiKey_Insert] = GLFW_KEY_INSERT;
+        io.KeyMap[ImGuiKey_Delete] = GLFW_KEY_DELETE;
+        io.KeyMap[ImGuiKey_Backspace] = GLFW_KEY_BACKSPACE;
+        io.KeyMap[ImGuiKey_Space] = GLFW_KEY_SPACE;
+        io.KeyMap[ImGuiKey_Enter] = GLFW_KEY_ENTER;
+        io.KeyMap[ImGuiKey_Escape] = GLFW_KEY_ESCAPE;
+        io.KeyMap[ImGuiKey_KeyPadEnter] = GLFW_KEY_KP_ENTER;
+        io.KeyMap[ImGuiKey_A] = GLFW_KEY_A;
+        io.KeyMap[ImGuiKey_C] = GLFW_KEY_C;
+        io.KeyMap[ImGuiKey_V] = GLFW_KEY_V;
+        io.KeyMap[ImGuiKey_X] = GLFW_KEY_X;
+        io.KeyMap[ImGuiKey_Y] = GLFW_KEY_Y;
+        io.KeyMap[ImGuiKey_Z] = GLFW_KEY_Z;
+
+        // Install GLFW callbacks that forward to ImGui
+        // Store the window pointer for use in lambda callbacks
+        GLFWwindow* win = m_window;
+        
+        // Install key callback that forwards to ImGui
+        glfwSetKeyCallback(m_window, [](GLFWwindow* window, int key, int scancode, int action, int mods) {
+            // Let ImGui handle navigation keys
+            ImGuiIO& io = ImGui::GetIO();
+            if (action == GLFW_PRESS) {
+                io.KeysDown[key] = true;
+            }
+            if (action == GLFW_RELEASE) {
+                io.KeysDown[key] = false;
+            }
+            io.KeyCtrl = io.KeysDown[GLFW_KEY_LEFT_CONTROL] || io.KeysDown[GLFW_KEY_RIGHT_CONTROL];
+            io.KeyShift = io.KeysDown[GLFW_KEY_LEFT_SHIFT] || io.KeysDown[GLFW_KEY_RIGHT_SHIFT];
+            io.KeyAlt = io.KeysDown[GLFW_KEY_LEFT_ALT] || io.KeysDown[GLFW_KEY_RIGHT_ALT];
+            io.KeySuper = io.KeysDown[GLFW_KEY_LEFT_SUPER] || io.KeysDown[GLFW_KEY_RIGHT_SUPER];
+        });
+        
+        // Install char callback for text input
+        glfwSetCharCallback(m_window, [](GLFWwindow* window, unsigned int c) {
+            ImGuiIO& io = ImGui::GetIO();
+            if (c > 0 && c < 0x10000) {
+                io.AddInputCharacter((unsigned short)c);
+            }
+        });
+        
+        ImGui_ImplGlfw_InitForOpenGL(m_window, false); // Don't install callbacks, we did it manually
         ImGui_ImplOpenGL3_Init("#version 330");
+
+        // WORKAROUND: Ensure the window has input focus
+        glfwFocusWindow(m_window);
+        
+        std::printf("[ImGuiHost] Manually installed keyboard callbacks and KeyMap\n");
 
         // windows icons
         {
@@ -596,6 +654,45 @@ ImGuiIO& io = ImGui::GetIO();
         }
 
         ImGui::NewFrame();
+
+        // CRITICAL TEST: Check if keyboard input is working at all
+        static bool s_glfwTestDone = false;
+        static bool s_imguiTestDone = false;
+        
+        if (!s_glfwTestDone && m_window) {
+            // Test if GLFW is receiving keyboard input
+            if (glfwGetKey(m_window, GLFW_KEY_A) == GLFW_PRESS ||
+                glfwGetKey(m_window, GLFW_KEY_DELETE) == GLFW_PRESS ||
+                glfwGetKey(m_window, GLFW_KEY_SPACE) == GLFW_PRESS ||
+                glfwGetKey(m_window, GLFW_KEY_ENTER) == GLFW_PRESS) {
+                std::printf("[KEYBOARD TEST] ✓ GLFW IS receiving keyboard input!\n");
+                s_glfwTestDone = true;
+            }
+        }
+        
+        if (!s_imguiTestDone) {
+            // Test if ImGui is receiving keyboard input
+            ImGuiIO& io = ImGui::GetIO();
+            for (int i = 0; i < 512; i++) {
+                if (ImGui::IsKeyPressed((ImGuiKey)i)) {
+                    std::printf("[KEYBOARD TEST] ✓ ImGui IS receiving keyboard input! (key=%d)\n", i);
+                    s_imguiTestDone = true;
+                    break;
+                }
+            }
+        }
+        
+        // After both tests are done, print summary if neither worked
+        static bool s_summaryPrinted = false;
+        if (!s_summaryPrinted && m_frameIndex > 120) { // Wait 2 seconds at 60fps
+            if (!s_glfwTestDone && !s_imguiTestDone) {
+                std::printf("\n[KEYBOARD TEST FAILED] ✗ No keyboard input detected after 2 seconds!\n");
+                std::printf("  - GLFW is NOT receiving keyboard events\n");
+                std::printf("  - ImGui is NOT receiving keyboard events\n");
+                std::printf("  Try: Press any key (A, Space, Enter, Delete) to test\n\n");
+            }
+            s_summaryPrinted = true;
+        }
 
 
         float titlebarHeight = 96.0f; // includes menu row + ribbon row

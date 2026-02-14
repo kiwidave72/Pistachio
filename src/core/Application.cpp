@@ -8,6 +8,7 @@
 #include "imgui_internal.h"
 
 #include <cmath>
+#include <ctime>
 
 namespace core {
 
@@ -363,8 +364,22 @@ namespace core {
                     {
                         if (ImGui::MenuItem("Open")) {}
                         ImGui::Separator();
-                        if (ImGui::MenuItem("Save")) {}
-                        if (ImGui::MenuItem("Save as ...")) {}
+                        if (ImGui::MenuItem("Save", "Ctrl+S")) {
+                            // Save to the current file (test.pistachio.json for now)
+                            if (saveSketchDocument("test.pistachio.json")) {
+                                updateStatus("Sketch saved successfully");
+                            }
+                        }
+                        if (ImGui::MenuItem("Save as ...")) {
+                            // TODO: Show file dialog to choose save location
+                            // For now, save to a timestamped file
+                            auto now = std::time(nullptr);
+                            char filename[256];
+                            std::strftime(filename, sizeof(filename), "sketch_%Y%m%d_%H%M%S.pistachio.json", std::localtime(&now));
+                            if (saveSketchDocument(filename)) {
+                                updateStatus(std::string("Sketch saved as: ") + filename);
+                            }
+                        }
                         ImGui::Separator();
                         if (ImGui::MenuItem("Import Sketch")) {}
                         ImGui::Separator();
@@ -520,6 +535,46 @@ namespace core {
         std::cout << "===============================\n" << std::endl;
 
         return (loaded != nullptr);
+    }
+
+    bool Application::saveSketchDocument(const std::string& filepath)
+    {
+        std::cout << "\n=== SAVING SKETCH DOCUMENT ===" << std::endl;
+        std::cout << "File: " << filepath << std::endl;
+
+        if (!m_sketchDoc) {
+            std::cout << "[X] No sketch document to save" << std::endl;
+            updateStatus("Error: No sketch document loaded");
+            return false;
+        }
+
+        try {
+            adapters::persistence::JsonSketchDocumentAdapter io;
+            io.saveDocument(*m_sketchDoc, filepath);
+            
+            std::cout << "[OK] Sketch document saved successfully" << std::endl;
+            std::cout << "  Sketches in document: " << m_sketchDoc->sketches.size() << std::endl;
+            
+            if (!m_sketchDoc->sketches.empty()) {
+                auto& sketch = m_sketchDoc->sketches[0];
+                std::cout << "  First sketch entities:" << std::endl;
+                std::cout << "    Points: " << sketch.entities.points().size() << std::endl;
+                std::cout << "    Lines: " << sketch.entities.lines().size() << std::endl;
+                std::cout << "    Circles: " << sketch.entities.circles().size() << std::endl;
+                std::cout << "    Arcs: " << sketch.entities.arcs().size() << std::endl;
+                std::cout << "    Constraints: " << sketch.constraints.size() << std::endl;
+            }
+            
+            updateStatus("Sketch document saved: " + filepath);
+            std::cout << "===============================\n" << std::endl;
+            return true;
+        }
+        catch (const std::exception& e) {
+            std::cout << "[X] Failed to save sketch document: " << e.what() << std::endl;
+            updateStatus("Error saving sketch: " + std::string(e.what()));
+            std::cout << "===============================\n" << std::endl;
+            return false;
+        }
     }
 
     std::shared_ptr<domain::sketch::Document> Application::getSketchDocument() const

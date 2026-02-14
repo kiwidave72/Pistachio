@@ -670,4 +670,71 @@ namespace adapters {
         updateDerivedCamera();
     }
 
+    void GlSketch3DViewRenderer::tick(float dtSeconds) {
+        if (!m_animating) return;
+
+        m_animT += dtSeconds;
+        float t = (m_animDuration <= 0.0f) ? 1.0f : (m_animT / m_animDuration);
+        if (t >= 1.0f) {
+            t = 1.0f;
+            m_animating = false;
+        }
+
+        // Smoothstep for nicer ease-in/out.
+        const float s = t * t * (3.0f - 2.0f * t);
+
+        m_yaw = m_startYaw + (m_targetYaw - m_startYaw) * s;
+        m_pitch = m_startPitch + (m_targetPitch - m_startPitch) * s;
+        m_distance = m_startDistance + (m_targetDistance - m_startDistance) * s;
+
+        // Keep camera mode; for plane snaps we prefer orthographic.
+        if (m_forceOrthoDuringAnim) {
+            m_camera.orthographic = true;
+            m_camera.orthoScale = m_targetOrthoScale;
+        }
+        updateDerivedCamera();
+    }
+
+    void GlSketch3DViewRenderer::animateToPlane(Sketch3DPlane plane, float durationSeconds) {
+        // Plane normals:
+        //   XY -> +Z, XZ -> +Y, YZ -> +X
+        // Orbit parameterization used by updateDerivedCamera():
+        //   x = cos(pitch)*cos(yaw)*d
+        //   y = sin(pitch)*d
+        //   z = cos(pitch)*sin(yaw)*d
+
+        m_startYaw = m_yaw;
+        m_startPitch = m_pitch;
+        m_startDistance = m_distance;
+
+        switch (plane) {
+            case Sketch3DPlane::YZ: // look along +X
+                m_targetYaw = 0.0f;
+                m_targetPitch = 0.0f;
+                break;
+            case Sketch3DPlane::XZ: // look along +Y
+                m_targetYaw = 0.0f;
+                m_targetPitch = 1.57079f;
+                break;
+            case Sketch3DPlane::XY: // look along +Z
+            default:
+                m_targetYaw = 1.57079f;
+                m_targetPitch = 0.0f;
+                break;
+        }
+
+        m_targetDistance = std::max(0.05f, m_distance);
+
+        m_animDuration = std::max(0.01f, durationSeconds);
+        m_animT = 0.0f;
+        m_animating = true;
+
+        // For sketch plane snaps, orthographic reads better.
+        m_forceOrthoDuringAnim = true;
+        m_targetOrthoScale = (m_camera.orthoScale > 0.0f ? m_camera.orthoScale : 4.0f);
+    }
+
+    const glm::mat4& GlSketch3DViewRenderer::getViewMatrix() const { return m_view; }
+    const glm::mat4& GlSketch3DViewRenderer::getProjMatrix() const { return m_proj; }
+
 } // namespace adapters

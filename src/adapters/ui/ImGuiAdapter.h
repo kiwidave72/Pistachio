@@ -2,9 +2,13 @@
 
 #include <memory>
 #include <functional>
+#include <vector>
+
+#include <glm/vec3.hpp>
 
 #include "adapters/ui/IGuiHost.h"
 #include "adapters/ui/SketchTooling.h"
+#include "adapters/rendering/Sketch3DPlane.h"
 
 struct GLFWwindow;
 struct ImFont;
@@ -70,6 +74,28 @@ namespace adapters {
         bool m_view3DViewport = true;
         bool m_viewSketch3DViewport = true;
         bool m_viewSketchEditor = true;
+
+        // Sketch 3D View (Phase 3): choose which orthogonal plane the 2D sketch is shown on.
+        adapters::Sketch3DPlane m_sketch3dActivePlane = adapters::Sketch3DPlane::XY;
+        bool m_sketch3dShowOtherPlanes = true;
+        bool m_sketch3dHasHoverPlane = false;
+        adapters::Sketch3DPlane m_sketch3dHoverPlane = adapters::Sketch3DPlane::XY;
+
+
+        struct Sketch3DSegment {
+            adapters::Sketch3DPlane plane;
+            glm::vec3 a;
+            glm::vec3 b;
+        };
+        std::vector<Sketch3DSegment> m_sketch3dSegments;
+
+        // Ray visualization for showing why a plane was selected
+        glm::vec3 m_hoverRayOrigin{0,0,0};
+        glm::vec3 m_hoverRayHitPoint{0,0,0};
+        glm::vec3 m_hoverSegmentA{0,0,0};
+        glm::vec3 m_hoverSegmentB{0,0,0};
+        bool m_hasHoverRayData = false;
+
 
         bool m_resourcesInitialized = false; // NEW
 

@@ -1,27 +1,61 @@
-# C++ 2D Sketching & Constraint Solver
+# C++ Parametric CAD & Slicing Research Platform
 
-This application is a **2D sketching and constraint-based geometry system** written in modern C++.
-It is being developed as the foundation for a future parametric CAD and 3D modeling environment.
+This application is a **C++-based parametric CAD and slicing research platform**.
+It builds on a 2D sketching and constraint-based geometry system and is evolving toward full **feature-based solid modeling** and **CLI-driven slicing workflows**.
 
-The system follows a **domain-driven design** approach:
-- Geometry, constraints, and solver logic live in the core domain
-- UI, rendering, and input tools are adapters
-- The solver is intentionally simple, explicit, and testable
+The system is intentionally designed for **fast iteration** using an **adapter-first architecture**, allowing the core domain to mature over time while keeping rebuilds quick and experimentation safe.
 
-This document describes **what the application can do today**.
+This document describes **current behavior, architectural intent, and near-term direction**.
 
 ---
 
 ## 1. Domain Model Overview
 
-### Sketch
-A sketch is a container for:
-- 2D geometric entities
-- Geometric and dimensional constraints
-- Command history (undo / redo)
-- Change serials for solver invalidation
+### Core Domain
+The core domain contains:
+- 2D sketches and geometric entities
+- Constraints and constraint solving
+- Feature definitions (e.g. sketches, extrusions)
+- Deterministic model rebuild logic
 
-Each sketch has a stable identity and is solved incrementally.
+The domain:
+- Contains **no UI, rendering, OpenGL, ImGui, filesystem, or slicer logic**
+- Is deterministic and replayable
+- Owns *definitions*, not generated geometry
+
+The domain is expected to become more specific and constrained over time.
+
+---
+
+### Adapter-First Architecture
+The system is structured around adapters implemented as plug-ins:
+- UI and input handling
+- Rendering and visualization
+- Mesh generation
+- Import/export (STL, STEP)
+- CLI slicer integration (PrusaSlicer)
+
+**Rule:**
+> The core domain must not depend on adapters.  
+> Adapters may depend on the domain, but never on each other.
+
+This enables frequent compilation, rapid experimentation, and clean separation of concerns.
+
+---
+
+## 2. Sketching Model
+
+### Sketch
+A sketch is a **feature** and acts as a container for:
+- 2D geometric entities
+- Constraints
+- A user-selected sketch plane
+
+Closed profiles are detected **automatically**.
+
+Infinite-line solving is currently used by the solver as a temporary simplification and will be replaced with finite geometry as the modeling pipeline matures.
+
+Each sketch has a stable identity and is rebuilt deterministically.
 
 ---
 
@@ -30,15 +64,12 @@ Each sketch has a stable identity and is solved incrementally.
 | Entity | Description |
 |------|-------------|
 | Point | 2D point (x, y) |
-| Line | Infinite line defined by two endpoints |
+| Line | Line segment (solver currently treats as infinite) |
 | Circle | Center point + radius |
-
-**Important domain rule:**  
-Lines are treated as **infinite** for constraint solving. Rendering clips them only for display.
 
 ---
 
-## 2. Tools
+## 3. Tools
 
 ### Selection Tool
 - Hit-tests points, lines, and circles
@@ -52,16 +83,21 @@ Lines are treated as **infinite** for constraint solving. Rendering clips them o
 
 ### Constraint Tools – General Workflow
 1. Activate constraint tool
-2. Pick required entities (highlighted)
+2. Pick required entities
 3. Constraint commits
 4. Solver runs
 5. Geometry updates immediately
 
 ---
 
-## 3. Constraints
+## 4. Constraints
 
 Constraints are first-class domain objects stored in the sketch.
+
+The solver philosophy prioritizes:
+- Robustness
+- Diagnostics
+- Predictable behavior aligned with Fusion 360
 
 ### Fixed
 Locks an entity’s parameters.
@@ -73,9 +109,6 @@ Supported on:
 
 Rule:
 - Fixed entities are not modified by the solver
-
-Limit:
-- Entire entity only (no partial DOF locking)
 
 ---
 
@@ -93,29 +126,29 @@ Supported:
 Forces a line horizontal.
 
 Rule:
-y1 = y2
+- y1 = y2
 
 Status: Working
 
 ---
 
-### Vertical (Not working)
-Intended rule:
-x1 = x2
+### Vertical
+Forces a line vertical.
 
-Status:
-- Constraint stored
-- Solver does not modify geometry
+Rule:
+- x1 = x2
+
+Status: Partially implemented
 
 ---
 
-### Parallel (Not working)
-Intended rule:
-direction(line1) ∥ direction(line2)
+### Parallel
+Forces two lines to be parallel.
 
-Status:
-- Constraint stored
-- Solver does not modify geometry
+Rule:
+- direction(line1) ∥ direction(line2)
+
+Status: Partially implemented
 
 ---
 
@@ -125,26 +158,12 @@ Supported:
 - Circle–Circle (external)
 
 Rules:
-distance(center, line) = radius  
-distance(c1, c2) = r1 + r2
+- distance(center, line) = radius  
+- distance(c1, c2) = r1 + r2
 
 Limits:
-- Infinite lines
 - External tangency only
-- One-entity motion only
-
----
-
-## 4. Constraint Status Matrix
-
-| Constraint | Entities | Solver Effect | Status |
-|----------|----------|---------------|--------|
-| Fixed | P, L, C | Locks entity | Working |
-| Coincident | P–P, P–L, P–C | Forces coincidence | Working |
-| Horizontal | Line | Forces horizontal | Working |
-| Vertical | Line | No effect | Not working |
-| Parallel | Line–Line | No effect | Not working |
-| Tangent | L–C, C–C | Forces tangency | Working |
+- Solver-side simplifications still apply
 
 ---
 
@@ -155,144 +174,111 @@ Limits:
 | Determinism | Yes | Global optimality |
 | Constraint order | Sequential | Order independence |
 | Fixed respect | Full entity | Partial DOF |
-| Conflict detection | No | Yes |
-| Over-constraint detection | No | Yes |
-| DOF analysis | No | Yes |
-| Motion distribution | Single entity | Balanced motion |
+| Conflict detection | Planned | Currently incomplete |
+| Over-constraint detection | Planned | Currently incomplete |
+| DOF analysis | Planned | Currently incomplete |
 
 ---
 
-## 6. Known Issues
+## 6. Feature-Based Modeling
 
-- Vertical constraint is stored but does not modify geometry
-- Parallel constraint is stored but does not modify geometry
-- No constraint conflict detection
-- No DOF analysis
-- Lines treated as infinite for solving
+Modeling is **feature-driven**.
 
----
+- Features describe *how* geometry is created
+- Features do **not** own geometry
+- Geometry is generated during a build phase
 
-## 7. Building & Running the Application
+### Initial Features
+- Sketch
+- Extrude (from closed 2D profiles)
 
-The project uses **CMake** and builds on Windows, macOS, and Linux.
+### Planned Features
+- Boolean operations (Join, Cut, Intersect)
+- Additional feature types as required
 
-### Prerequisites
-
-- CMake **3.20+**
-- A C++17-compatible compiler
-  - Windows: Visual Studio 2022 (MSVC)
-  - macOS: Xcode / clang
-  - Linux: gcc or clang
-- Git
-
-The following libraries are included as part of the repository:
-- GLFW
-- Dear ImGui
-- OpenGL loader (as provided in the repo)
-
-No system-wide package installation is required beyond a compiler and CMake.
+Feature history is currently **linear**, with stable feature IDs to allow future reordering.
 
 ---
 
-### Clone the Repository
+## 7. Mesh Generation & Export
 
-```bash
-git clone <repo-url>
-cd <repo-folder>
-```
+Mesh generation is performed via **mesh adapters**.
 
----
+- Mesh engines are plug-ins
+- Guarantees (watertight, manifold, etc.) will improve over time
+- Mesh generation occurs at final build/export stage
 
-### Configure with CMake
+### Export Formats
+- STL (required)
+- STEP (required)
 
-Create a build directory and generate the build files:
-
-```bash
-cmake -S . -B build
-```
-
-#### Windows (Visual Studio)
-
-```bash
-cmake -S . -B build -G "Visual Studio 17 2022" -A x64
-```
-
-#### macOS / Linux (Makefiles or Ninja)
-
-```bash
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug
-```
-
-(Optional) Ninja:
-
-```bash
-cmake -S . -B build -G Ninja
-```
+Export functionality is experimental and not yet guaranteed slicer-safe.
 
 ---
 
-### Build
+## 8. Slicing & CLI Integration
 
-```bash
-cmake --build build
-```
+Slicing is performed via **CLI slicer adapters**.
 
-Windows configuration-specific build:
+- PrusaSlicer is the initial reference slicer
+- Integration is currently internal-only
+- A/B slicing comparisons are a first-class goal
 
-```bash
-cmake --build build --config Debug
-```
-
-or
-
-```bash
-cmake --build build --config Release
-```
+Future work includes:
+- Additional slicer adapters
+- G-code visualization tools
 
 ---
 
-### Run
+## 9. Rendering & UI
 
-After a successful build, the executable will be located in:
+Rendering is an adapter used for **editing and visualization**.
 
-- **Windows**
-  ```text
-  build/bin/Debug/
-  build/bin/Release/
-  ```
+- The 3D view is intended to become the primary editor
+- Sketch overlays are view-aligned and screen-space scaled
+- Both orthographic and perspective cameras are supported
 
-- **macOS / Linux**
-  ```text
-  build/bin/
-  ```
-
-Run it directly:
-
-```bash
-./build/bin/Sketcher
-```
-
-(Executable name may vary slightly depending on platform.)
+Rendering must never modify domain state.
 
 ---
 
-### Clean & Reconfigure
+## 10. Units & Coordinate System
 
-```bash
-rm -rf build
-cmake -S . -B build
-```
-
----
-
-### Notes
-
-- The application creates its own GLFW window and OpenGL context
-- UI is rendered entirely with Dear ImGui
-- The solver runs immediately after each committed tool or constraint action
-- Debug builds are recommended during active development
+- Internal units are **millimeters**
+- Coordinate system is **right-handed with Z-up**
+- Units may become configurable in the future
+- Internal tolerances are implementation-defined
 
 ---
 
-This document intentionally describes **current behavior only**.
+## 11. Persistence
+
+- File formats may change during development
+- Breaking changes are expected
+- Backward compatibility is not guaranteed at this stage
+
+---
+
+## 12. Roadmap (High-Level)
+
+### Phase 1 – Adapter-First Foundations
+- Stable sketching and constraints
+- Feature tree with extrusion
+- Experimental mesh adapter
+- PrusaSlicer CLI adapter
+
+### Phase 2 – Domain Tightening
+- Finite geometry
+- Improved solver robustness and diagnostics
+- Profile validation
+- Boolean operations
+
+### Phase 3 – Slicing & Tooling Research
+- A/B slicing workflows
+- G-code visualization
+- Internal slicer experimentation
+
+---
+
+This document reflects **current behavior and architectural intent**, not a frozen specification.
 

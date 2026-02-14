@@ -2,6 +2,7 @@
 
 #include "ports/IRendererPort.h"
 #include "adapters/rendering/FramebufferManager.h"
+#include "adapters/rendering/Sketch3DPlane.h"
 
 // IMPORTANT:
 // Do NOT include Dear ImGui's OpenGL loader header (imgui_impl_opengl3_loader.h)
@@ -59,6 +60,12 @@ namespace adapters {
         void zoom(float delta) override;
         void setViewDirection(int direction) override;
 
+        // --- Helpers used by the UI adapter (not part of the generic renderer port) ---
+        void tick(float dtSeconds);
+        void animateToPlane(Sketch3DPlane plane, float durationSeconds = 0.25f);
+		const glm::mat4& getViewMatrix() const;
+		const glm::mat4& getProjMatrix() const;
+
     private:
         void createResources();
         void destroyResources();
@@ -91,6 +98,19 @@ namespace adapters {
         float m_yaw = 0.785f;      // 45� - classic 3/4 view
         float m_pitch = 0.615f;    // ~35� - shows top nicely
         float m_distance = 4.0f;
+
+        // Camera animation (simple eased lerp)
+        bool  m_animating = false;
+        float m_animT = 0.0f;
+        float m_animDuration = 0.25f;
+        bool  m_forceOrthoDuringAnim = false;
+        float m_targetOrthoScale = 4.0f;
+        float m_startYaw = 0.0f;
+        float m_startPitch = 0.0f;
+        float m_startDistance = 0.0f;
+        float m_targetYaw = 0.0f;
+        float m_targetPitch = 0.0f;
+        float m_targetDistance = 0.0f;
 
          
         // Demo scene sizing (used to keep zoom/clipping sane)

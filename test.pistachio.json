@@ -4,173 +4,68 @@
     "name": "Updated with resolver",
     "sketches": [
       {
-        "constraints": [
-          {
-            "data": {
-              "meta": {
-                "enabled": true,
-                "id": 2000,
-                "name": "Horizontal L1",
-                "suppressed": false
-              },
-              "refs": [
-                {
-                  "anchor": 5,
-                  "id": 1002
-                }
-              ],
-              "type": 0
-            },
-            "kind": "Geometric"
-          },
-          {
-            "data": {
-              "meta": {
-                "enabled": true,
-                "id": 2001,
-                "name": "Line start → Point 1000",
-                "suppressed": false
-              },
-              "refs": [
-                {
-                  "anchor": 2,
-                  "id": 1002
-                },
-                {
-                  "anchor": 1,
-                  "id": 1000
-                }
-              ],
-              "type": 2
-            },
-            "kind": "Geometric"
-          },
-          {
-            "data": {
-              "meta": {
-                "enabled": true,
-                "id": 2002,
-                "name": "Line end → Point 1001",
-                "suppressed": false
-              },
-              "refs": [
-                {
-                  "anchor": 3,
-                  "id": 1002
-                },
-                {
-                  "anchor": 1,
-                  "id": 1001
-                }
-              ],
-              "type": 2
-            },
-            "kind": "Geometric"
-          }
-        ],
+        "constraints": [],
         "entities": [
           {
             "data": {
-              "id": 1000,
-              "p": {
-                "x": 0.0,
-                "y": 50.0
-              }
-            },
-            "kind": "Point"
-          },
-          {
-            "data": {
-              "id": 1001,
-              "p": {
-                "x": 100.0,
-                "y": 50.0
-              }
-            },
-            "kind": "Point"
-          },
-          {
-            "data": {
               "a": {
-                "x": 0.0,
-                "y": 50.0
+                "x": -3.0250000953674316,
+                "y": -0.012500000186264515
               },
               "b": {
-                "x": 100.0,
-                "y": 50.0
+                "x": -3.074997663497925,
+                "y": 5.087255001068115
               },
-              "id": 1002
+              "id": 1
             },
             "kind": "Line"
           },
           {
             "data": {
               "a": {
-                "x": 14.634753227233887,
-                "y": 70.73746490478516
+                "x": -3.049999952316284,
+                "y": 5.662499904632568
               },
               "b": {
-                "x": 71.03514099121094,
-                "y": 85.73756408691406
+                "x": 2.449772596359253,
+                "y": 5.612502098083496
               },
-              "id": 1004,
-              "name": "Line"
+              "id": 2
             },
             "kind": "Line"
           },
           {
             "data": {
               "a": {
-                "x": -17.00104522705078,
-                "y": 4.64192533493042
+                "x": 2.7750000953674316,
+                "y": 5.287499904632568
               },
               "b": {
-                "x": 0.04782867431640625,
-                "y": 4.837889671325684
+                "x": 2.875002861022949,
+                "y": -0.8126802444458008
               },
-              "id": 1006,
-              "name": "Line"
+              "id": 3
             },
             "kind": "Line"
           },
           {
             "data": {
-              "center": {
-                "x": 60.0,
-                "y": 20.0
+              "a": {
+                "x": 2.75,
+                "y": -1.0625
               },
-              "id": 1003,
-              "radius": 20.0
-            },
-            "kind": "Circle"
-          },
-          {
-            "data": {
-              "center": {
-                "x": 26.599761962890625,
-                "y": 97.17503356933594
+              "b": {
+                "x": -2.9000091552734375,
+                "y": -0.9124997854232788
               },
-              "id": 1005,
-              "name": "Circle",
-              "radius": 19.375
+              "id": 4
             },
-            "kind": "Circle"
-          },
-          {
-            "data": {
-              "center": {
-                "x": -1.936208963394165,
-                "y": 10.055402755737305
-              },
-              "id": 1007,
-              "name": "Circle",
-              "radius": 3.701
-            },
-            "kind": "Circle"
+            "kind": "Line"
           }
         ],
         "id": 100,
         "name": "Updated with resolver",
+        "plane": 1,
         "visible": true
       }
     ]
