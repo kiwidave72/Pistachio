@@ -1,811 +1,1920 @@
-﻿#include <algorithm> // std::min, std::max
+#define WIN32_LEAN_AND_MEAN
+#include <Windows.h>
+
+// IMPORTANT: we use glad as the OpenGL loader.
+// Do NOT include <GL/gl.h> anywhere in the program, otherwise glad will
+// trigger "OpenGL header already included".
+#include <glad/glad.h>
+
+#define GLFW_INCLUDE_NONE
+#include <GLFW/glfw3.h>
 
 #include "adapters/ui/ImGuiAdapter.h"
+#include "adapters/rendering/GlSketch3DViewRenderer.h"
 #include "core/Application.h"
 
-#include "../Roboto-Regular.embed"
-#include "../ImGui/ImGuiTheme.h"
-#include "../ImGui/Image.h"
-
-
 #include <imgui.h>
-#include <imgui_impl_glfw.h>
-#include <imgui_impl_opengl3.h>
-#include "imgui_internal.h"
-#include <GLFW/glfw3.h>
-// Windows headers (pulled in via GLFW native) define min/max macros; avoid breaking std::min/std::max.
-#ifdef min
-#undef min
-#endif
-#ifdef max
-#undef max
-#endif
-
-#define GLFW_EXPOSE_NATIVE_WIN32
-#include <GLFW/glfw3native.h>
-
-// Fix Windows min/max macro clash (prevents std::min/std::max from breaking)
-#ifdef min
-#undef min
-#endif
-#ifdef max
-#undef max
-#endif
-
+#include <imgui_internal.h>
 
 #include <cstring>
-#include <filesystem>
+#include <algorithm>
+#include <cmath>
+#include <functional>
+#include <glm/glm.hpp>
 
-#include "stb_image.h"
+#include <nlohmann/json.hpp>
 
-#include "UI.h"
-#include "adapters/ui/ConstraintIcons.h"
-#include "adapters/ui/SketchTooling.h"
-#include "core/commands/SketchCommands.h"
-#include "core/rendering/SketchRenderBuilder.h"
-#include "adapters/rendering/OcctRenderer.h"
-#include "adapters/rendering/RendererRouter.h"
-
+#include "../Roboto-Regular.embed"
 #include "../../../Walnut-Icon.embed"
 #include "../../../WindowImages.embed"
 
+// stb_image implementation must live in exactly one compilation unit.
+// We keep the implementation in imgui/StbImageImpl.cpp (linked into imgui.dll).
+#include "stb_image.h"
 
-namespace adapters {
-
-
-    static ImVec2 Add(const ImVec2& a, const ImVec2& b) { return ImVec2(a.x + b.x, a.y + b.y); }
-    static ImVec2 Sub(const ImVec2& a, const ImVec2& b) { return ImVec2(a.x - b.x, a.y - b.y); }
-
-
-ImGuiAdapter::ImGuiAdapter(core::Application* app)
-    : m_window(nullptr), m_app(app), m_isRotating(false), m_isPanning(false) {
-    std::memset(m_filePathBuffer, 0, sizeof(m_filePathBuffer));
-    std::memset(m_exportPathBuffer, 0, sizeof(m_exportPathBuffer));
-    m_lastMousePos = ImVec2(0, 0);
-}
-
-ImGuiAdapter::~ImGuiAdapter() {
-    shutdown();
-}
-std::shared_ptr<Walnut::Image> LoadIcon(const std::string_view path)
+// -----------------------------------------------------------------------------
+// OpenGL function loader for the UI plugin.
+//
+// IMPORTANT: The UI plugin is a separate DLL. If it links to glad, it has its own
+// glad function-pointer table and MUST load them itself.
+// We intentionally do NOT call any GLFW functions here (to avoid having a second
+// copy of GLFW state inside the plugin DLL).
+// -----------------------------------------------------------------------------
+static void* GetOpenGLProcAddress(const char* name)
 {
-    if (!std::filesystem::exists(path))
-        return nullptr;
+    // Try WGL first (requires a current context).
+    void* p = (void*)wglGetProcAddress(name);
 
-    return std::make_shared<Walnut::Image>(path);
+    // wglGetProcAddress returns small sentinel values on failure.
+    if (p == nullptr || p == (void*)0x1 || p == (void*)0x2 || p == (void*)0x3 || p == (void*)-1)
+    {
+        static HMODULE s_opengl32 = ::GetModuleHandleA("opengl32.dll");
+        if (!s_opengl32)
+            s_opengl32 = ::LoadLibraryA("opengl32.dll");
+        if (s_opengl32)
+            p = (void*)::GetProcAddress(s_opengl32, name);
+    }
+    return p;
 }
 
-bool ImGuiAdapter::initialize() {
-    if (!glfwInit()) return false;
-    
-    const char* glsl_version = "#version 130";
-    glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
-    glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
-    glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
-    glfwWindowHint(GLFW_TITLEBAR, false);
+static bool EnsureGladLoaded()
+{
+    static bool s_loaded = false;
+    if (s_loaded)
+        return true;
 
-    m_window = glfwCreateWindow(1200, 800, "Pistachio - CAD Converter", nullptr, nullptr);
-    if (!m_window) {
-        glfwTerminate();
+    if (!gladLoadGLLoader((GLADloadproc)GetOpenGLProcAddress))
         return false;
-    }
-    
-    glfwMakeContextCurrent(m_window);
-    glfwSwapInterval(1);
-    
-    IMGUI_CHECKVERSION();
-    ImGui::CreateContext();
-    ImGuiIO& io = ImGui::GetIO();
-    io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
-    io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
-    
-    // Load embedded Roboto font
-    ImFontConfig fontConfig;
-    fontConfig.FontDataOwnedByAtlas = false;
-    io.FontDefault = io.Fonts->AddFontFromMemoryTTF((void*)g_RobotoRegular, sizeof(g_RobotoRegular),17.0f, &fontConfig);
-    m_smallFont = io.Fonts->AddFontFromMemoryTTF((void*)g_RobotoRegular, sizeof(g_RobotoRegular), 14.0f, &fontConfig);
 
-    m_ToolBarLineIcon = LoadIcon("assets/icons/SketchTwoPointLine_256.png");
-    m_ToolBarCircleIcon = LoadIcon("assets/icons/SketchTwoPointCircle_256.png");
-    m_ToolBarArcIcon = LoadIcon("assets/icons/SketchTwoPointArc_256.png");
-    m_ToolBarRectIcon = LoadIcon("assets/icons/SketchTwoPointRectangle_256.png");
-
-    // Register sketch tools (2D editor)
-    if (!m_toolingInitialized) {
-        m_toolManager.Register(std::make_unique<adapters::sketchui::Line2PtTool>());
-    m_toolManager.Register(std::make_unique<adapters::sketchui::CircleCenterRadiusTool>());
-    m_toolManager.Register(std::make_unique<adapters::sketchui::ConstraintTool>());
-        m_toolingInitialized = true;
-    }
-
-    // windows icons
-    {
-        uint32_t w, h;
-        void* data = Walnut::Image::Decode(g_WalnutIcon, sizeof(g_WalnutIcon), w, h);
-        if (data) {
-            m_AppHeaderIcon = std::make_shared<Walnut::Image>(w, h, Walnut::ImageFormat::RGBA, data);
-            // Free the decoded data (Image has copied it)
-            stbi_image_free(data);
-        }
-    }
-    {
-        uint32_t w, h;
-        void* data = Walnut::Image::Decode(g_WindowMinimizeIcon, sizeof(g_WindowMinimizeIcon), w, h);
-        if (data) {
-            m_IconMinimize = std::make_shared<Walnut::Image>(w, h, Walnut::ImageFormat::RGBA, data);
-            // Free the decoded data (Image has copied it)
-            stbi_image_free(data);
-        }
-    }
-
-    {
-        uint32_t w, h;
-        void* data = Walnut::Image::Decode(g_WindowMaximizeIcon, sizeof(g_WindowMaximizeIcon), w, h);
-        if (data) {
-            m_IconMaximize = std::make_shared<Walnut::Image>(w, h, Walnut::ImageFormat::RGBA, data);
-            // Free the decoded data (Image has copied it)
-            stbi_image_free(data);
-        }
-    }
-    {
-        uint32_t w, h;
-        void* data = Walnut::Image::Decode(g_WindowRestoreIcon, sizeof(g_WindowRestoreIcon), w, h);
-        if (data) {
-            m_IconRestore = std::make_shared<Walnut::Image>(w, h, Walnut::ImageFormat::RGBA, data);
-            // Free the decoded data (Image has copied it)
-            stbi_image_free(data);
-        }
-    }
-
-    {
-        uint32_t w, h;
-        void* data = Walnut::Image::Decode(g_WindowCloseIcon, sizeof(g_WindowCloseIcon), w, h);
-        if (data) {
-            m_IconClose = std::make_shared<Walnut::Image>(w, h, Walnut::ImageFormat::RGBA, data);
-            // Free the decoded data (Image has copied it)
-            stbi_image_free(data);
-        }
-    }
-    ImGui::StyleColorsDark();
-    
-    ImGui_ImplGlfw_InitForOpenGL(m_window, true);
-    ImGui_ImplOpenGL3_Init(glsl_version);
-
+    s_loaded = true;
     return true;
 }
 
-void ImGuiAdapter::shutdown() {
-    if (m_window) {
-        ImGui_ImplOpenGL3_Shutdown();
-        ImGui_ImplGlfw_Shutdown();
-        ImGui::DestroyContext();
-        
-        glfwDestroyWindow(m_window);
-        glfwTerminate();
-        m_window = nullptr;
-    }
-}
-
-bool ImGuiAdapter::shouldClose() {
-    return m_window && glfwWindowShouldClose(m_window);
-}
-
-void ImGuiAdapter::beginFrame() {
-    glfwPollEvents();
-    glfwMakeContextCurrent(m_window);
-    ImGui_ImplOpenGL3_NewFrame();
-    ImGui_ImplGlfw_NewFrame();
-    ImGui::NewFrame();
-    float titlebarHeight = 50.0f;
-    // ====================================
- // 1. Draw the Titlebar as a separate window FIRST
- // ====================================
-    {
-        ImGuiWindowFlags titlebar_flags =
-            ImGuiWindowFlags_NoTitleBar |
-            ImGuiWindowFlags_NoResize |
-            ImGuiWindowFlags_NoMove |
-            ImGuiWindowFlags_NoScrollbar |
-            ImGuiWindowFlags_NoScrollWithMouse |
-            ImGuiWindowFlags_NoDocking;
-
-        ImGuiViewport* viewport = ImGui::GetMainViewport();
-
-       
-
-        // Position at top of viewport
-        ImGui::SetNextWindowPos(viewport->Pos);
-        ImGui::SetNextWindowSize(ImVec2(viewport->Size.x, titlebarHeight)); // Adjust height as needed
-        ImGui::SetNextWindowViewport(viewport->ID);
-
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
-
-        ImGui::Begin("##Titlebar", nullptr, titlebar_flags);
-        {
-            UI_DrawTitlebar(titlebarHeight);
-
-        }
-        ImGui::End();
-
-        ImGui::PopStyleVar(3);
-    }
-
-    // ====================================
-    // 2. Draw the DockSpace below the titlebar
-    // ====================================
-    {
-        ImGuiWindowFlags window_flags = ImGuiWindowFlags_NoDocking;
-        ImGuiViewport* viewport = ImGui::GetMainViewport();
-
-        //float titlebarHeight = 130.0f; // Should match the titlebar window height
-        ImVec2 size=  viewport->Size;
-
-        // Position BELOW the titlebar
-        ImGui::SetNextWindowPos(ImVec2(viewport->Pos.x, viewport->Pos.y + titlebarHeight));
-        ImGui::SetNextWindowSize(ImVec2(viewport->Size.x, viewport->Size.y - titlebarHeight));
-        ImGui::SetNextWindowViewport(viewport->ID);
-
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
-
-        window_flags |= ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse |
-            ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove;
-        window_flags |= ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoNavFocus;
-
-        const bool isMaximized = IsMaximized();
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, isMaximized ? ImVec2(6.0f, 6.0f) : ImVec2(1.0f, 1.0f));
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 3.0f);
-        ImGui::PushStyleColor(ImGuiCol_MenuBarBg, ImVec4{ 0.0f, 0.0f, 0.0f, 0.0f });
-
-        ImGui::Begin("DockSpaceWindow", nullptr, window_flags);
-        ImGui::PopStyleColor(); // MenuBarBg
-        ImGui::PopStyleVar(4);
-
-        {
-            ImGui::PushStyleColor(ImGuiCol_Border, IM_COL32(50, 50, 50, 255));
-            // Draw window border if needed
-            ImGui::PopStyleColor(); // ImGuiCol_Border
-        }
-
-        // Create the docking space
-        ImGuiID dockspace_id = ImGui::GetID("MyDockSpace");
-        ImGui::DockSpace(dockspace_id, ImVec2(0.0f, 0.0f), ImGuiDockNodeFlags_PassthruCentralNode);
-
-        ImGui::End();
-    }
-
-   ///* ImGuiViewportP* vp = (ImGuiViewportP*)ImGui::GetMainViewport();
-   // const float toolbar_h = 48.0f * 5.0f;
-
-   // ImGuiWindowFlags tb_flags =
-   //     ImGuiWindowFlags_NoTitleBar |
-   //     ImGuiWindowFlags_NoResize |
-   //     ImGuiWindowFlags_NoMove |
-   //     ImGuiWindowFlags_NoScrollbar |
-   //     ImGuiWindowFlags_NoSavedSettings |
-   //     ImGuiWindowFlags_NoDocking;*/
-
-   // // This creates a top "bar" and SHRINKS vp->WorkPos/WorkSize for the rest of the frame.
-   // //if (ImGui::BeginViewportSideBar("##MainToolbar", vp, ImGuiDir_Up, toolbar_h, tb_flags))
-   //// {
-   //     ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(0,0));
-   //     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0, 0));
-
-   //     if (ImGui::Button("Load", ImVec2(120, 36))) {}
-   //     ImGui::SameLine();
-   //     if (ImGui::Button("Save", ImVec2(120, 36))) {}
-   //     ImGui::SameLine();
-   //     if (ImGui::Button("Sketch", ImVec2(120, 36))) {}
-   //     ImGui::SameLine();
-   //     if (ImGui::Button("Line", ImVec2(120, 36))) {}
-   //     ImGui::SameLine();
-   //     if (ImGui::Button("Rectangle", ImVec2(120, 36))) {}
-   //     ImGui::SameLine();
-   //     if (ImGui::Button("Circle", ImVec2(120, 36))) {}
-   //     ImGui::SameLine();
-   //     if (ImGui::Button("Square", ImVec2(120, 36))) {}
-   //     ImGui::SameLine();
-   //     if (ImGui::Button("Dimension", ImVec2(120, 36))) {}
-   //     ImGui::SameLine();
-   //     if (ImGui::Button("Constraint", ImVec2(120, 36))) {}
-   //     ImGui::SameLine();
-   //     //if (HexButtonTrueHit("Line", 48.0f, true)) { /* tool = Line */ }
-   //     //ImGui::SameLine();
-   //     //if (HexButtonTrueHit("Circle", 48.0f, false)) { /* tool = Circle */ }
-   //     //ImGui::SameLine();
-   //     //if (HexButtonTrueHit("Rectangle", 48.0f, true)) { /* pointy-top variant */ }
-
-   //     
-   //     //ImGui::SameLine();
-   //     ////ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0, 0));
-   //     //if (ParallelogramButtonTrueHit("Line 2", ImVec2(120, 36), 20.0f)) { /* tool = line */ }
-   //     //ImGui::SameLine();
-   //     //if (TrapeziumButtonTrueHit("Dim", ImVec2(120, 36), 18.0f)) { /* tool = dimension */ }
-   //     //ImGui::SameLine();
-   //     //if (ParallelogramButtonTrueHit("Line 3", ImVec2(120, 36), -20.0f)) { /* tool = line */ }
-
-
-
-   //     //ImGui::SameLine();
-   //      
-   //     // position the cool command buttons
-   //     // should be a function that sets the cursor position
-   //     ImVec2 pos = viewport->Size;
-   //     pos.y = ImGui::GetCursorScreenPos().y;
-   //     pos.x = pos.x / 2;
-   //     pos.x = pos.x - (120 * 3);
-   //     pos.x = pos.x + 18;
-   //     //if (ParallelogramButtonTrueHit("Line 4", pos , ImVec2(120, 36), 18.0f)) { /* tool = line */ }
-   //     pos.x = pos.x + 120;
-   //     //ImGui::SameLine(120,0);
-   //     if (TrapeziumButtonTrueHit("Home",pos, ImVec2(120, 36), 18.0f,false)) { /* tool = dimension */ }
-   //     pos.x = pos.x + 120;
-   //     //ImGui::SameLine(120,0);
-   //     //if (ParallelogramButtonTrueHit("Line 5",pos,  ImVec2(120, 36), -18.0f)) { /* tool = line */ }
-
-   //     
-   //     //pos = vp->Size;
-   //     pos.y = pos.y+36;
-   //     pos.x = viewport->Size.x / 2;
-   //     pos.x = pos.x - (120 * 4);
-   //     pos.x = pos.x + 36 ;// 18;
-   //     if (TrapeziumButtonTrueHit("Reset", pos, ImVec2(120, 36), 18.0f, false)) { /* tool = dimension */ }
-   //     pos.x = pos.x + 120;
-   //     if (ParallelogramButtonTrueHit("Move", pos, ImVec2(120, 36), -18.0f)) { /* tool = line */ }
-   //     pos.x = pos.x + 120-18;
-   //     //ImGui::SameLine(120,0);
-   //     if (TrapeziumButtonTrueHit("Scale", pos, ImVec2(120, 36), 18.0f,true)) { /* tool = dimension */ }
-   //     pos.x = pos.x + 120-18;
-   //     //ImGui::SameLine(120,0);
-   //     if (ParallelogramButtonTrueHit("Undo", pos, ImVec2(120, 36), 18.0f)) { /* tool = line */ }
-   //     pos.x = pos.x + 120 ;
-   //     if (TrapeziumButtonTrueHit("Redo", pos, ImVec2(120, 36), 18.0f, false)) { /* tool = dimension */ }
-
-
-   //     //ImGui::PopStyleVar(3);
-   //     //ImGui::Dummy(ImVec2(120, 36));
-   //     //ImGui::SameLine();
-   //     //if (ImGui::Button("Where is this", ImVec2(120, 36))) {}
-
-   //     ImGui::PopStyleVar(2);
-   //     ImGui::End();
-   //// }
-
-
-    ImGuiViewport* viewport = ImGui::GetMainViewport();
-    ImGui::SetNextWindowPos(viewport->WorkPos);
-    ImGui::SetNextWindowSize(viewport->WorkSize);
-    ImGui::SetNextWindowViewport(viewport->ID);
-    
-    ImGuiWindowFlags window_flags = ImGuiWindowFlags_MenuBar | ImGuiWindowFlags_NoDocking;
-    window_flags |= ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse;
-    window_flags |= ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove;
-    window_flags |= ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoNavFocus;
-    
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
-    
-    ImGui::Begin("DockSpace", nullptr, window_flags);
-    ImGui::PopStyleVar(3);
-    
-    ImGuiID dockspace_id = ImGui::GetID("MainDockspace");
-    ImGui::DockSpace(dockspace_id, ImVec2(0.0f, 0.0f));
-    
-    ImGui::End();
-}
-
-//void ImGuiAdapter::beginFrame() {
-//    
-//    glfwPollEvents();
-//    
-//    glfwMakeContextCurrent(m_window);
-//
-//    ImGui_ImplOpenGL3_NewFrame();
-//    ImGui_ImplGlfw_NewFrame();
-//    ImGui::NewFrame();
-//
-//    // Simple dockspace setup
-//    ImGuiViewport* viewport = ImGui::GetMainViewport();
-//    ImGui::SetNextWindowPos(viewport->WorkPos);
-//    ImGui::SetNextWindowSize(viewport->WorkSize);
-//    ImGui::SetNextWindowViewport(viewport->ID);
-//
-//    ImGuiWindowFlags window_flags = ImGuiWindowFlags_MenuBar | ImGuiWindowFlags_NoDocking;
-//    window_flags |= ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse;
-//    window_flags |= ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove;
-//    window_flags |= ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoNavFocus;
-//
-//    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
-//    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
-//    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
-//
-//    ImGui::Begin("DockSpace", nullptr, window_flags);
-//    ImGui::PopStyleVar(3);
-//
-//    // Menu bar
-//    if (ImGui::BeginMenuBar()) {
-//        if (ImGui::BeginMenu("File")) {
-//            if (ImGui::MenuItem("Exit")) {
-//                glfwSetWindowShouldClose(m_window, GLFW_TRUE);
-//            }
-//            ImGui::EndMenu();
-//        }
-//        ImGui::EndMenuBar();
-//    }
-//
-//    ImGuiID dockspace_id = ImGui::GetID("MainDockspace");
-//    ImGui::DockSpace(dockspace_id, ImVec2(0.0f, 0.0f));
-//
-//    ImGui::End();
-//
-//    
-//}
-
-void ImGuiAdapter::endFrame() {
-    ImGui::Render();
-    int display_w, display_h;
-    glfwGetFramebufferSize(m_window, &display_w, &display_h);
-    glViewport(0, 0, display_w, display_h);
-    glClearColor(0.1f, 0.1f, 0.1f, 1.0f);
-    glClear(GL_COLOR_BUFFER_BIT);
-    ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
-    glfwSwapBuffers(m_window);
-
-    glfwMakeContextCurrent(m_window);
-}
-
-void ImGuiAdapter::render() {
-    
-    //ImGui::ShowDemoWindow();
-
-    //renderMainMenu();
-    //renderModelInfo();  
-    render3DView();
-    //renderStatusBar();
-    renderSketchEditor();
-    DrawViewport();
-   
-}
-
-void ImGuiAdapter::setMenubarCallback(const std::function<void()>& menubarCallback)
+static GLuint CreateGLTextureRGBA_Minimal(const unsigned char* rgba, int w, int h)
 {
-    m_MenubarCallback = menubarCallback;
+    if (!EnsureGladLoaded())
+        return 0;
+    GLuint tex = 0;
+    glGenTextures(1, &tex);
+    glBindTexture(GL_TEXTURE_2D, tex);
+
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+
+    // Avoid enums missing in your build:
+    // - no GL_TEXTURE_WRAP_S/T
+    // - no GL_CLAMP_TO_EDGE
+    // - no GL_UNPACK_ALIGNMENT
+    // - no GL_RGBA8
+
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, rgba);
+
+    glBindTexture(GL_TEXTURE_2D, 0);
+    return tex;
 }
 
-void ImGuiAdapter::DrawViewport()
+
+
+static bool CreateTextureFromEmbeddedPng(
+    const unsigned char* bytes,
+    int bytesSize,
+    GLuint& outTex,
+    ImTextureID& outId,
+    ImVec2& outSize)
 {
-    ImGui::Begin("Viewport");
+    int w = 0, h = 0, comp = 0;
 
-    // === DIAGNOSTICS ===
-    ImGui::Separator();
-    ImGui::Text("RENDERER STATUS");
-    ImGui::Separator();
+    // Force RGBA output
+    stbi_uc* data = stbi_load_from_memory(bytes, bytesSize, &w, &h, &comp, 4);
+    if (!data || w <= 0 || h <= 0)
+        return false;
 
-    auto* renderer = m_app->getRenderer();
-    if (!renderer) {
-        ImGui::TextColored(ImVec4(1, 0, 0, 1), "[X] NO RENDERER!");
-        ImGui::End();
-        return;
-    }
+    // Minimal upload (avoids GL_CLAMP_TO_EDGE / GL_RGBA8 / GL_UNPACK_ALIGNMENT)
+    outTex = CreateGLTextureRGBA_Minimal(data, w, h);
 
-    // Direct cast (no router)
-    auto* occt = dynamic_cast<adapters::OcctRenderer*>(renderer);
-    if (occt) {
-        ImGui::TextColored(ImVec4(0, 1, 0, 1), "[OK] OcctRenderer active");
-    }
-    else {
-        ImGui::TextColored(ImVec4(1, 0, 0, 1), "[X] Not OcctRenderer!");
-        ImGui::End();
-        return;
-    }
+    stbi_image_free(data);
 
-    ImGui::Spacing();
-    ImGui::Separator();
-    ImGui::Text("SKETCH DATA");
-    ImGui::Separator();
-
-    // === SKETCH SECTION ===
-    auto doc = m_app->getSketchDocument();
-    static int s_lastSketchIdx = -1;
-    if (!doc) {
-        ImGui::TextColored(ImVec4(1, 1, 0, 1), "[!] No sketch document loaded");
-        ImGui::TextWrapped("Sketch should have been loaded in main.cpp");
-        ImGui::End();
-        return;
-    }
-
-    ImGui::TextColored(ImVec4(0, 1, 0, 1), "[OK] Sketch document loaded");
-    ImGui::Text("Sketches: %zu", doc->sketches.size());
-
-    if (doc->sketches.empty()) {
-        ImGui::TextColored(ImVec4(1, 1, 0, 1), "[!] Document has no sketches");
-        ImGui::End();
-        return;
-    }
-
-    // Get first sketch
-    auto& sketch = doc->sketches[0];
-
-
-    ImGui::Text("Document Name: %s", doc->name.c_str());
-
-    /*if (!sketch.entities.lines().empty()) {
-        const auto& l = sketch.entities.lines()[0];
-        ImGui::Text("Line0 A(%.2f, %.2f)  B(%.2f, %.2f)", l.a.x, l.a.y, l.b.x, l.b.y);
-    }*/
-
-
-
-    ImGui::Text("Sketch 0 entities:");
-    ImGui::Indent();
-    size_t pointCount = sketch.entities.points().size();
-    size_t lineCount = sketch.entities.lines().size();
-    size_t circleCount = sketch.entities.circles().size();
-    size_t arcCount = sketch.entities.arcs().size();
-    size_t ellipseCount = sketch.entities.ellipses().size();
-    size_t curveCount = sketch.entities.curves().size();
-
-    ImGui::Text("Points: %zu", pointCount);
-    ImGui::Text("Lines: %zu", lineCount);
-    ImGui::Text("Circles: %zu", circleCount);
-    ImGui::Text("Arcs: %zu", arcCount);
-    ImGui::Text("Ellipses: %zu", ellipseCount);
-    ImGui::Text("Curves: %zu", curveCount);
-    ImGui::Unindent();
-
-    size_t totalEntities = pointCount + lineCount + circleCount + arcCount + ellipseCount + curveCount;
-
-    if (totalEntities == 0) {
-        ImGui::TextColored(ImVec4(1, 1, 0, 1), "[!] Sketch has no entities!");
-        ImGui::End();
-        return;
-    }
-
-    // Build render scene
-    auto scene = core::rendering::BuildRenderSceneFromSketch(sketch);
-
-    ImGui::Spacing();
-    ImGui::Text("Render scene:");
-    ImGui::Indent();
-    ImGui::Text("Lines: %zu", scene.lines.size());
-    ImGui::Text("Circles: %zu", scene.circles.size());
-    ImGui::Text("Arcs: %zu", scene.arcs.size());
-    ImGui::Text("Ellipses: %zu", scene.ellipses.size());
-    ImGui::Text("Polylines: %zu", scene.polylines.size());
-    ImGui::Text("Points: %zu", scene.points.size());
-    ImGui::Unindent();
-
-    // Show sample data
-    if (!scene.lines.empty()) {
-        ImGui::Spacing();
-        ImGui::Text("Sample line 0:");
-        ImGui::Indent();
-        auto& line = scene.lines[0];
-        ImGui::Text("From: (%.2f, %.2f, %.2f)", line.a.x, line.a.y, line.a.z);
-        ImGui::Text("  To: (%.2f, %.2f, %.2f)", line.b.x, line.b.y, line.b.z);
-        float length = glm::length(line.b - line.a);
-        ImGui::Text("Length: %.2f", length);
-        ImGui::Unindent();
-    }
-
-    if (!scene.circles.empty()) {
-        ImGui::Spacing();
-        ImGui::Text("Sample circle 0:");
-        ImGui::Indent();
-        auto& circle = scene.circles[0];
-        ImGui::Text("Center: (%.2f, %.2f, %.2f)", circle.center.x, circle.center.y, circle.center.z);
-        ImGui::Text("Radius: %.2f", circle.radius);
-        ImGui::Unindent();
-    }
-
-    ImGui::Spacing();
-    ImGui::Separator();
-    ImGui::Text("ACTIONS");
-    ImGui::Separator();
-
-    // Set overlay
-    occt->setSketchOverlay(scene);
-    ImGui::TextColored(ImVec4(0, 1, 0, 1), "[OK] Overlay set");
-
-    if (ImGui::Button("Force Render & Update View", ImVec2(200, 0))) {
-        std::cout << "\n>>> MANUAL RENDER TRIGGERED <<<\n" << std::endl;
-        occt->render(m_window);
-        occt->fitAll();
-    }
-
-    ImGui::SameLine();
-    if (ImGui::Button("Fit All", ImVec2(100, 0))) {
-        occt->fitAll();
-    }
-
-    ImGui::Spacing();
-    ImGui::Separator();
-    ImGui::Text("AUTO RENDER");
-    ImGui::Separator();
-
-    // Automatic render call
-    occt->render(m_window);
-    ImGui::Text("[OK] Render called automatically");
-
-    ImGui::End();
+    // ImGui OpenGL convention: ImTextureID is the GLuint cast to void*
+    outId = (ImTextureID)(intptr_t)outTex;
+    outSize = ImVec2((float)w, (float)h);
+    return outTex != 0;
 }
 
-// --- 2D Sketch editor window ---
-void ImGuiAdapter::renderSketchEditor()
-{
-    ImGui::Begin("Sketch Editor");
 
-    auto doc = m_app->getSketchDocument();
-    static int s_lastSketchIdx = -1;
-    if (!doc || doc->sketches.empty()) {
-        ImGui::TextDisabled("No sketch document loaded");
-        ImGui::End();
-        return;
-    }
 
-    // Choose active sketch (simple)
-    if (m_activeSketchIndex < 0) m_activeSketchIndex = 0;
-    if (m_activeSketchIndex >= (int)doc->sketches.size()) m_activeSketchIndex = (int)doc->sketches.size() - 1;
 
-    if (doc->sketches.size() > 1) {
-        ImGui::Text("Active sketch:");
-        ImGui::SameLine();
-        ImGui::SetNextItemWidth(200);
-        ImGui::Combo("##ActiveSketch", &m_activeSketchIndex,
-            [](void* data, int idx, const char** out_text) {
-                auto* d = reinterpret_cast<domain::sketch::Document*>(data);
-                if (idx < 0 || idx >= (int)d->sketches.size()) return false;
-                *out_text = d->sketches[(size_t)idx].name.c_str();
-                return true;
-            },
-            doc.get(),
-            (int)doc->sketches.size());
-    }
+// --- small helpers (avoid Windows min/max macros) ---
+static inline float maxf(float a, float b) { return (a > b) ? a : b; }
+static inline float minf(float a, float b) { return (a < b) ? a : b; }
+static inline float clampf(float v, float lo, float hi) { return (v < lo) ? lo : (v > hi) ? hi : v; }
+namespace adapters {
 
-    // Solve constraints once when requested (e.g. after adding constraints)
-    if (m_sketchNeedsSolve) {
-        m_sketchNeedsSolve = false;
-        if (m_app) m_app->runSolver();
-        // document may have been updated by solver; continue with latest sketch reference
-    }
+    // ------------------------------------------------------------
+    // ctor / dtor
+    // ------------------------------------------------------------
 
-    if (s_lastSketchIdx != m_activeSketchIndex) {
-        s_lastSketchIdx = m_activeSketchIndex;
-        m_sketchNeedsSolve = true;
-    }
-
-    auto& sketch = doc->sketches[(size_t)m_activeSketchIndex];
-
-    // Tool selection status
-    const auto _ak = m_toolManager.ActiveKind();
-    const char* _toolName =
-        (_ak == adapters::sketchui::ToolKind::Line2Pt) ? "Line (2pt)" :
-        (_ak == adapters::sketchui::ToolKind::CircleCenterRadius) ? "Circle (center-radius)" :
-        (_ak == adapters::sketchui::ToolKind::Constraint) ? "Constraint" :
-        "None";
-    ImGui::Text("Tool: %s", _toolName);
-    ImGui::SameLine();
-    ImGui::TextDisabled("(Click Line icon in toolbar)");
-    ImGui::Separator();
-
-    ImGui::TextUnformatted("Constraints:");
-    ImGui::SameLine();
+    ImGuiAdapter::ImGuiAdapter(core::Application* app, GLFWwindow* hostWindow, IGuiHost* host, ports::IConfigPort* config)
+        : m_app(app), m_window(hostWindow), m_host(host), m_config(config)
     {
-        using adapters::sketchui::ConstraintIcon;
-        auto iconBtn = [&](const char* id, ConstraintIcon ic, const char* tip) {
-            bool sel = (m_activeConstraintIcon == (int)ic);
-            if (adapters::sketchui::ConstraintIconButton(id, ic, sel)) {
-                m_activeConstraintIcon = sel ? -1 : (int)ic;
-
-                // Make constraint selection feel like an active tool (separate from sketch drawing tools).
-                if (auto doc2 = m_app->getSketchDocument(); doc2 && !doc2->sketches.empty()) {
-                    if (m_activeSketchIndex < 0) m_activeSketchIndex = 0;
-                    if (m_activeSketchIndex >= (int)doc2->sketches.size()) m_activeSketchIndex = (int)doc2->sketches.size() - 1;
-
-                    adapters::sketchui::ToolContext tctx{
-                        doc2->sketches[(size_t)m_activeSketchIndex],
-                        m_cmdHistory,
-                        &m_activeConstraintIcon,
-                        &m_sketchNeedsSolve,
-                        &m_sketchChangeSerial,
-                        &m_uiPickedIds,
-                        &m_uiHoverId
-                    };
-
-                    if (m_activeConstraintIcon >= 0)
-                        m_toolManager.Activate(adapters::sketchui::ToolKind::Constraint, tctx);
-                }
-            }
-            if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tip);
-            ImGui::SameLine();
+        // Pull persisted view state from config (if available)
+        auto readBool = [&](const char* ns, const char* key, bool defVal) -> bool {
+            if (!m_config) return defVal;
+            nlohmann::json v = m_config->get(ns, key);
+            return v.is_boolean() ? v.get<bool>() : defVal;
             };
 
-        iconBtn("##c_fixed", ConstraintIcon::Fixed, "Fixed");
-        iconBtn("##c_tangent", ConstraintIcon::Tangent, "Tangent");
-        iconBtn("##c_h", ConstraintIcon::Horizontal, "Horizontal");
-        iconBtn("##c_v", ConstraintIcon::Vertical, "Vertical");
-        iconBtn("##c_parallel", ConstraintIcon::Parallel, "Parallel");
-        iconBtn("##c_perp", ConstraintIcon::Perpendicular, "Perpendicular");
-        iconBtn("##c_coin", ConstraintIcon::Coincident, "Coincident");
-        iconBtn("##c_mid", ConstraintIcon::Midpoint, "Midpoint");
-        iconBtn("##c_equal", ConstraintIcon::Equal, "Equal");
-        ImGui::NewLine();
+        m_viewFileOperations = readBool("pistachio.UI", "views.fileOperations", true);
+        m_viewStatus = readBool("pistachio.UI", "views.status", true);
+        m_viewModelInfo = readBool("pistachio.UI", "views.modelInfo", true);
+        m_view3DViewport = readBool("pistachio.UI", "views.viewport3d", true);
+        m_viewSketchEditor = readBool("pistachio.UI", "views.sketchEditor", true);
+        m_viewSketch3DViewport = readBool("pistachio.UI", "views.sketch3dViewport", true);
+
+        // Phase 2: dedicated renderer for the Sketch 3D View (kept separate from the app\'s primary renderer)
+        m_sketch3dRenderer = std::make_unique<adapters::GlSketch3DViewRenderer>();
     }
 
-    // Canvas region
-    ImVec2 canvasPos = ImGui::GetCursorScreenPos();
-    ImVec2 canvasSize = ImGui::GetContentRegionAvail();
-    if (canvasSize.x < 100) canvasSize.x = 100;
-    if (canvasSize.y < 100) canvasSize.y = 100;
+    ImGuiAdapter::~ImGuiAdapter() = default;
 
-    ImDrawList* dl = ImGui::GetWindowDrawList();
-    dl->AddRectFilled(canvasPos, ImVec2(canvasPos.x + canvasSize.x, canvasPos.y + canvasSize.y), IM_COL32(20, 20, 20, 255));
-    dl->AddRect(canvasPos, ImVec2(canvasPos.x + canvasSize.x, canvasPos.y + canvasSize.y), IM_COL32(80, 80, 80, 255));
+    // ------------------------------------------------------------
+    // SAFE ONE-TIME RESOURCE INIT (fonts etc)
+    // ------------------------------------------------------------
 
-    // Input capture for canvas
-    ImGui::InvisibleButton("##SketchCanvas", canvasSize,
-        ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonRight | ImGuiButtonFlags_MouseButtonMiddle);
-
-    const bool hovered = ImGui::IsItemHovered();
-
-    // Update canvas mapping
-    m_canvas2D.origin_screen = canvasPos;
-    m_canvas2D.size = canvasSize;
-    m_canvas2D.pan_screen = m_sketchPan;
-    m_canvas2D.pixels_per_unit = m_sketchZoom;
-
-    // === Hover picking (for delete + visual feedback) ===
-    if (hovered)
+    void ImGuiAdapter::initializeResources()
     {
-        const float tolW = 6.0f / std::max(m_canvas2D.pixels_per_unit, 1.0f);
-        ImVec2 mouseW = m_canvas2D.ScreenToWorld(ImGui::GetMousePos());
-        adapters::sketchui::PickResult hp = adapters::sketchui::PickGeometry(sketch, mouseW, tolW);
-        m_uiHoverId = (hp.type != adapters::sketchui::PickType::None) ? hp.id : (domain::sketch::EntityId)0;
+        if (m_resourcesInitialized)
+            return;
 
-        // Draw a yellow highlight over the hovered entity
-        if (m_uiHoverId != 0 && sketch.entities.contains(m_uiHoverId))
+        ImGuiIO& io = ImGui::GetIO();
+
+        ImFontConfig cfg;
+        cfg.FontDataOwnedByAtlas = false;
+
+        // Default font
+        if (!io.FontDefault)
         {
-            auto WS = [&](const domain::sketch::Vec2& w) {
-                return m_canvas2D.WorldToScreen(ImVec2((float)w.x, (float)w.y));
+            m_bodyFont = io.FontDefault = io.Fonts->AddFontFromMemoryTTF(
+                (void*)g_RobotoRegular,
+                sizeof(g_RobotoRegular),
+                17.0f,
+                &cfg
+            );
+        }
+
+        // Small UI font
+        if (!m_smallFont)
+        {
+            m_smallFont = io.Fonts->AddFontFromMemoryTTF(
+                (void*)g_RobotoRegular,
+                sizeof(g_RobotoRegular),
+                14.0f,
+                &cfg
+            );
+        }
+
+        // Group header font (UE-style section header)
+        if (!m_groupFont)
+        {
+            m_groupFont = io.Fonts->AddFontFromMemoryTTF(
+                (void*)g_RobotoRegular,
+                sizeof(g_RobotoRegular),
+                19.0f,
+                &cfg
+            );
+        }
+
+        // Title font (UE-style page title)
+        if (!m_titleFont)
+        {
+            m_titleFont = io.Fonts->AddFontFromMemoryTTF(
+                (void*)g_RobotoRegular,
+                sizeof(g_RobotoRegular),
+                24.0f,
+                &cfg
+            );
+        }
+
+
+
+        ImVec2 szMin, szMax, szRes, szClose;
+
+        bool ok1 = CreateTextureFromEmbeddedPng(g_WindowMinimizeIcon, (int)sizeof(g_WindowMinimizeIcon), m_glTexMinimize, m_iconMinimize, szMin);
+        bool ok2 = CreateTextureFromEmbeddedPng(g_WindowMaximizeIcon, (int)sizeof(g_WindowMaximizeIcon), m_glTexMaximize, m_iconMaximize, szMax);
+        bool ok3 = CreateTextureFromEmbeddedPng(g_WindowRestoreIcon, (int)sizeof(g_WindowRestoreIcon), m_glTexRestore, m_iconRestore, szRes);
+        bool ok4 = CreateTextureFromEmbeddedPng(g_WindowCloseIcon, (int)sizeof(g_WindowCloseIcon), m_glTexClose, m_iconClose, szClose);
+
+        if (!(ok1 && ok2 && ok3 && ok4))
+            return;
+
+        // Pick a consistent button icon size (you can scale in draw code too)
+        ImVec2 m_iconSize = ImVec2(16, 16);
+
+        // Push to host
+
+        setWindowControlIcons(
+            m_iconMinimize,
+            m_iconMaximize,
+            m_iconRestore,
+            m_iconClose,
+            m_iconSize
+        );
+
+
+
+        m_resourcesInitialized = true;
+
+        // Register sketch tools (2D editor)
+        if (!m_toolingInitialized) {
+            m_toolManager.Register(std::make_unique<adapters::sketchui::Line2PtTool>());
+            m_toolManager.Register(std::make_unique<adapters::sketchui::CircleCenterRadiusTool>());
+            m_toolManager.Register(std::make_unique<adapters::sketchui::ConstraintTool>());
+            m_toolingInitialized = true;
+        }
+
+    }
+
+
+    void ImGuiAdapter::setWindowControlIcons(
+        ImTextureID minimize,
+        ImTextureID maximize,
+        ImTextureID restore,
+        ImTextureID close,
+        ImVec2 size
+    )
+    {
+        if (m_host) {
+            m_host->setWindowControlIcons(minimize, maximize, restore, close, size);
+        }
+    }
+
+    // ------------------------------------------------------------
+    // FRAME RENDER (NO FONT MUTATION HERE)
+    // ------------------------------------------------------------
+
+    void ImGuiAdapter::render()
+    {
+        // ⚠️ DO NOT touch ImGuiIO.Fonts here
+
+        // Global keyboard shortcuts
+        ImGuiIO& io = ImGui::GetIO();
+        if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_S)) {
+            // Ctrl+S: Save sketch document
+            if (m_app && m_app->getSketchDocument()) {
+                m_app->saveSketchDocument("test.pistachio.json");
+            }
+        }
+
+        // Sync view visibility every frame so the "Views" menu (which updates the
+        // shared config store) can re-open windows after the user closes them via
+        // the window close button (X).
+        auto readBool = [&](const char* ns, const char* key, bool defVal) -> bool {
+            if (!m_config) return defVal;
+            nlohmann::json v = m_config->get(ns, key);
+            return v.is_boolean() ? v.get<bool>() : defVal;
+            };
+
+        m_viewFileOperations = readBool("pistachio.UI", "views.fileOperations", m_viewFileOperations);
+        m_viewStatus = readBool("pistachio.UI", "views.status", m_viewStatus);
+        m_viewModelInfo = readBool("pistachio.UI", "views.modelInfo", m_viewModelInfo);
+        m_view3DViewport = readBool("pistachio.UI", "views.viewport3d", m_view3DViewport);
+        m_viewSketch3DViewport = readBool("pistachio.UI", "views.sketch3dViewport", m_viewSketch3DViewport);
+        m_viewSketchEditor = readBool("pistachio.UI", "views.sketchEditor", m_viewSketchEditor);
+
+        renderMainMenu();
+        renderStatusBar();
+        renderModelInfo();
+        render3DView();
+        renderSketch3DView();
+        renderSketchEditor();
+    }
+
+    void ImGuiAdapter::renderSketch3DView()
+    {
+        if (!m_viewSketch3DViewport)
+            return;
+
+        bool wasOpen = m_viewSketch3DViewport;
+        ImGui::Begin("Sketch 3D View", &m_viewSketch3DViewport, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+
+        // Phase 3: choose which orthogonal plane is considered "active" for sketch overlays.
+        {
+            int plane = (int)m_sketch3dActivePlane;
+            ImGui::TextUnformatted("Active sketch plane:");
+            ImGui::SameLine();
+
+            // Highlight the hovered plane button
+            if (m_sketch3dHasHoverPlane && m_sketch3dHoverPlane == Sketch3DPlane::XY && plane != 0)
+                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.24f, 0.78f, 1.0f, 1.0f));
+            if (ImGui::RadioButton("XY", plane == 0)) plane = 0;
+            if (m_sketch3dHasHoverPlane && m_sketch3dHoverPlane == Sketch3DPlane::XY && plane != 0)
+                ImGui::PopStyleColor();
+
+            ImGui::SameLine();
+
+            if (m_sketch3dHasHoverPlane && m_sketch3dHoverPlane == Sketch3DPlane::YZ && plane != 1)
+                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.71f, 0.24f, 1.0f));
+            if (ImGui::RadioButton("YZ", plane == 1)) plane = 1;
+            if (m_sketch3dHasHoverPlane && m_sketch3dHoverPlane == Sketch3DPlane::YZ && plane != 1)
+                ImGui::PopStyleColor();
+
+            ImGui::SameLine();
+
+            if (m_sketch3dHasHoverPlane && m_sketch3dHoverPlane == Sketch3DPlane::XZ && plane != 2)
+                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.63f, 1.0f, 0.35f, 1.0f));
+            if (ImGui::RadioButton("XZ", plane == 2)) plane = 2;
+            if (m_sketch3dHasHoverPlane && m_sketch3dHoverPlane == Sketch3DPlane::XZ && plane != 2)
+                ImGui::PopStyleColor();
+
+            m_sketch3dActivePlane = (Sketch3DPlane)plane;
+
+            ImGui::SameLine();
+            ImGui::Dummy(ImVec2(12, 0));
+            ImGui::SameLine();
+            ImGui::Checkbox("Show other planes (faint)", &m_sketch3dShowOtherPlanes);
+
+            // Show legend when hovering
+            if (m_sketch3dHasHoverPlane && m_hasHoverRayData)
+            {
+                ImGui::SameLine();
+                ImGui::Dummy(ImVec2(20, 0));
+                ImGui::SameLine();
+                ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.4f, 1.0f), "●");
+                ImGui::SameLine();
+                ImGui::TextDisabled("Hovering: Cube face + Ray + Hit marker + Detected line");
+            }
+
+            ImGui::Separator();
+        }
+
+
+        if (m_sketch3dRenderer)
+        {
+            ImVec2 size = ImGui::GetContentRegionAvail();
+
+            if (size.x > 0 && size.y > 0)
+            {
+                const uint32_t w = (uint32_t)ImMax(1.0f, size.x);
+                const uint32_t h = (uint32_t)ImMax(1.0f, size.y);
+
+                // Phase 2: build a renderer-agnostic overlay scene from the current sketch document.
+                // This does NOT affect the existing cube renderer/view.
+                {
+                    ports::RenderScene scene;
+
+                    // Collect world-space segments for click picking (rebuilt every frame).
+                    m_sketch3dSegments.clear();
+
+                    auto packRgba = [](uint8_t r, uint8_t g, uint8_t b, uint8_t a) -> uint32_t {
+                        return (uint32_t(r) << 24) | (uint32_t(g) << 16) | (uint32_t(b) << 8) | uint32_t(a);
+                        };
+
+                    auto addGrid = [&](const glm::vec3& origin,
+                        const glm::vec3& u,
+                        const glm::vec3& v,
+                        float spacing,
+                        int linesPerSide,
+                        uint32_t color,
+                        float depthBias,
+                        const glm::vec3& normal)
+                        {
+                            ports::RenderPrimitive prim;
+                            prim.kind = ports::RenderPrimitiveKind::LineList;
+                            prim.rgba = color;
+                            prim.size = 1.0f;
+                            prim.depthTest = true;
+
+                            const float half = float(linesPerSide) * spacing;
+                            const glm::vec3 O = origin + normal * depthBias;
+
+                            for (int i = -linesPerSide; i <= linesPerSide; ++i)
+                            {
+                                const float t = float(i) * spacing;
+
+                                // Line parallel to u axis (varying v)
+                                prim.positions.push_back(O + u * (-half) + v * t);
+                                prim.positions.push_back(O + u * (half)+v * t);
+
+                                // Line parallel to v axis (varying u)
+                                prim.positions.push_back(O + u * t + v * (-half));
+                                prim.positions.push_back(O + u * t + v * (half));
+                            }
+
+                            scene.primitives.push_back(std::move(prim));
+                        };
+
+                    // 3 work planes (XY, YZ, XZ) with gentle depth bias to avoid z-fighting.
+                    const float spacing = 10.0f;
+                    const int lines = 20;
+                    const float bias = 0.25f;
+                    addGrid(glm::vec3(0, 0, 0), glm::vec3(1, 0, 0), glm::vec3(0, 1, 0), spacing, lines, packRgba(90, 90, 95, 255), bias, glm::vec3(0, 0, 1)); // XY
+                    addGrid(glm::vec3(0, 0, 0), glm::vec3(0, 1, 0), glm::vec3(0, 0, 1), spacing, lines, packRgba(75, 80, 90, 255), bias, glm::vec3(1, 0, 0)); // YZ
+                    addGrid(glm::vec3(0, 0, 0), glm::vec3(1, 0, 0), glm::vec3(0, 0, 1), spacing, lines, packRgba(80, 75, 90, 255), bias, glm::vec3(0, 1, 0)); // XZ
+
+                    // Helper to draw a bright plane outline rectangle for hover feedback
+                    auto addPlaneOutline = [&](const glm::vec3& origin,
+                        const glm::vec3& u,
+                        const glm::vec3& v,
+                        float size,
+                        uint32_t color,
+                        float depthBias,
+                        const glm::vec3& normal)
+                        {
+                            // Draw outer glow (thicker, slightly transparent)
+                            {
+                                ports::RenderPrimitive glow;
+                                glow.kind = ports::RenderPrimitiveKind::LineList;
+                                // Extract RGB and reduce alpha for glow
+                                uint8_t r = (color >> 24) & 0xFF;
+                                uint8_t g = (color >> 16) & 0xFF;
+                                uint8_t b = (color >> 8) & 0xFF;
+                                glow.rgba = packRgba(r, g, b, 200);  // More opaque
+                                glow.size = 15.0f;  // VERY thick outer glow (was 8px)
+                                glow.depthTest = false;  // Draw on top so it's always visible
+
+                                const float half = size;
+                                const glm::vec3 O = origin + normal * (depthBias + 0.1f);
+
+                                // Draw rectangle outline (4 edges)
+                                glm::vec3 corner1 = O + u * (-half) + v * (-half);
+                                glm::vec3 corner2 = O + u * (half)+v * (-half);
+                                glm::vec3 corner3 = O + u * (half)+v * (half);
+                                glm::vec3 corner4 = O + u * (-half) + v * (half);
+
+                                glow.positions.push_back(corner1); glow.positions.push_back(corner2);
+                                glow.positions.push_back(corner2); glow.positions.push_back(corner3);
+                                glow.positions.push_back(corner3); glow.positions.push_back(corner4);
+                                glow.positions.push_back(corner4); glow.positions.push_back(corner1);
+
+                                scene.primitives.push_back(std::move(glow));
+                            }
+
+                            // Draw inner solid outline (bright and sharp)
+                            {
+                                ports::RenderPrimitive outline;
+                                outline.kind = ports::RenderPrimitiveKind::LineList;
+                                outline.rgba = color;
+                                outline.size = 10.0f;  // VERY thick, ultra-visible outline (was 5px)
+                                outline.depthTest = false;  // Draw on top so it's always visible
+
+                                const float half = size;
+                                const glm::vec3 O = origin + normal * (depthBias + 0.2f);
+
+                                // Draw rectangle outline (4 edges)
+                                glm::vec3 corner1 = O + u * (-half) + v * (-half);
+                                glm::vec3 corner2 = O + u * (half)+v * (-half);
+                                glm::vec3 corner3 = O + u * (half)+v * (half);
+                                glm::vec3 corner4 = O + u * (-half) + v * (half);
+
+                                outline.positions.push_back(corner1); outline.positions.push_back(corner2);
+                                outline.positions.push_back(corner2); outline.positions.push_back(corner3);
+                                outline.positions.push_back(corner3); outline.positions.push_back(corner4);
+                                outline.positions.push_back(corner4); outline.positions.push_back(corner1);
+
+                                scene.primitives.push_back(std::move(outline));
+                            }
+                        };
+
+                    // Helper to draw a cube face perpendicular to the hovered plane
+                    auto addCubeFaceOutline = [&](const glm::vec3& origin,  // NEW: add origin!
+                        const glm::vec3& u,
+                        const glm::vec3& v,
+                        const glm::vec3& normal,
+                        float cubeSize,
+                        uint32_t color)
+                        {
+                            // Draw a bright highlighted square showing the cube face
+                            // This face is perpendicular to the sketch plane
+
+                            const float half = cubeSize / 2.0f;
+
+                            // Calculate the center of the cube face on the positive side of the normal
+                            glm::vec3 center = origin + normal * half;  // Use origin!
+
+                            // Create the four corners of the cube face
+                            glm::vec3 corner1 = center + u * (-half) + v * (-half);
+                            glm::vec3 corner2 = center + u * (half)+v * (-half);
+                            glm::vec3 corner3 = center + u * (half)+v * (half);
+                            glm::vec3 corner4 = center + u * (-half) + v * (half);
+
+                            // Draw outer glow
+                            {
+                                ports::RenderPrimitive glow;
+                                glow.kind = ports::RenderPrimitiveKind::LineList;
+                                uint8_t r = (color >> 24) & 0xFF;
+                                uint8_t g = (color >> 16) & 0xFF;
+                                uint8_t b = (color >> 8) & 0xFF;
+                                glow.rgba = packRgba(r, g, b, 220);  // More opaque
+                                glow.size = 12.0f;  // Very thick (was 6px)
+                                glow.depthTest = false;
+
+                                glow.positions.push_back(corner1); glow.positions.push_back(corner2);
+                                glow.positions.push_back(corner2); glow.positions.push_back(corner3);
+                                glow.positions.push_back(corner3); glow.positions.push_back(corner4);
+                                glow.positions.push_back(corner4); glow.positions.push_back(corner1);
+
+                                scene.primitives.push_back(std::move(glow));
+                            }
+
+                            // Draw solid outline
+                            {
+                                ports::RenderPrimitive outline;
+                                outline.kind = ports::RenderPrimitiveKind::LineList;
+                                outline.rgba = color;
+                                outline.size = 8.0f;  // Thicker (was 4px)
+                                outline.depthTest = false;
+
+                                outline.positions.push_back(corner1); outline.positions.push_back(corner2);
+                                outline.positions.push_back(corner2); outline.positions.push_back(corner3);
+                                outline.positions.push_back(corner3); outline.positions.push_back(corner4);
+                                outline.positions.push_back(corner4); outline.positions.push_back(corner1);
+
+                                scene.primitives.push_back(std::move(outline));
+                            }
+
+                            // Draw diagonal to make it extra obvious it's a face
+                            {
+                                ports::RenderPrimitive diag;
+                                diag.kind = ports::RenderPrimitiveKind::LineList;
+                                uint8_t r = (color >> 24) & 0xFF;
+                                uint8_t g = (color >> 16) & 0xFF;
+                                uint8_t b = (color >> 8) & 0xFF;
+                                diag.rgba = packRgba(r, g, b, 180);  // More opaque
+                                diag.size = 5.0f;  // Thicker (was 2.5px)
+                                diag.depthTest = false;
+
+                                diag.positions.push_back(corner1); diag.positions.push_back(corner3);
+                                diag.positions.push_back(corner2); diag.positions.push_back(corner4);
+
+                                scene.primitives.push_back(std::move(diag));
+                            }
+                        };
+
+                    // Sketch overlays: for now, we project ALL sketch line entities onto all three planes.
+                    // NOTE: We intentionally do NOT gate on any 'visible' flags in Phase 2, because older
+                    // documents / models may default these to false, which would look like "nothing renders".
+                    int totalLineSegments = 0;
+                    bool hasDoc = false;
+                    if (m_app)
+                    {
+                        auto doc = m_app->getSketchDocument();
+                        if (doc)
+                        {
+                            hasDoc = true;
+                            auto addSketchLinesOnPlane = [&](Sketch3DPlane plane,
+                                const glm::vec3& normal,
+                                uint32_t color,
+                                const std::function<glm::vec3(const domain::sketch::Vec2&)>& toWorld)
+                                {
+                                    ports::RenderPrimitive l;
+                                    l.kind = ports::RenderPrimitiveKind::LineList;
+                                    l.rgba = color;
+
+                                    // Make hovered plane lines thicker and more visible
+                                    if (m_sketch3dHasHoverPlane && plane == m_sketch3dHoverPlane && plane != m_sketch3dActivePlane)
+                                        l.size = 3.5f;  // Thick lines for hover feedback
+                                    else if (plane == m_sketch3dActivePlane)
+                                        l.size = 2.5f;  // Medium-thick for active plane
+                                    else
+                                        l.size = 2.0f;  // Normal thickness
+
+                                    l.depthTest = true;
+
+                                    // Convert adapters::Sketch3DPlane to domain::sketch::SketchPlane
+                                    domain::sketch::SketchPlane domainPlane = static_cast<domain::sketch::SketchPlane>(static_cast<int>(plane));
+
+                                    for (const auto& sk : doc->sketches)
+                                    {
+                                        // ONLY render sketches that belong to this plane
+                                        if (sk.plane != domainPlane)
+                                            continue;
+
+                                        for (const auto& ln : sk.entities.lines())
+                                        {
+                                            glm::vec3 A = toWorld(ln.a) + normal * 0.35f;
+                                            glm::vec3 B = toWorld(ln.b) + normal * 0.35f;
+                                            l.positions.push_back(A);
+                                            l.positions.push_back(B);
+
+                                            // Register ALL segments on their proper plane for picking
+                                            m_sketch3dSegments.push_back(ImGuiAdapter::Sketch3DSegment{ plane, A, B });
+                                            ++totalLineSegments;
+                                        }
+                                    }
+
+                                    if (!l.positions.empty())
+                                        scene.primitives.push_back(std::move(l));
+                                };
+
+                            // Phase 3: draw the sketch onto the active plane (optionally show the other planes faint).
+                            const bool showOthers = m_sketch3dShowOtherPlanes;
+
+                            auto alphaFor = [&](Sketch3DPlane p) -> uint8_t {
+                                // Base: active plane fully visible. Other planes optionally visible.
+                                int a = (p == m_sketch3dActivePlane) ? 255 : (showOthers ? 80 : 0);
+
+                                // Hover feedback: if the mouse is near a segment on a plane, boost that plane's opacity
+                                // and significantly fade the others so the user can clearly see which plane they're interacting with.
+                                if (m_sketch3dHasHoverPlane && showOthers)
+                                {
+                                    if (p == m_sketch3dHoverPlane)
+                                        a = (p == m_sketch3dActivePlane) ? 255 : 240;  // Very bright for hover
+                                    else
+                                        a = std::min(a, 40);  // Fade others more
+                                }
+                                return a;
+                                };
+
+                            // XY: (u,v)->(x,y)
+                            if (uint8_t a = alphaFor(Sketch3DPlane::XY); a != 0)
+                                addSketchLinesOnPlane(Sketch3DPlane::XY, glm::vec3(0, 0, 1), packRgba(60, 200, 255, a),
+                                    [](const domain::sketch::Vec2& p) { return glm::vec3((float)p.x, (float)p.y, 0.0f); });
+
+                            // YZ: (u,v)->(y,z)
+                            if (uint8_t a = alphaFor(Sketch3DPlane::YZ); a != 0)
+                                addSketchLinesOnPlane(Sketch3DPlane::YZ, glm::vec3(1, 0, 0), packRgba(255, 180, 60, a),
+                                    [](const domain::sketch::Vec2& p) { return glm::vec3(0.0f, (float)p.x, (float)p.y); });
+
+                            // XZ: (u,v)->(x,z)
+                            if (uint8_t a = alphaFor(Sketch3DPlane::XZ); a != 0)
+                                addSketchLinesOnPlane(Sketch3DPlane::XZ, glm::vec3(0, 1, 0), packRgba(160, 255, 90, a),
+                                    [](const domain::sketch::Vec2& p) { return glm::vec3((float)p.x, 0.0f, (float)p.y); });
+
+                            // Draw bright, fully visible plane outline and cube face when hovering ANY plane
+                            if (m_sketch3dHasHoverPlane && m_hasHoverRayData)
+                            {
+                                const float outlineSize = spacing * lines;  // Same size as the grid (200 units)
+                                const float outlineBias = 0.5f;  // Slightly forward of grid
+                                const float cubeSize = 80.0f;  // Larger cube face for better visibility (was 30)
+
+                                // Calculate the center of the detected segment
+                                glm::vec3 segmentCenter = (m_hoverSegmentA + m_hoverSegmentB) * 0.5f;
+
+                                switch (m_sketch3dHoverPlane)
+                                {
+                                case Sketch3DPlane::XY:
+                                    // Draw VERY thick plane outline at segment position
+                                    addPlaneOutline(segmentCenter, glm::vec3(1, 0, 0), glm::vec3(0, 1, 0),
+                                        outlineSize, packRgba(60, 200, 255, 255), outlineBias, glm::vec3(0, 0, 1));
+                                    // Add LARGE cube face perpendicular to XY plane (face on Z axis) at segment
+                                    addCubeFaceOutline(segmentCenter, glm::vec3(1, 0, 0), glm::vec3(0, 1, 0), glm::vec3(0, 0, 1),
+                                        cubeSize, packRgba(60, 200, 255, 255));
+                                    // Add diagonal cross lines for extra visibility
+                                    {
+                                        ports::RenderPrimitive cross;
+                                        cross.kind = ports::RenderPrimitiveKind::LineList;
+                                        cross.rgba = packRgba(60, 200, 255, 180);
+                                        cross.size = 3.0f;
+                                        cross.depthTest = false;
+                                        glm::vec3 offset = glm::vec3(0, 0, 1) * (outlineBias + 0.3f);
+                                        cross.positions.push_back(glm::vec3(-outlineSize, -outlineSize, 0) + offset);
+                                        cross.positions.push_back(glm::vec3(outlineSize, outlineSize, 0) + offset);
+                                        cross.positions.push_back(glm::vec3(outlineSize, -outlineSize, 0) + offset);
+                                        cross.positions.push_back(glm::vec3(-outlineSize, outlineSize, 0) + offset);
+                                        scene.primitives.push_back(std::move(cross));
+                                    }
+                                    break;
+                                case Sketch3DPlane::YZ:
+                                    // Draw VERY thick plane outline at segment position
+                                    addPlaneOutline(segmentCenter, glm::vec3(0, 1, 0), glm::vec3(0, 0, 1),
+                                        outlineSize, packRgba(255, 180, 60, 255), outlineBias, glm::vec3(1, 0, 0));
+                                    // Add LARGE cube face perpendicular to YZ plane (face on X axis) at segment
+                                    addCubeFaceOutline(segmentCenter, glm::vec3(0, 1, 0), glm::vec3(0, 0, 1), glm::vec3(1, 0, 0),
+                                        cubeSize, packRgba(255, 180, 60, 255));
+                                    // Add diagonal cross lines
+                                    {
+                                        ports::RenderPrimitive cross;
+                                        cross.kind = ports::RenderPrimitiveKind::LineList;
+                                        cross.rgba = packRgba(255, 180, 60, 180);
+                                        cross.size = 3.0f;
+                                        cross.depthTest = false;
+                                        glm::vec3 offset = glm::vec3(1, 0, 0) * (outlineBias + 0.3f);
+                                        cross.positions.push_back(glm::vec3(0, -outlineSize, -outlineSize) + offset);
+                                        cross.positions.push_back(glm::vec3(0, outlineSize, outlineSize) + offset);
+                                        cross.positions.push_back(glm::vec3(0, outlineSize, -outlineSize) + offset);
+                                        cross.positions.push_back(glm::vec3(0, -outlineSize, outlineSize) + offset);
+                                        scene.primitives.push_back(std::move(cross));
+                                    }
+                                    break;
+                                case Sketch3DPlane::XZ:
+                                    // Draw VERY thick plane outline at segment position
+                                    addPlaneOutline(segmentCenter, glm::vec3(1, 0, 0), glm::vec3(0, 0, 1),
+                                        outlineSize, packRgba(160, 255, 90, 255), outlineBias, glm::vec3(0, 1, 0));
+                                    // Add LARGE cube face perpendicular to XZ plane (face on Y axis) at segment
+                                    addCubeFaceOutline(segmentCenter, glm::vec3(1, 0, 0), glm::vec3(0, 0, 1), glm::vec3(0, 1, 0),
+                                        cubeSize, packRgba(160, 255, 90, 255));
+                                    // Add diagonal cross lines
+                                    {
+                                        ports::RenderPrimitive cross;
+                                        cross.kind = ports::RenderPrimitiveKind::LineList;
+                                        cross.rgba = packRgba(160, 255, 90, 180);
+                                        cross.size = 3.0f;
+                                        cross.depthTest = false;
+                                        glm::vec3 offset = glm::vec3(0, 1, 0) * (outlineBias + 0.3f);
+                                        cross.positions.push_back(glm::vec3(-outlineSize, 0, -outlineSize) + offset);
+                                        cross.positions.push_back(glm::vec3(outlineSize, 0, outlineSize) + offset);
+                                        cross.positions.push_back(glm::vec3(outlineSize, 0, -outlineSize) + offset);
+                                        cross.positions.push_back(glm::vec3(-outlineSize, 0, outlineSize) + offset);
+                                        scene.primitives.push_back(std::move(cross));
+                                    }
+                                    break;
+                                }
+                            }
+                        }
+                    }
+
+                    // Give the user a clear hint about why they might not see sketch geometry yet.
+                    if (!hasDoc)
+                        ImGui::TextDisabled("No sketch document loaded (showing grids only)");
+                    else if (totalLineSegments == 0)
+                        ImGui::TextDisabled("No sketch lines found (showing grids only)");
+
+                    // Visualize the ray that selected the plane - shows WHY a plane was chosen
+                    if (m_hasHoverRayData)
+                    {
+                        // Determine color based on which plane is hovered
+                        uint32_t rayColor = packRgba(255, 255, 255, 255);
+                        switch (m_sketch3dHoverPlane)
+                        {
+                        case Sketch3DPlane::XY: rayColor = packRgba(60, 200, 255, 255); break;
+                        case Sketch3DPlane::YZ: rayColor = packRgba(255, 180, 60, 255); break;
+                        case Sketch3DPlane::XZ: rayColor = packRgba(160, 255, 90, 255); break;
+                        }
+
+                        // 1. Draw the ray showing the path from behind camera through cursor to beyond hit point
+                        {
+                            ports::RenderPrimitive ray;
+                            ray.kind = ports::RenderPrimitiveKind::LineList;
+                            ray.rgba = rayColor;
+                            ray.size = 2.5f;
+                            ray.depthTest = false;  // Always visible
+
+                            // Calculate ray direction from origin to hit point
+                            glm::vec3 rayDir = glm::normalize(m_hoverRayHitPoint - m_hoverRayOrigin);
+
+                            // Draw ray from near plane (close to cursor) extending to beyond the hit point
+                            // This makes it clear the ray goes THROUGH the cursor position
+                            glm::vec3 rayStart = m_hoverRayOrigin;  // Near plane point (at cursor in 3D)
+                            glm::vec3 rayEnd = m_hoverRayHitPoint + rayDir * 20.0f;  // Extend beyond hit
+
+                            ray.positions.push_back(rayStart);
+                            ray.positions.push_back(rayEnd);
+
+                            scene.primitives.push_back(std::move(ray));
+                        }
+
+                        // 2. Highlight the specific segment that was selected (thicker, pulsing)
+                        {
+                            ports::RenderPrimitive segment;
+                            segment.kind = ports::RenderPrimitiveKind::LineList;
+                            segment.rgba = rayColor;
+                            segment.size = 6.0f;  // Extra thick to stand out
+                            segment.depthTest = false;
+
+                            segment.positions.push_back(m_hoverSegmentA);
+                            segment.positions.push_back(m_hoverSegmentB);
+
+                            scene.primitives.push_back(std::move(segment));
+                        }
+
+                        // 3. Draw a small sphere/cross at the hit point
+                        {
+                            ports::RenderPrimitive hitMarker;
+                            hitMarker.kind = ports::RenderPrimitiveKind::LineList;
+                            hitMarker.rgba = packRgba(255, 255, 0, 255);  // Yellow for high visibility
+                            hitMarker.size = 3.0f;
+                            hitMarker.depthTest = false;
+
+                            const float markerSize = 0.5f;
+                            // Draw a 3D cross at the hit point
+                            hitMarker.positions.push_back(m_hoverRayHitPoint + glm::vec3(-markerSize, 0, 0));
+                            hitMarker.positions.push_back(m_hoverRayHitPoint + glm::vec3(markerSize, 0, 0));
+                            hitMarker.positions.push_back(m_hoverRayHitPoint + glm::vec3(0, -markerSize, 0));
+                            hitMarker.positions.push_back(m_hoverRayHitPoint + glm::vec3(0, markerSize, 0));
+                            hitMarker.positions.push_back(m_hoverRayHitPoint + glm::vec3(0, 0, -markerSize));
+                            hitMarker.positions.push_back(m_hoverRayHitPoint + glm::vec3(0, 0, markerSize));
+
+                            scene.primitives.push_back(std::move(hitMarker));
+                        }
+
+                        // 4. Draw connection line from hit point to segment (shortest distance indicator)
+                        {
+                            ports::RenderPrimitive connector;
+                            connector.kind = ports::RenderPrimitiveKind::LineList;
+                            connector.rgba = packRgba(255, 255, 0, 200);  // Yellow, slightly transparent
+                            connector.size = 2.0f;
+                            connector.depthTest = false;
+
+                            // Find closest point on segment to the ray hit point
+                            glm::vec3 ab = m_hoverSegmentB - m_hoverSegmentA;
+                            glm::vec3 ap = m_hoverRayHitPoint - m_hoverSegmentA;
+                            float t = glm::dot(ap, ab) / glm::dot(ab, ab);
+                            t = clampf(t, 0.0f, 1.0f);
+                            glm::vec3 closestOnSegment = m_hoverSegmentA + ab * t;
+
+                            connector.positions.push_back(m_hoverRayHitPoint);
+                            connector.positions.push_back(closestOnSegment);
+
+                            scene.primitives.push_back(std::move(connector));
+                        }
+                    }
+
+                    m_sketch3dRenderer->setScene(scene);
+                }
+
+                // Advance camera animation / easing.
+                if (auto* gl = dynamic_cast<adapters::GlSketch3DViewRenderer*>(m_sketch3dRenderer.get())) {
+                    gl->tick(ImGui::GetIO().DeltaTime);
+                }
+
+                m_sketch3dRenderer->renderToFramebuffer(m_window, w, h);
+
+                void* tex = m_sketch3dRenderer->getFramebufferTexture();
+                if (tex) {
+                    ImVec2 imageMin = ImGui::GetCursorScreenPos();
+
+                    ImGui::InvisibleButton("##viewport3d_sketch3d", size,
+                        ImGuiButtonFlags_MouseButtonLeft |
+                        ImGuiButtonFlags_MouseButtonRight |
+                        ImGuiButtonFlags_MouseButtonMiddle);
+                    ImGui::SetItemAllowOverlap();  // Allow other items to overlap and receive input
+
+                    bool hovered = ImGui::IsItemHovered();
+                    bool active = ImGui::IsItemActive();
+
+                    ImVec2 imageMax = ImVec2(imageMin.x + size.x, imageMin.y + size.y);
+                    ImGui::GetWindowDrawList()->AddImage(
+                        tex,
+                        imageMin,
+                        imageMax,
+                        ImVec2(0, 0),
+                        ImVec2(1, 1)
+                    );
+
+                    if (active || ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows))
+                        m_activeViewport = ActiveViewport::Sketch3D;
+
+                    const bool isActiveViewport = (m_activeViewport == ActiveViewport::Sketch3D);
+
+
+                    // Hover feedback: determine which plane the cursor is currently closest to (based on segments).
+                    // This gives immediate visual confirmation without needing to click.
+                    m_sketch3dHasHoverPlane = false;
+                    if (isActiveViewport && hovered && !m_sketch3dSegments.empty())
+                    {
+                        // Convert mouse to NDC within the image
+                        ImVec2 mp = ImGui::GetIO().MousePos;
+                        const ImVec2 viewportSize = size;
+                        const float vx = (mp.x - imageMin.x);
+                        const float vy = (mp.y - imageMin.y);
+
+                        if (vx >= 0.0f && vy >= 0.0f && vx <= viewportSize.x && vy <= viewportSize.y)
+                        {
+                            const float ndcX = (2.0f * (vx / maxf(1.0f, viewportSize.x))) - 1.0f;
+                            const float ndcY = 1.0f - (2.0f * (vy / maxf(1.0f, viewportSize.y)));
+
+                            // Build a ray in world space using the current camera matrices.
+                            // We fetch them from the concrete GL renderer; the port is kept minimal.
+                            const auto* gl = dynamic_cast<const adapters::GlSketch3DViewRenderer*>(m_sketch3dRenderer.get());
+                            if (gl)
+                            {
+                                const glm::mat4& V = gl->getViewMatrix();
+                                const glm::mat4& P = gl->getProjMatrix();
+                                const glm::mat4 invVP = glm::inverse(P * V);
+                                const glm::vec4 nearH = invVP * glm::vec4(ndcX, ndcY, -1.0f, 1.0f);
+                                const glm::vec4 farH = invVP * glm::vec4(ndcX, ndcY, 1.0f, 1.0f);
+                                const glm::vec3 nearP = glm::vec3(nearH) / nearH.w;
+                                const glm::vec3 farP = glm::vec3(farH) / farH.w;
+
+                                glm::vec3 ro = nearP;
+                                glm::vec3 rd = glm::normalize(farP - nearP);
+
+                                auto distanceRaySegment = [](const glm::vec3& ro, const glm::vec3& rd,
+                                    const glm::vec3& a, const glm::vec3& b) -> float
+                                    {
+                                        // Ray-segment distance via closest points between a ray and a segment.
+                                        // Based on standard geometric formulation.
+                                        const glm::vec3 ab = b - a;
+                                        const glm::vec3 ao = ro - a;
+
+                                        const float ab2 = glm::dot(ab, ab);
+                                        const float rd2 = glm::dot(rd, rd);
+                                        const float rda = glm::dot(rd, ab);
+                                        const float rdo = glm::dot(rd, ao);
+                                        const float abo = glm::dot(ab, ao);
+
+                                        const float denom = rd2 * ab2 - rda * rda;
+                                        float t = 0.0f;
+                                        float u = 0.0f;
+
+                                        if (std::abs(denom) > 1e-6f)
+                                        {
+                                            t = (rda * abo - ab2 * rdo) / denom;
+                                            u = (rd2 * abo - rda * rdo) / denom;
+                                        }
+
+                                        // Clamp to ray t>=0 and segment u in [0,1]
+                                        t = maxf(0.0f, t);
+                                        u = clampf(u, 0.0f, 1.0f);
+
+                                        const glm::vec3 pRay = ro + rd * t;
+                                        const glm::vec3 pSeg = a + ab * u;
+                                        return glm::length(pRay - pSeg);
+                                    };
+
+                                float bestDist = 1e9f;
+                                adapters::Sketch3DPlane bestPlane = m_sketch3dActivePlane;
+                                glm::vec3 bestSegmentA{ 0,0,0 };
+                                glm::vec3 bestSegmentB{ 0,0,0 };
+                                glm::vec3 bestRayPoint{ 0,0,0 };
+                                glm::vec3 bestSegPoint{ 0,0,0 };
+
+                                for (const auto& seg : m_sketch3dSegments)
+                                {
+                                    // Distance from ray to segment (same helper as click-select)
+                                    // We also need to compute the closest points for visualization
+                                    const glm::vec3 ab = seg.b - seg.a;
+                                    const glm::vec3 ao = ro - seg.a;
+
+                                    const float ab2 = glm::dot(ab, ab);
+                                    const float rd2 = glm::dot(rd, rd);
+                                    const float rda = glm::dot(rd, ab);
+                                    const float rdo = glm::dot(rd, ao);
+                                    const float abo = glm::dot(ab, ao);
+
+                                    const float denom = rd2 * ab2 - rda * rda;
+                                    float t = 0.0f;
+                                    float u = 0.0f;
+
+                                    if (std::abs(denom) > 1e-6f)
+                                    {
+                                        t = (rda * abo - ab2 * rdo) / denom;
+                                        u = (rd2 * abo - rda * rdo) / denom;
+                                    }
+
+                                    // Clamp to ray t>=0 and segment u in [0,1]
+                                    t = maxf(0.0f, t);
+                                    u = clampf(u, 0.0f, 1.0f);
+
+                                    const glm::vec3 pRay = ro + rd * t;
+                                    const glm::vec3 pSeg = seg.a + ab * u;
+                                    float d = glm::length(pRay - pSeg);
+
+                                    if (d < bestDist)
+                                    {
+                                        bestDist = d;
+                                        bestPlane = seg.plane;
+                                        bestSegmentA = seg.a;
+                                        bestSegmentB = seg.b;
+                                        bestRayPoint = pRay;
+                                        bestSegPoint = pSeg;
+                                    }
+                                }
+
+                                // Threshold greatly increased for huge hotspot - was 0.15f
+                                if (bestDist < 5.0f)  // 5 units = huge detection area!
+                                {
+                                    m_sketch3dHasHoverPlane = true;
+                                    m_sketch3dHoverPlane = bestPlane;
+
+                                    // Store ray visualization data
+                                    m_hasHoverRayData = true;
+                                    m_hoverRayOrigin = ro;
+                                    m_hoverRayHitPoint = bestSegPoint;
+                                    m_hoverSegmentA = bestSegmentA;
+                                    m_hoverSegmentB = bestSegmentB;
+                                }
+                                else
+                                {
+                                    m_hasHoverRayData = false;
+                                }
+                            }
+                        }
+                    }
+                    else
+                    {
+                        m_hasHoverRayData = false;
+                    }
+
+                    // Click-select: pick the closest sketch segment under the cursor, then snap/animate
+                                        // the camera to that segment's plane.
+                    if (isActiveViewport && hovered && ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
+                        ImVec2 mp = ImGui::GetIO().MousePos;
+                        float localX = mp.x - imageMin.x;
+                        float localY = mp.y - imageMin.y;
+
+                        if (localX >= 0.0f && localY >= 0.0f && localX <= size.x && localY <= size.y) {
+                            // Convert to NDC (-1..1)
+                            float denomX = maxf(1.0f, size.x);
+                            float denomY = maxf(1.0f, size.y);
+                            float ndcX = (localX / denomX) * 2.0f - 1.0f;
+                            float ndcY = 1.0f - (localY / denomY) * 2.0f;
+
+                            if (auto* gl = dynamic_cast<adapters::GlSketch3DViewRenderer*>(m_sketch3dRenderer.get())) {
+                                glm::mat4 V = gl->getViewMatrix();
+                                glm::mat4 P = gl->getProjMatrix();
+                                glm::mat4 invVP = glm::inverse(P * V);
+
+                                auto unproject = [&](float zNdc) {
+                                    glm::vec4 p = invVP * glm::vec4(ndcX, ndcY, zNdc, 1.0f);
+                                    if (std::abs(p.w) < 1e-6f) return glm::vec3(0.0f);
+                                    return glm::vec3(p) / p.w;
+                                    };
+
+                                glm::vec3 ro = unproject(-1.0f);
+                                glm::vec3 rf = unproject(1.0f);
+                                glm::vec3 rd = glm::normalize(rf - ro);
+
+                                auto raySegmentDistance = [&](const glm::vec3& a, const glm::vec3& b) {
+                                    // Closest distance between ray (ro + t*rd, t>=0) and segment [a,b].
+                                    glm::vec3 v = b - a;
+                                    glm::vec3 w0 = ro - a;
+
+                                    float aDot = glm::dot(rd, rd); // = 1
+                                    float bDot = glm::dot(rd, v);
+                                    float cDot = glm::dot(v, v);
+                                    float dDot = glm::dot(rd, w0);
+                                    float eDot = glm::dot(v, w0);
+
+                                    float denom = aDot * cDot - bDot * bDot;
+                                    float t = 0.0f;
+                                    float s = 0.0f;
+
+                                    if (denom > 1e-8f) {
+                                        t = (bDot * eDot - cDot * dDot) / denom;
+                                        s = (aDot * eDot - bDot * dDot) / denom;
+                                    }
+                                    else {
+                                        // Almost parallel
+                                        t = 0.0f;
+                                        s = eDot / maxf(1e-8f, cDot);
+                                    }
+
+                                    t = maxf(0.0f, t);
+                                    s = clampf(s, 0.0f, 1.0f);
+
+                                    glm::vec3 pr = ro + rd * t;
+                                    glm::vec3 ps = a + v * s;
+                                    return glm::length(pr - ps);
+                                    };
+
+                                float best = 1e9f;
+                                Sketch3DPlane bestPlane = m_sketch3dActivePlane;
+
+                                for (const auto& seg : m_sketch3dSegments) {
+                                    float d = raySegmentDistance(seg.a, seg.b);
+                                    if (d < best) {
+                                        best = d;
+                                        bestPlane = seg.plane;
+                                    }
+                                }
+
+                                // Threshold is in world units - greatly increased for easier clicking
+                                if (best < 5.0f) {  // Match hover threshold
+                                    m_sketch3dActivePlane = bestPlane;
+                                    gl->animateToPlane(bestPlane);
+                                }
+                            }
+                        }
+                    }
+
+                    if (isActiveViewport && hovered && ImGui::IsMouseDragging(ImGuiMouseButton_Right, 0.0f)) {
+                        ImVec2 delta = ImGui::GetIO().MouseDelta;
+                        m_sketch3dRenderer->rotate(delta.x, delta.y);
+                    }
+
+                    if (isActiveViewport && hovered && ImGui::IsMouseDragging(ImGuiMouseButton_Middle, 0.0f)) {
+                        ImVec2 delta = ImGui::GetIO().MouseDelta;
+                        m_sketch3dRenderer->zoom(-delta.y * 0.05f);
+                    }
+
+                    // Visual hover feedback: show which plane the user is about to click
+                    if (m_sketch3dHasHoverPlane && hovered && m_sketch3dHoverPlane != m_sketch3dActivePlane)
+                    {
+                        const char* planeName = "";
+                        ImU32 planeColor = IM_COL32(255, 255, 255, 255);
+
+                        switch (m_sketch3dHoverPlane)
+                        {
+                        case Sketch3DPlane::XY:
+                            planeName = "XY Plane";
+                            planeColor = IM_COL32(60, 200, 255, 255);
+                            break;
+                        case Sketch3DPlane::YZ:
+                            planeName = "YZ Plane";
+                            planeColor = IM_COL32(255, 180, 60, 255);
+                            break;
+                        case Sketch3DPlane::XZ:
+                            planeName = "XZ Plane";
+                            planeColor = IM_COL32(160, 255, 90, 255);
+                            break;
+                        }
+
+                        // Draw hover indicator at mouse position
+                        ImVec2 mousePos = ImGui::GetIO().MousePos;
+                        ImDrawList* drawList = ImGui::GetWindowDrawList();
+
+                        // Draw a crosshair at cursor to emphasize "ray starts here"
+                        const float crossSize = 12.0f;
+                        drawList->AddLine(
+                            ImVec2(mousePos.x - crossSize, mousePos.y),
+                            ImVec2(mousePos.x + crossSize, mousePos.y),
+                            planeColor, 2.0f);
+                        drawList->AddLine(
+                            ImVec2(mousePos.x, mousePos.y - crossSize),
+                            ImVec2(mousePos.x, mousePos.y + crossSize),
+                            planeColor, 2.0f);
+
+                        // Draw a small circle at cursor center
+                        drawList->AddCircle(mousePos, 4.0f, planeColor, 12, 2.5f);
+
+                        // Background rectangle for text - now with more explanation
+                        char hoverText[128];
+                        const char* planeExplanation = "";
+                        switch (m_sketch3dHoverPlane) {
+                        case Sketch3DPlane::XY:
+                            planeExplanation = "Front/Back view (Z perpendicular)";
+                            break;
+                        case Sketch3DPlane::YZ:
+                            planeExplanation = "Side view (X perpendicular)";
+                            break;
+                        case Sketch3DPlane::XZ:
+                            planeExplanation = "Top/Bottom view (Y perpendicular)";
+                            break;
+                        }
+                        snprintf(hoverText, sizeof(hoverText),
+                            "Ray detected %s - %s", planeName, planeExplanation);
+                        ImVec2 textSize = ImGui::CalcTextSize(hoverText);
+
+                        // Position tooltip below cursor to not obscure the ray visualization
+                        ImVec2 bgMin = ImVec2(mousePos.x + 15, mousePos.y + 20);
+                        ImVec2 bgMax = ImVec2(bgMin.x + textSize.x + 16, bgMin.y + textSize.y + 8);
+
+                        drawList->AddRectFilled(bgMin, bgMax, IM_COL32(30, 30, 35, 240), 4.0f);
+                        drawList->AddRect(bgMin, bgMax, planeColor, 4.0f, 0, 2.5f);
+                        drawList->AddText(ImVec2(bgMin.x + 8, bgMin.y + 4), planeColor, hoverText);
+
+                        // Add a second line explaining the visualization
+                        const char* helpText = "Cube face shows orientation - Click to select";
+                        ImVec2 helpSize = ImGui::CalcTextSize(helpText);
+                        ImVec2 helpMin = ImVec2(bgMin.x, bgMax.y + 4);
+                        ImVec2 helpMax = ImVec2(helpMin.x + helpSize.x + 16, helpMin.y + helpSize.y + 8);
+
+                        drawList->AddRectFilled(helpMin, helpMax, IM_COL32(30, 30, 35, 200), 4.0f);
+                        drawList->AddRect(helpMin, helpMax, IM_COL32(255, 255, 0, 255), 4.0f, 0, 1.5f);
+                        drawList->AddText(ImVec2(helpMin.x + 8, helpMin.y + 4),
+                            IM_COL32(255, 255, 200, 255), helpText);
+
+                        // Also draw a subtle cursor indicator
+                        ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+                    }
+                }
+                else {
+                    ImGui::TextColored(ImVec4(1, 0, 0, 1), "ERROR: No texture from Sketch3D renderer");
+                }
+            }
+            else
+            {
+                ImGui::TextDisabled("Viewport too small");
+            }
+        }
+        else
+        {
+            ImGui::TextDisabled("No Sketch3D renderer");
+        }
+
+        ImGui::End();
+
+        if (m_config && wasOpen != m_viewSketch3DViewport)
+            m_config->set("pistachio.UI", "views.sketch3dViewport", m_viewSketch3DViewport);
+    }
+
+
+    // ------------------------------------------------------------
+    // UI SECTIONS (unchanged behavior)
+    // ------------------------------------------------------------
+
+    void ImGuiAdapter::setMenubarCallback(const std::function<void()>& cb)
+    {
+        m_MenubarCallback = cb;
+    }
+
+    void ImGuiAdapter::renderMainMenu()
+    {
+        if (!m_viewFileOperations)
+            return;
+
+        bool wasOpen = m_viewFileOperations;
+        ImGui::Begin("File Operations", &m_viewFileOperations);
+
+        static char filePath[512] = {};
+        ImGui::InputTextWithHint("##file", "STEP file path...", filePath, sizeof(filePath));
+
+        if (ImGui::Button("Load STEP"))
+        {
+            if (m_app && filePath[0])
+                m_app->loadFile(filePath);
+        }
+
+        ImGui::End();
+
+        // Persist close/open state
+        if (m_config && wasOpen != m_viewFileOperations)
+            m_config->set("pistachio.UI", "views.fileOperations", m_viewFileOperations);
+    }
+
+    void ImGuiAdapter::renderStatusBar()
+    {
+        if (!m_viewStatus)
+            return;
+
+        bool wasOpen = m_viewStatus;
+        ImGui::Begin("Status", &m_viewStatus, ImGuiWindowFlags_NoScrollbar);
+
+        if (m_app)
+            ImGui::Text("Status: %s", m_app->getStatus().c_str());
+
+        ImGui::End();
+
+        if (m_config && wasOpen != m_viewStatus)
+            m_config->set("pistachio.UI", "views.status", m_viewStatus);
+    }
+
+    void ImGuiAdapter::renderModelInfo()
+    {
+        if (!m_viewModelInfo)
+            return;
+
+        bool wasOpen = m_viewModelInfo;
+        ImGui::Begin("Model Info", &m_viewModelInfo);
+
+        if (!m_app)
+        {
+            ImGui::TextDisabled("No application");
+            ImGui::End();
+            if (m_config && wasOpen != m_viewModelInfo)
+                m_config->set("pistachio.UI", "views.modelInfo", m_viewModelInfo);
+            return;
+        }
+
+        auto model = m_app->getCurrentModel();
+        if (!model)
+        {
+            ImGui::TextDisabled("No model loaded");
+            ImGui::End();
+            if (m_config && wasOpen != m_viewModelInfo)
+                m_config->set("pistachio.UI", "views.modelInfo", m_viewModelInfo);
+            return;
+        }
+
+        ImGui::Text("Model loaded");
+        ImGui::End();
+        if (m_config && wasOpen != m_viewModelInfo)
+            m_config->set("pistachio.UI", "views.modelInfo", m_viewModelInfo);
+    }
+
+
+    void ImGuiAdapter::render3DView()
+    {
+        if (!m_view3DViewport)
+            return;
+
+        bool wasOpen = m_view3DViewport;
+        ImGui::Begin("3D Viewport", &m_view3DViewport, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+
+        if (m_app && m_app->getRenderer())
+        {
+            ImVec2 size = ImGui::GetContentRegionAvail();
+
+            if (size.x > 0 && size.y > 0)
+            {
+                const uint32_t w = (uint32_t)ImMax(1.0f, size.x);
+                const uint32_t h = (uint32_t)ImMax(1.0f, size.y);
+
+                m_app->getRenderer()->renderToFramebuffer(m_window, w, h);
+
+                void* tex = m_app->getRenderer()->getFramebufferTexture();
+                if (tex) {
+                    // Get position BEFORE drawing
+                    ImVec2 imageMin = ImGui::GetCursorScreenPos();
+
+                    // === CRITICAL: Use InvisibleButton to capture ALL input ===
+                    ImGui::InvisibleButton("##viewport3d_cube", size,
+                        ImGuiButtonFlags_MouseButtonLeft |
+                        ImGuiButtonFlags_MouseButtonRight |
+                        ImGuiButtonFlags_MouseButtonMiddle);
+                    ImGui::SetItemAllowOverlap();  // Allow other items to overlap and receive input
+
+                    bool hovered = ImGui::IsItemHovered();
+                    bool active = ImGui::IsItemActive();
+
+
+                    // Mark this viewport as active when focused or clicked
+                    if (active || ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows))
+                        m_activeViewport = ActiveViewport::Cube;
+
+                    const bool isActiveViewport = (m_activeViewport == ActiveViewport::Cube);
+                    // Draw the texture ON TOP using the drawlist
+                    ImVec2 imageMax = ImVec2(imageMin.x + size.x, imageMin.y + size.y);
+                    ImGui::GetWindowDrawList()->AddImage(
+                        tex,
+                        imageMin,
+                        imageMax,
+                        ImVec2(0, 0),
+                        ImVec2(1, 1)
+                    );
+
+                    // Record for gizmo
+                    m_viewportImageMin = imageMin;
+                    m_viewportImageMax = imageMax;
+                    m_viewportImageValid = true;
+
+                    // === ROTATE: Right mouse button drag ===
+                    if (isActiveViewport && hovered && ImGui::IsMouseDragging(ImGuiMouseButton_Right, 0.0f)) {
+                        ImVec2 delta = ImGui::GetIO().MouseDelta;
+                        m_app->getRenderer()->rotate(delta.x, delta.y);
+                    }
+
+                    //// === ZOOM: Mouse wheel - NOW IT WILL WORK! ===
+                    //if (hovered) {
+                    //    float wheel = ImGui::GetIO().MouseWheel;
+                    //    if (wheel != 0.0f) {
+                    //        m_app->getRenderer()->zoom(wheel);
+                    //    }
+                    //}
+
+                   // Middle-drag = zoom (no modifier needed!)
+                    if (isActiveViewport && hovered && ImGui::IsMouseDragging(ImGuiMouseButton_Middle, 0.0f)) {
+                        ImVec2 delta = ImGui::GetIO().MouseDelta;
+                        m_app->getRenderer()->zoom(-delta.y * 0.05f);
+                    }
+
+                    // Render camera gizmo overlay
+                    if (isActiveViewport) renderCameraGizmo();
+
+                }
+                else {
+                    m_viewportImageValid = false;
+                    ImGui::TextColored(ImVec4(1, 0, 0, 1), "ERROR: No texture from renderer");
+                }
+            }
+            else
+            {
+                m_viewportImageValid = false;
+                ImGui::TextDisabled("Viewport too small");
+            }
+        }
+        else
+        {
+            m_viewportImageValid = false;
+            ImGui::TextDisabled("No renderer");
+        }
+
+        ImGui::End();
+
+        if (m_config && wasOpen != m_view3DViewport)
+            m_config->set("pistachio.UI", "views.viewport3d", m_view3DViewport);
+    }
+    void ImGuiAdapter::renderRibbonBar()
+    {
+        // Called from host via RibbonBar callback. No Begin/End here.
+        if (!m_app) return;
+        auto doc = m_app->getSketchDocument();
+        if (!doc || doc->sketches.empty()) {
+            ImGui::TextDisabled("No sketch");
+            return;
+        }
+
+        // Ensure active sketch index valid
+        if (m_activeSketchIndex < 0) m_activeSketchIndex = 0;
+        if (m_activeSketchIndex >= (int)doc->sketches.size()) m_activeSketchIndex = (int)doc->sketches.size() - 1;
+
+        auto& sketch = doc->sketches[(size_t)m_activeSketchIndex];
+
+        auto makeCtx = [&]() -> adapters::sketchui::ToolContext {
+            return adapters::sketchui::ToolContext{
+                sketch,
+                m_cmdHistory,
+                &m_activeConstraintIcon,
+                &m_sketchNeedsSolve,
+                &m_sketchChangeSerial,
+                &m_uiPickedIds,
+                &m_uiHoverId
+            };
+            };
+
+        // Tool buttons
+        // Undo / Redo
+        {
+            auto ctx = makeCtx();
+            const bool canUndo = m_cmdHistory.CanUndo();
+            const bool canRedo = m_cmdHistory.CanRedo();
+            if (!canUndo) ImGui::BeginDisabled();
+            if (ImGui::Button("Undo")) { m_cmdHistory.Undo(); ctx.MarkDirty(); m_uiPickedIds.clear(); m_uiHoverId = 0; }
+            if (!canUndo) ImGui::EndDisabled();
+            ImGui::SameLine();
+            if (!canRedo) ImGui::BeginDisabled();
+            if (ImGui::Button("Redo")) { m_cmdHistory.Redo(); ctx.MarkDirty(); m_uiPickedIds.clear(); m_uiHoverId = 0; }
+            if (!canRedo) ImGui::EndDisabled();
+            ImGui::SameLine();
+            ImGui::TextDisabled("|");
+            ImGui::SameLine();
+        }
+        if (ImGui::Button("Select"))
+        {
+            auto ctx = makeCtx();
+            m_toolManager.Deactivate(ctx);
+            m_activeConstraintIcon = -1;
+            m_skipToolUpdateOnce = true; // consume the toolbar click
+        }
+        ImGui::SameLine();
+
+        if (ImGui::Button("Line"))
+        {
+            auto ctx = makeCtx();
+            m_toolManager.Activate(adapters::sketchui::ToolKind::Line2Pt, ctx);
+            m_activeConstraintIcon = -1;
+            m_skipToolUpdateOnce = true; // consume the toolbar click
+        }
+        ImGui::SameLine();
+
+        if (ImGui::Button("Circle"))
+        {
+            auto ctx = makeCtx();
+            m_toolManager.Activate(adapters::sketchui::ToolKind::CircleCenterRadius, ctx);
+            m_activeConstraintIcon = -1;
+            m_skipToolUpdateOnce = true; // consume the toolbar click
+        }
+        ImGui::SameLine();
+
+        if (ImGui::Button("Constraint"))
+        {
+            // Toggle into constraint tool; actual constraint icon selection happens in Sketch Editor panel.
+            auto ctx = makeCtx();
+            m_toolManager.Activate(adapters::sketchui::ToolKind::Constraint, ctx);
+            m_skipToolUpdateOnce = true; // consume the toolbar click
+        }
+
+        ImGui::SameLine();
+        ImGui::TextDisabled(" | Sketch tools");
+    }
+
+
+    void ImGuiAdapter::renderCameraGizmo()
+    {
+        if (!m_viewportImageValid || !m_app || !m_app->getRenderer())
+            return;
+
+        // Draw a small "view cube" in the top-right of the 3D viewport image.
+        // Click faces to snap the camera to +/-X +/-Y +/-Z.
+        // This is intentionally lightweight (no ImGuizmo dependency).
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+        if (!dl) return;
+
+        const float pad = 10.0f;
+        const float size = 96.0f; // pixels
+        const ImVec2 imgMin = m_viewportImageMin;
+        const ImVec2 imgMax = m_viewportImageMax;
+
+        // Clamp gizmo to image rect
+        ImVec2 gmax(imgMax.x - pad, imgMin.y + pad + size);
+        ImVec2 gmin(gmax.x - size, gmax.y - size);
+
+        if (gmin.x < imgMin.x + pad) gmin.x = imgMin.x + pad;
+        if (gmin.y < imgMin.y + pad) gmin.y = imgMin.y + pad;
+        if (gmax.x > imgMax.x - pad) gmax.x = imgMax.x - pad;
+        if (gmax.y > imgMax.y - pad) gmax.y = imgMax.y - pad;
+
+        const ImVec2 center((gmin.x + gmax.x) * 0.5f, (gmin.y + gmax.y) * 0.5f);
+        const float radius = (gmax.x - gmin.x) * 0.5f;
+
+        // Background card
+        dl->AddRectFilled(gmin, gmax, IM_COL32(25, 25, 28, 210), 10.0f);
+        dl->AddRect(gmin, gmax, IM_COL32(255, 255, 255, 40), 10.0f);
+
+        // Get current camera direction (from target to camera)
+        ports::CameraState cam = m_app->getRenderer()->getCameraState();
+        glm::vec3 fwd = glm::normalize(cam.target - cam.position); // camera forward (look direction)
+
+        // Approximate yaw/pitch consistent with GlCubeViewRenderer orbit math
+        // yaw rotates around +Y, pitch rotates around +X.
+        float yaw = std::atan2(fwd.x, fwd.z);            // -pi..pi
+        float pitch = std::asin(ImClamp(fwd.y, -1.0f, 1.0f)); // -pi/2..pi/2
+
+        struct V3 { float x, y, z; };
+        auto v3 = [](float x, float y, float z) { return V3{ x,y,z }; };
+        auto add = [](V3 a, V3 b) { return V3{ a.x + b.x,a.y + b.y,a.z + b.z }; };
+        auto sub = [](V3 a, V3 b) { return V3{ a.x - b.x,a.y - b.y,a.z - b.z }; };
+        auto mul = [](V3 a, float s) { return V3{ a.x * s,a.y * s,a.z * s }; };
+        auto dot = [](V3 a, V3 b) { return a.x * b.x + a.y * b.y + a.z * b.z; };
+        auto cross = [](V3 a, V3 b) { return V3{ a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x }; };
+        auto len = [&](V3 a) { return std::sqrt(dot(a, a)); };
+        auto norm = [&](V3 a) { float l = len(a); return (l > 1e-6f) ? mul(a, 1.0f / l) : v3(0, 0, 0); };
+
+        auto rotX = [](V3 p, float a) {
+            float c = std::cos(a), s = std::sin(a);
+            return V3{ p.x, c * p.y - s * p.z, s * p.y + c * p.z };
+            };
+        auto rotY = [](V3 p, float a) {
+            float c = std::cos(a), s = std::sin(a);
+            return V3{ c * p.x + s * p.z, p.y, -s * p.x + c * p.z };
+            };
+
+        // Cube vertices in object space
+        V3 P[8] = {
+            v3(-1,-1,-1), v3(1,-1,-1), v3(1, 1,-1), v3(-1, 1,-1),
+            v3(-1,-1, 1), v3(1,-1, 1), v3(1, 1, 1), v3(-1, 1, 1)
+        };
+
+        // Rotate cube opposite the camera so it represents world axes relative to view
+        V3 W[8];
+        for (int i = 0;i < 8;i++) {
+            V3 p = P[i];
+            p = rotY(p, -yaw);
+            p = rotX(p, -pitch);
+            W[i] = p;
+        }
+
+        // Simple ortho projection for the widget
+        auto project = [&](V3 p)->ImVec2 {
+            // p in -1..1; map to widget space with a bit of perspective-ish scaling
+            float z = p.z;
+            float s = 0.75f + 0.25f * (z + 1.0f) * 0.5f; // nearer faces slightly larger
+            float x = p.x * s;
+            float y = p.y * s;
+            return ImVec2(center.x + x * radius * 0.75f, center.y - y * radius * 0.75f);
+            };
+
+        // Faces, each as quad indices
+        const int F[6][4] = {
+            {0,1,2,3}, // -Z (back)
+            {4,5,6,7}, // +Z (front)
+            {0,1,5,4}, // -Y (bottom)
+            {3,2,6,7}, // +Y (top)
+            {1,2,6,5}, // +X (right)
+            {0,3,7,4}  // -X (left)
+        };
+
+        struct FacePoly {
+            ImVec2 p[4];
+            float depth;
+            int dir;
+            ImU32 col;
+            const char* label;
+        };
+
+        FacePoly faces[6];
+        // Map face to GlCubeViewRenderer::setViewDirection indices
+        // dir: 0 +X, 1 -X, 2 +Z, 3 -Z, 4 +Y, 5 -Y
+        const int dirMap[6] = { 3, 2, 5, 4, 0, 1 };
+        const ImU32 baseCol[6] = {
+            IM_COL32(180,  80,  80, 255), // -Z
+            IM_COL32(80, 170,  90, 255), // +Z
+            IM_COL32(90, 130, 210, 255), // -Y
+            IM_COL32(210, 190,  90, 255), // +Y
+            IM_COL32(90, 190, 190, 255), // +X
+            IM_COL32(190,  90, 200, 255)  // -X
+        };
+        const char* labels[6] = { "-Z","+Z","-Y","+Y","+X","-X" };
+
+        // Build face polys with depth for painter's algorithm
+        for (int fi = 0;fi < 6;fi++) {
+            float dz = 0.0f;
+            for (int k = 0;k < 4;k++) {
+                V3 wp = W[F[fi][k]];
+                dz += wp.z;
+                faces[fi].p[k] = project(wp);
+            }
+            faces[fi].depth = dz / 4.0f;
+            faces[fi].dir = dirMap[fi];
+            faces[fi].col = baseCol[fi];
+            faces[fi].label = labels[fi];
+        }
+
+        // Sort faces back-to-front (smaller depth first)
+        int order[6] = { 0,1,2,3,4,5 };
+        std::sort(order, order + 6, [&](int a, int b) { return faces[a].depth < faces[b].depth; });
+
+        // Helper: point in triangle
+        auto pointInTri = [&](ImVec2 p, ImVec2 a, ImVec2 b, ImVec2 c)->bool {
+            auto sign = [](ImVec2 p1, ImVec2 p2, ImVec2 p3) {
+                return (p1.x - p3.x) * (p2.y - p3.y) - (p2.x - p3.x) * (p1.y - p3.y);
+                };
+            float d1 = sign(p, a, b);
+            float d2 = sign(p, b, c);
+            float d3 = sign(p, c, a);
+            bool has_neg = (d1 < 0) || (d2 < 0) || (d3 < 0);
+            bool has_pos = (d1 > 0) || (d2 > 0) || (d3 > 0);
+            return !(has_neg && has_pos);
+            };
+
+        ImVec2 mouse = ImGui::GetIO().MousePos;
+        bool mouseOver = (mouse.x >= gmin.x && mouse.x <= gmax.x && mouse.y >= gmin.y && mouse.y <= gmax.y);
+
+        // Determine clicked face: test from frontmost to backmost so the visible face wins.
+        int hoveredDir = -1;
+        if (mouseOver)
+        {
+            for (int oi = 5; oi >= 0; --oi) {
+                int fi = order[oi];
+                ImVec2 a = faces[fi].p[0];
+                ImVec2 b = faces[fi].p[1];
+                ImVec2 c = faces[fi].p[2];
+                ImVec2 d = faces[fi].p[3];
+                if (pointInTri(mouse, a, b, c) || pointInTri(mouse, a, c, d)) {
+                    hoveredDir = faces[fi].dir;
+                    break;
+                }
+            }
+        }
+
+        // Draw faces
+        for (int oi = 0; oi < 6; ++oi)
+        {
+            int fi = order[oi];
+
+            ImU32 col = faces[fi].col;
+            if (faces[fi].dir == hoveredDir)
+                col = IM_COL32(
+                    ImMin(255, (int)((col >> IM_COL32_R_SHIFT) & 0xFF) + 25),
+                    ImMin(255, (int)((col >> IM_COL32_G_SHIFT) & 0xFF) + 25),
+                    ImMin(255, (int)((col >> IM_COL32_B_SHIFT) & 0xFF) + 25),
+                    255);
+
+            dl->AddConvexPolyFilled(faces[fi].p, 4, col);
+            dl->AddPolyline(faces[fi].p, 4, IM_COL32(0, 0, 0, 120), true, 1.0f);
+        }
+
+        // Labels (only for the hovered face, to keep it clean)
+        if (hoveredDir != -1)
+        {
+            const char* lbl = nullptr;
+            switch (hoveredDir) {
+            case 0: lbl = "+X"; break;
+            case 1: lbl = "-X"; break;
+            case 2: lbl = "+Z"; break;
+            case 3: lbl = "-Z"; break;
+            case 4: lbl = "+Y"; break;
+            case 5: lbl = "-Y"; break;
+            default: break;
+            }
+            if (lbl) {
+                ImVec2 tp = ImVec2(gmin.x + 10.0f, gmin.y + 8.0f);
+                dl->AddText(tp, IM_COL32(255, 255, 255, 220), lbl);
+            }
+        }
+
+        // Click -> snap camera
+        if (hoveredDir != -1 && ImGui::IsMouseClicked(ImGuiMouseButton_Left))
+        {
+            m_app->getRenderer()->setViewDirection(hoveredDir);
+        }
+
+        if (mouseOver)
+            ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+    }
+
+
+    void ImGuiAdapter::renderSketchEditor()
+    {
+        if (!m_viewSketchEditor)
+            return;
+
+        bool wasOpen = m_viewSketchEditor;
+        ImGui::Begin("Sketch Editor", &m_viewSketchEditor);
+
+        auto doc = m_app->getSketchDocument();
+        static int s_lastSketchIdx = -1;
+        if (!doc || doc->sketches.empty()) {
+            ImGui::TextDisabled("No sketch document loaded");
+            ImGui::End();
+            if (m_config && wasOpen != m_viewSketchEditor)
+                m_config->set("pistachio.UI", "views.sketchEditor", m_viewSketchEditor);
+            return;
+        }
+
+        // Choose active sketch (simple)
+        if (m_activeSketchIndex < 0) m_activeSketchIndex = 0;
+        if (m_activeSketchIndex >= (int)doc->sketches.size()) m_activeSketchIndex = (int)doc->sketches.size() - 1;
+
+        if (doc->sketches.size() > 1) {
+            ImGui::Text("Active sketch:");
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth(200);
+            ImGui::Combo("##ActiveSketch", &m_activeSketchIndex,
+                [](void* data, int idx, const char** out_text) {
+                    auto* d = reinterpret_cast<domain::sketch::Document*>(data);
+                    if (idx < 0 || idx >= (int)d->sketches.size()) return false;
+                    *out_text = d->sketches[(size_t)idx].name.c_str();
+                    return true;
+                },
+                doc.get(),
+                (int)doc->sketches.size());
+        }
+
+        // Solve constraints once when requested (e.g. after adding constraints)
+        if (m_sketchNeedsSolve) {
+            m_sketchNeedsSolve = false;
+            if (m_app) m_app->runSolver();
+            // document may have been updated by solver; continue with latest sketch reference
+        }
+
+        if (s_lastSketchIdx != m_activeSketchIndex) {
+            s_lastSketchIdx = m_activeSketchIndex;
+            m_sketchNeedsSolve = true;
+        }
+
+        auto& sketch = doc->sketches[(size_t)m_activeSketchIndex];
+
+        // Tool selection status
+        const auto _ak = m_toolManager.ActiveKind();
+        const char* _toolName =
+            (_ak == adapters::sketchui::ToolKind::Line2Pt) ? "Line (2pt)" :
+            (_ak == adapters::sketchui::ToolKind::CircleCenterRadius) ? "Circle (center-radius)" :
+            (_ak == adapters::sketchui::ToolKind::Constraint) ? "Constraint" :
+            "None";
+        ImGui::Text("Tool: %s", _toolName);
+        ImGui::SameLine();
+        ImGui::TextDisabled("(Click Line icon in toolbar)");
+        ImGui::Separator();
+
+        ImGui::TextUnformatted("Constraints:");
+        ImGui::SameLine();
+        {
+            using adapters::sketchui::ConstraintIcon;
+            auto iconBtn = [&](const char* id, ConstraintIcon ic, const char* tip) {
+                bool sel = (m_activeConstraintIcon == (int)ic);
+                if (adapters::sketchui::ConstraintIconButton(id, ic, sel)) {
+                    m_activeConstraintIcon = sel ? -1 : (int)ic;
+
+                    // Make constraint selection feel like an active tool (separate from sketch drawing tools).
+                    if (auto doc2 = m_app->getSketchDocument(); doc2 && !doc2->sketches.empty()) {
+                        if (m_activeSketchIndex < 0) m_activeSketchIndex = 0;
+                        if (m_activeSketchIndex >= (int)doc2->sketches.size()) m_activeSketchIndex = (int)doc2->sketches.size() - 1;
+
+                        adapters::sketchui::ToolContext tctx{
+                            doc2->sketches[(size_t)m_activeSketchIndex],
+                            m_cmdHistory,
+                            &m_activeConstraintIcon,
+                            &m_sketchNeedsSolve,
+                            &m_sketchChangeSerial,
+                            &m_uiPickedIds,
+                            &m_uiHoverId
+                        };
+
+                        if (m_activeConstraintIcon >= 0)
+                            m_toolManager.Activate(adapters::sketchui::ToolKind::Constraint, tctx);
+                    }
+                }
+                if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tip);
+                ImGui::SameLine();
                 };
 
-            auto h = sketch.entities.getHandle(m_uiHoverId);
-            const ImU32 col = IM_COL32(255, 210, 0, 220);
+            iconBtn("##c_fixed", ConstraintIcon::Fixed, "Fixed");
+            iconBtn("##c_tangent", ConstraintIcon::Tangent, "Tangent");
+            iconBtn("##c_h", ConstraintIcon::Horizontal, "Horizontal");
+            iconBtn("##c_v", ConstraintIcon::Vertical, "Vertical");
+            iconBtn("##c_parallel", ConstraintIcon::Parallel, "Parallel");
+            iconBtn("##c_perp", ConstraintIcon::Perpendicular, "Perpendicular");
+            iconBtn("##c_coin", ConstraintIcon::Coincident, "Coincident");
+            iconBtn("##c_mid", ConstraintIcon::Midpoint, "Midpoint");
+            iconBtn("##c_equal", ConstraintIcon::Equal, "Equal");
+            ImGui::NewLine();
+        }
 
-            switch (h.kind)
+        // Canvas region
+        ImVec2 canvasPos = ImGui::GetCursorScreenPos();
+        ImVec2 canvasSize = ImGui::GetContentRegionAvail();
+        if (canvasSize.x < 100) canvasSize.x = 100;
+        if (canvasSize.y < 100) canvasSize.y = 100;
+
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+        dl->AddRectFilled(canvasPos, ImVec2(canvasPos.x + canvasSize.x, canvasPos.y + canvasSize.y), IM_COL32(20, 20, 20, 255));
+        dl->AddRect(canvasPos, ImVec2(canvasPos.x + canvasSize.x, canvasPos.y + canvasSize.y), IM_COL32(80, 80, 80, 255));
+
+        // Input capture for canvas
+        ImGui::InvisibleButton("##SketchCanvas", canvasSize,
+            ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonRight | ImGuiButtonFlags_MouseButtonMiddle);
+        ImGui::SetItemAllowOverlap();  // Allow other items to overlap and receive input
+
+        const bool hovered = ImGui::IsItemHovered();
+
+        // Update canvas mapping
+        m_canvas2D.origin_screen = canvasPos;
+        m_canvas2D.size = canvasSize;
+        m_canvas2D.pan_screen = m_sketchPan;
+        m_canvas2D.pixels_per_unit = m_sketchZoom;
+
+        // === Hover picking (for delete + visual feedback) ===
+        if (hovered)
+        {
+            const float tolW = 6.0f / maxf(m_canvas2D.pixels_per_unit, 1.0f);
+            ImVec2 mouseW = m_canvas2D.ScreenToWorld(ImGui::GetMousePos());
+            adapters::sketchui::PickResult hp = adapters::sketchui::PickGeometry(sketch, mouseW, tolW);
+            m_uiHoverId = (hp.type != adapters::sketchui::PickType::None) ? hp.id : (domain::sketch::EntityId)0;
+
+            // Draw a yellow highlight over the hovered entity
+            if (m_uiHoverId != 0 && sketch.entities.contains(m_uiHoverId))
             {
-            case domain::sketch::EntityKind::Point:
-            {
-                const auto& pt = sketch.entities.point(h.index);
-                ImVec2 s = WS(pt.p);
-                dl->AddCircle(s, 6.0f, col, 16, 2.0f);
-            } break;
-            case domain::sketch::EntityKind::Line:
-            {
-                const auto& ln = sketch.entities.line(h.index);
-                dl->AddLine(WS(ln.a), WS(ln.b), col, 3.0f);
-            } break;
-            case domain::sketch::EntityKind::Circle:
-            {
-                const auto& cc = sketch.entities.circle(h.index);
-                ImVec2 c = WS(cc.center);
-                float r = (float)cc.radius * m_canvas2D.pixels_per_unit;
-                dl->AddCircle(c, r, col, 64, 3.0f);
-            } break;
-            default:
-                break; // no cursor drawing here
+                auto WS = [&](const domain::sketch::Vec2& w) {
+                    return m_canvas2D.WorldToScreen(ImVec2((float)w.x, (float)w.y));
+                    };
+
+                auto h = sketch.entities.getHandle(m_uiHoverId);
+                const ImU32 col = IM_COL32(255, 210, 0, 220);
+
+                switch (h.kind)
+                {
+                case domain::sketch::EntityKind::Point:
+                {
+                    const auto& pt = sketch.entities.point(h.index);
+                    ImVec2 s = WS(pt.p);
+                    dl->AddCircle(s, 6.0f, col, 16, 2.0f);
+                } break;
+                case domain::sketch::EntityKind::Line:
+                {
+                    const auto& ln = sketch.entities.line(h.index);
+                    dl->AddLine(WS(ln.a), WS(ln.b), col, 3.0f);
+                } break;
+                case domain::sketch::EntityKind::Circle:
+                {
+                    const auto& cc = sketch.entities.circle(h.index);
+                    ImVec2 c = WS(cc.center);
+                    float r = (float)cc.radius * m_canvas2D.pixels_per_unit;
+                    dl->AddCircle(c, r, col, 64, 3.0f);
+                } break;
+                default:
+                    break; // no cursor drawing here
+                }
             }
+        }
+        else
+        {
+            // Not hovering canvas; clear hover id so highlights don't stick
+            m_uiHoverId = 0;
         }
 
         // Delete hovered entity (single entity) with undo/redo
-        if (m_uiHoverId != 0
-            && !ImGui::IsAnyItemActive()
+        // Use direct GLFW key check to bypass potential ImGui navigation issues
+        bool windowFocused = ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows);
+        
+        // Check delete key using both ImGui and GLFW
+        bool deletePressed = false;
+        if (m_window) {
+            // GLFW key states: GLFW_PRESS or GLFW_REPEAT mean the key is down
+            int deleteState = glfwGetKey(m_window, GLFW_KEY_DELETE);
+            int backspaceState = glfwGetKey(m_window, GLFW_KEY_BACKSPACE);
+            
+            // Use static to track previous state for edge detection (only trigger on press, not hold)
+            static int s_lastDeleteState = GLFW_RELEASE;
+            static int s_lastBackspaceState = GLFW_RELEASE;
+            
+            bool deleteJustPressed = (deleteState == GLFW_PRESS && s_lastDeleteState == GLFW_RELEASE);
+            bool backspaceJustPressed = (backspaceState == GLFW_PRESS && s_lastBackspaceState == GLFW_RELEASE);
+            
+            s_lastDeleteState = deleteState;
+            s_lastBackspaceState = backspaceState;
+            
+            deletePressed = deleteJustPressed || backspaceJustPressed;
+        }
+        
+        // Fallback to ImGui if GLFW isn't working
+        if (!deletePressed) {
+            deletePressed = ImGui::IsKeyPressed(ImGuiKey_Delete) || ImGui::IsKeyPressed(ImGuiKey_Backspace);
+        }
+        
+        // Only show debug when delete is actually pressed
+        if (deletePressed) {
+            printf("[DELETE] Press detected - hovered=%d, id=%llu, focused=%d, WantText=%d\n",
+                hovered, (unsigned long long)m_uiHoverId, windowFocused, ImGui::GetIO().WantTextInput);
+        }
+        
+        if (hovered
+            && m_uiHoverId != 0
+            && windowFocused
             && !ImGui::GetIO().WantTextInput
-            && (ImGui::IsKeyPressed(ImGuiKey_Delete) || ImGui::IsKeyPressed(ImGuiKey_Backspace)))
+            && deletePressed)
         {
+            printf("[DELETE] SUCCESS - Deleting entity %llu\n", (unsigned long long)m_uiHoverId);
             m_cmdHistory.Execute(std::make_unique<core::commands::DeleteEntityCommand>(sketch, m_uiHoverId));
 
             // Clear UI picks (so tools don't think the entity is still there)
@@ -816,1305 +1925,284 @@ void ImGuiAdapter::renderSketchEditor()
             m_sketchNeedsSolve = true;
             ++m_sketchChangeSerial;
         }
-    }
-    else
-    {
-        // Not hovering canvas; clear hover id so highlights don't stick
-        m_uiHoverId = 0;
-    }
 
-    // Pan with MMB drag
-    if (hovered && ImGui::IsMouseDragging(ImGuiMouseButton_Middle, 0.0f)) {
-        ImVec2 d = ImGui::GetIO().MouseDelta;
-        m_sketchPan.x += d.x;
-        m_sketchPan.y += d.y;
-    }
-
-    // Zoom with wheel (towards cursor)
-    if (hovered && ImGui::GetIO().MouseWheel != 0.0f && !ImGui::IsAnyItemActive()) {
-        float old = m_sketchZoom;
-        float next = std::clamp(old * (1.0f + ImGui::GetIO().MouseWheel * 0.10f), 5.0f, 400.0f);
-        if (next != old) {
-            ImVec2 mouseS = ImGui::GetIO().MousePos;
-            ImVec2 beforeW = m_canvas2D.ScreenToWorld(mouseS);
-
-            m_sketchZoom = next;
-            m_canvas2D.pixels_per_unit = m_sketchZoom;
-
-            ImVec2 afterS = m_canvas2D.WorldToScreen(beforeW);
-            ImVec2 delta = ImVec2(mouseS.x - afterS.x, mouseS.y - afterS.y);
-            m_sketchPan.x += delta.x;
-            m_sketchPan.y += delta.y;
-        }
-    }
-
-    // Draw grid
-    {
-        const float ppu = m_canvas2D.pixels_per_unit;
-        const ImVec2 origin = canvasPos;
-        const ImVec2 end = ImVec2(canvasPos.x + canvasSize.x, canvasPos.y + canvasSize.y);
-        const ImVec2 center = ImVec2(
-            canvasPos.x + canvasSize.x * 0.5f + m_sketchPan.x,
-            canvasPos.y + canvasSize.y * 0.5f + m_sketchPan.y);
-
-        ImVec2 w0 = m_canvas2D.ScreenToWorld(origin);
-        ImVec2 w1 = m_canvas2D.ScreenToWorld(end);
-        float xmin = std::floor((std::min)(w0.x, w1.x)) - 1.0f;
-        float xmax = std::ceil((std::max)(w0.x, w1.x)) + 1.0f;
-        float ymin = std::floor((std::min)(w0.y, w1.y)) - 1.0f;
-        float ymax = std::ceil((std::max)(w0.y, w1.y)) + 1.0f;
-
-        for (int x = (int)xmin; x <= (int)xmax; ++x) {
-            ImVec2 a = ImVec2(center.x + x * ppu, origin.y);
-            ImVec2 b = ImVec2(center.x + x * ppu, end.y);
-            ImU32 col = (x == 0) ? IM_COL32(80, 120, 255, 255) : IM_COL32(40, 40, 40, 255);
-            dl->AddLine(a, b, col, (x == 0) ? 2.0f : 1.0f);
-        }
-
-        for (int y = (int)ymin; y <= (int)ymax; ++y) {
-            ImVec2 a = ImVec2(origin.x, center.y - y * ppu);
-            ImVec2 b = ImVec2(end.x, center.y - y * ppu);
-            ImU32 col = (y == 0) ? IM_COL32(255, 80, 80, 255) : IM_COL32(40, 40, 40, 255);
-            dl->AddLine(a, b, col, (y == 0) ? 2.0f : 1.0f);
-        }
-    }
-
-    // Render existing entities
-    {
-        auto isHi = [&](domain::sketch::EntityId id) -> bool {
-            if (m_uiHoverId != 0 && id == m_uiHoverId) return true;
-            for (auto pid : m_uiPickedIds) if (pid == id) return true;
-            return false;
-            };
-
-        const ImU32 baseCol = IM_COL32(60, 90, 180, 255);
-        const ImU32 hiCol = IM_COL32(255, 220, 0, 255);
-
-        // Lines
-        for (const auto& l : sketch.entities.lines()) {
-            ImVec2 aW{ (float)l.a.x, (float)l.a.y };
-            ImVec2 bW{ (float)l.b.x, (float)l.b.y };
-            dl->AddLine(m_canvas2D.WorldToScreen(aW), m_canvas2D.WorldToScreen(bW), isHi(l.h.id) ? hiCol : baseCol, 2.0f);
-        }
-
-        // Circles
-        for (const auto& c : sketch.entities.circles()) {
-            ImVec2 ctrW{ (float)c.center.x, (float)c.center.y };
-            float r = (float)c.radius;
-            dl->AddCircle(m_canvas2D.WorldToScreen(ctrW), r * m_canvas2D.pixels_per_unit, isHi(c.h.id) ? hiCol : baseCol, 0, 2.0f);
-        }
-
-        // Points (optional)
-        for (const auto& p : sketch.entities.points()) {
-            ImVec2 pW{ (float)p.p.x, (float)p.p.y };
-            dl->AddCircleFilled(m_canvas2D.WorldToScreen(pW), 3.0f, IM_COL32(200, 200, 200, 255));
-        }
-
-        // Constraint glyphs (geometric)
-        {
-            using namespace domain::sketch;
-
-            auto findLine = [&](EntityId id) -> const Line2D* {
-                for (const auto& l : sketch.entities.lines()) if (l.h.id == id) return &l;
-                return nullptr;
-                };
-            auto findCircle = [&](EntityId id) -> const Circle2D* {
-                for (const auto& c : sketch.entities.circles()) if (c.h.id == id) return &c;
-                return nullptr;
-                };
-
-            auto norm2 = [](ImVec2 v) { return v.x * v.x + v.y * v.y; };
-            auto len = [&](ImVec2 v) { return std::sqrt(norm2(v)); };
-            auto norm = [&](ImVec2 v) {
-                float l = len(v);
-                return (l > 1e-6f) ? ImVec2(v.x / l, v.y / l) : ImVec2(1, 0);
-                };
-            auto sub = [&](ImVec2 a, ImVec2 b) { return ImVec2(a.x - b.x, a.y - b.y); };
-            auto add = [&](ImVec2 a, ImVec2 b) { return ImVec2(a.x + b.x, a.y + b.y); };
-            auto mul = [&](ImVec2 a, float s) { return ImVec2(a.x * s, a.y * s); };
-            auto dot = [&](ImVec2 a, ImVec2 b) { return a.x * b.x + a.y * b.y; };
-
-            const ImU32 iconCol = IM_COL32(255, 255, 255, 220);
-            const float iconSizePx = 18.0f;
-
-            for (const auto& cvar : sketch.constraints) {
-                if (!std::holds_alternative<GeometricConstraint>(cvar))
-                    continue;
-
-                const auto& gc = std::get<GeometricConstraint>(cvar);
-                if (!gc.meta.enabled || gc.meta.suppressed)
-                    continue;
-                if (gc.type != GeometricConstraintType::Tangent)
-                    continue;
-                if (gc.refs.size() < 2)
-                    continue;
-
-                const EntityId aId = gc.refs[0].id;
-                const EntityId bId = gc.refs[1].id;
-
-                // Try Line-Circle first (either order)
-                const Line2D* line = findLine(aId);
-                const Circle2D* cir = findCircle(bId);
-                if (!line || !cir) {
-                    line = findLine(bId);
-                    cir = findCircle(aId);
-                }
-
-                bool drawn = false;
-
-                if (line && cir) {
-                    ImVec2 A{ (float)line->a.x, (float)line->a.y };
-                    ImVec2 B{ (float)line->b.x, (float)line->b.y };
-                    ImVec2 C{ (float)cir->center.x, (float)cir->center.y };
-
-                    ImVec2 d = sub(B, A);
-                    float d2 = norm2(d);
-                    if (d2 > 1e-8f) {
-                        float t = dot(sub(C, A), d) / d2;
-                        ImVec2 P = add(A, mul(d, t));
-
-                        ImVec2 Ps = m_canvas2D.WorldToScreen(P);
-                        ImVec2 Cs = m_canvas2D.WorldToScreen(C);
-                        ImVec2 nS = norm(sub(Cs, Ps));
-                        ImVec2 iconPos = add(Ps, mul(nS, 14.0f));
-
-                        adapters::sketchui::DrawConstraintIcon(
-                            dl, iconPos, iconSizePx, iconCol, adapters::sketchui::ConstraintIcon::Tangent);
-
-                        drawn = true;
-                    }
-                }
-
-                if (drawn) continue;
-
-                // Circle-Circle (external tangency)
-                const Circle2D* c1 = findCircle(aId);
-                const Circle2D* c2 = findCircle(bId);
-                if (c1 && c2) {
-                    ImVec2 C1{ (float)c1->center.x, (float)c1->center.y };
-                    ImVec2 C2{ (float)c2->center.x, (float)c2->center.y };
-                    ImVec2 v = sub(C2, C1);
-                    float L = len(v);
-                    if (L > 1e-6f) {
-                        ImVec2 dir = mul(v, 1.0f / L);
-                        ImVec2 P = add(C1, mul(dir, (float)c1->radius));
-
-                        ImVec2 Ps = m_canvas2D.WorldToScreen(P);
-                        ImVec2 C1s = m_canvas2D.WorldToScreen(C1);
-                        ImVec2 nS = norm(sub(Ps, C1s));
-                        ImVec2 iconPos = add(Ps, mul(nS, 12.0f));
-
-                        adapters::sketchui::DrawConstraintIcon(
-                            dl, iconPos, iconSizePx, iconCol, adapters::sketchui::ConstraintIcon::Tangent);
-                    }
-                }
-            }
-        }
-    }
-
-    // Tool update/draw (draft geometry + in-canvas dimension editing)
-    {
-        adapters::sketchui::ToolContext tctx{
-            sketch,
-            m_cmdHistory,
-            &m_activeConstraintIcon,
-            &m_sketchNeedsSolve,
-            &m_sketchChangeSerial,
-            &m_uiPickedIds,
-            &m_uiHoverId
-        };
-        m_toolManager.UpdateAndDraw(tctx, m_canvas2D, dl);
-    }
-
-    // ---- Always-on sketch cursor (draw last so it's on top) ----
-    if (hovered)
-    {
-        const ImVec2 p = ImGui::GetMousePos();
-        const ImVec2 cmin = canvasPos;
-        const ImVec2 cmax = ImVec2(canvasPos.x + canvasSize.x, canvasPos.y + canvasSize.y);
-        const bool inside =
-            (p.x >= cmin.x && p.x <= cmax.x && p.y >= cmin.y && p.y <= cmax.y);
-
-        if (inside)
-        {
-            const ImU32 col = (m_uiHoverId != 0)
-                ? IM_COL32(255, 210, 0, 255)
-                : IM_COL32(220, 220, 220, 255);
-
-            const float s = 7.0f;
-            const float thickness = 2.0f;
-
-            dl->AddLine(ImVec2(p.x - s, p.y - s), ImVec2(p.x + s, p.y + s), col, thickness);
-            dl->AddLine(ImVec2(p.x - s, p.y + s), ImVec2(p.x + s, p.y - s), col, thickness);
-        }
-    }
-
-    // Update OCCT overlay from the active sketch (so the 3D viewport reflects edits)
-    if (auto* renderer = m_app->getRenderer()) {
-        if (auto* occt = dynamic_cast<adapters::OcctRenderer*>(renderer)) {
-            auto scene = core::rendering::BuildRenderSceneFromSketch(sketch);
-            occt->setSketchOverlay(scene);
-        }
-    }
-
-    ImGui::End();
-}
-
-void ImGuiAdapter::renderMainMenu() {
-    
-//    ImGuiWindowFlags window_flags = ImGuiWindowFlags_NoDocking;
-//
-//    ImGuiViewport* viewport = ImGui::GetMainViewport();
-//    ImGui::SetNextWindowPos(viewport->Pos);
-//    ImGui::SetNextWindowSize(viewport->Size);
-//    ImGui::SetNextWindowViewport(viewport->ID);
-//    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
-//    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
-//    window_flags |= ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove;
-//    window_flags |= ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoNavFocus;
-////    if (!m_Specification.CustomTitlebar && m_MenubarCallback)
-////        window_flags |= ImGuiWindowFlags_MenuBar;
-//
-//    const bool isMaximized = IsMaximized();
-//
-//    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, isMaximized ? ImVec2(6.0f, 6.0f) : ImVec2(1.0f, 1.0f));
-//    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 3.0f);
-//
-//    ImGui::PushStyleColor(ImGuiCol_MenuBarBg, ImVec4{ 0.0f, 0.0f, 0.0f, 0.0f });
-//    ImGui::Begin("DockSpaceWindow", nullptr, window_flags);
-//    ImGui::PopStyleColor(); // MenuBarBg
-//    ImGui::PopStyleVar(2);
-//
-//    ImGui::PopStyleVar(2);
-//
-//    {
-//        ImGui::PushStyleColor(ImGuiCol_Border, IM_COL32(50, 50, 50, 255));
-//        // Draw window border if the window is not maximized
-//        //if (!isMaximized)
-//        //    UI::RenderWindowOuterBorders(ImGui::GetCurrentWindow());
-//
-//        ImGui::PopStyleColor(); // ImGuiCol_Border
-//    }
-//
-//    //if (m_Specification.CustomTitlebar)
-//    //{
-//        float titleBarHeight;
-//        UI_DrawTitlebar(titleBarHeight);
-//        ImGui::SetCursorPosY(titleBarHeight);
-//
-//    //}
-//   
-//    ImGui::End();
-    
-    ImGui::Begin("File Operations");
-    
-    //ImGui::SeparatorText("Load File");
-    ImGui::InputTextWithHint("##filepath", "Enter STEP file path...", m_filePathBuffer, sizeof(m_filePathBuffer));
-    
-    bool isLoading = m_app && m_app->isLoading();
-    if (isLoading) {
-        ImGui::BeginDisabled();
-    }
-
-    if (ImGui::Button("Load STEP File", ImVec2(150, 0))) {
-        if (m_app && std::strlen(m_filePathBuffer) > 0) {
-            m_app->loadFile(m_filePathBuffer);
-        }
-    }
-    if (isLoading) {
-        ImGui::EndDisabled();
-        ImGui::SameLine();
-        ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.0f, 1.0f), "Loading...");
-    }
-
-    ImGui::TextDisabled("Supported: .step, .stp");
-    
-    ImGui::Spacing();
-    ImGui::Separator();
-    ImGui::Spacing();
-    
-    //ImGui::SeparatorText("Export File");
-    ImGui::InputTextWithHint("##exportpath", "Enter export path...", m_exportPathBuffer, sizeof(m_exportPathBuffer));
-    if (ImGui::Button("Export OBJ", ImVec2(120, 0))) {
-        if (m_app && std::strlen(m_exportPathBuffer) > 0) {
-            m_app->exportFile(m_exportPathBuffer, "obj");
-        }
-    }
-    ImGui::SameLine();
-    if (ImGui::Button("Export STL", ImVec2(120, 0))) {
-        if (m_app && std::strlen(m_exportPathBuffer) > 0) {
-            m_app->exportFile(m_exportPathBuffer, "stl");
-        }
-    }
-    
-    ImGui::Spacing();
-    ImGui::Separator();
-    ImGui::Spacing();
-    
-    if (ImGui::Button("Fit All", ImVec2(150, 0))) {
-        if (m_app && m_app->getRenderer()) {
-            m_app->getRenderer()->fitAll();
-        }
-    }
-    
-    ImGui::End();
-}
-
-void ImGuiAdapter::renderStatusBar() {
-    ImGui::Begin("Status", nullptr, ImGuiWindowFlags_NoScrollbar);
-
-    if (m_app) {
-        ImGui::Text("Status: %s", m_app->getStatus().c_str());
-
-        // Show progress bar when loading
-        if (m_app->isLoading()) {
-            ImGui::SameLine();
-            float progress = m_app->getLoadingProgress() / 100.0f;
-            ImGui::ProgressBar(progress, ImVec2(200, 0));
-        }
-    }
-
-    ImGui::End();
-}
-
-void ImGuiAdapter::renderModelInfo() {
-    ImGui::Begin("Model Information");
-    
-    if (m_app) {
-        auto model = m_app->getCurrentModel();
-        if (model && !model->isEmpty()) {
-            ImGui::Text("Model Name:");
-            ImGui::SameLine();
-            ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.4f, 1.0f), "%s", model->getName().c_str());
+        // Zoom with MMB drag (vertical movement)
+        // NOTE: The sketch editor's pan/zoom is independent of the 3D viewport "active renderer" concept.
+        if (hovered && ImGui::IsMouseDragging(ImGuiMouseButton_Middle, 0.0f)) {
+            ImVec2 d = ImGui::GetIO().MouseDelta;
             
-            ImGui::Separator();
+            // Use vertical drag distance for zooming
+            float zoomDelta = -d.y * 0.01f; // Negative so dragging up zooms in
+            float old = m_sketchZoom;
+            float next = std::clamp(old * (1.0f + zoomDelta), 5.0f, 400.0f);
             
-            if (model->hasOcctShape()) {
-                ImGui::TextColored(ImVec4(0.4f, 0.8f, 1.0f, 1.0f), "OpenCASCADE Shape Loaded");
-                ImGui::Text("Type: TopoDS_Shape");
-            }
-            
-            if (model->getGeometryCount() > 0) {
-                ImGui::Text("Geometries: %zu", model->getGeometryCount());
-                
-                size_t totalVertices = 0;
-                size_t totalTriangles = 0;
-                for (const auto& geom : model->getGeometries()) {
-                    totalVertices += geom->getVertices().size();
-                    totalTriangles += geom->getTriangles().size();
-                }
-                ImGui::Text("Total Vertices: %zu", totalVertices);
-                ImGui::Text("Total Triangles: %zu", totalTriangles);
-            }
-        } else {
-            ImGui::TextDisabled("No model loaded");
-            ImGui::Spacing();
-            ImGui::TextWrapped("Load a STEP file to begin working with CAD models");
-        }
-    }
-    
-    ImGui::End();
-}
+            if (next != old) {
+                ImVec2 mouseS = ImGui::GetIO().MousePos;
+                ImVec2 beforeW = m_canvas2D.ScreenToWorld(mouseS);
 
-void ImGuiAdapter::render3DView() {
-    ImGui::Begin("3D Viewport");
+                m_sketchZoom = next;
+                m_canvas2D.pixels_per_unit = m_sketchZoom;
 
-    ImVec2 viewportSize = ImGui::GetContentRegionAvail();
-
-    if (m_app && m_app->getRenderer()) {
-        static ImVec2 lastSize = ImVec2(0, 0);
-        if (viewportSize.x != lastSize.x || viewportSize.y != lastSize.y) {
-            m_app->getRenderer()->resize((int)viewportSize.x, (int)viewportSize.y);
-            lastSize = viewportSize;
-        }
-
-        void* texture = m_app->getRenderer()->getFramebufferTexture();
-        if (texture) {
-            ImGui::Image(texture, viewportSize);
-        }
-        else {
-            // Placeholder - OpenCASCADE renders to its own window
-            ImGui::TextWrapped("3D View Active");
-            ImGui::TextDisabled("OpenCASCADE rendering to native window");
-
-            // Mouse interaction for camera control
-            if (ImGui::IsWindowHovered()) {
-                ImGuiIO& io = ImGui::GetIO();
-
-                // Right mouse button - rotate
-                if (ImGui::IsMouseDown(ImGuiMouseButton_Right)) {
-                    ImVec2 mousePos = ImGui::GetMousePos();
-                    if (m_isRotating) {
-                        float dx = (mousePos.x - m_lastMousePos.x) * 0.01f;
-                        float dy = (mousePos.y - m_lastMousePos.y) * 0.01f;
-                        m_app->getRenderer()->rotate(dx, dy);
-                    }
-                    m_isRotating = true;
-                    m_lastMousePos = mousePos;
-                }
-                else {
-                    m_isRotating = false;
-                }
-
-                // Middle mouse button - pan
-                if (ImGui::IsMouseDown(ImGuiMouseButton_Middle)) {
-                    ImVec2 mousePos = ImGui::GetMousePos();
-                    if (m_isPanning) {
-                        float dx = mousePos.x - m_lastMousePos.x;
-                        float dy = mousePos.y - m_lastMousePos.y;
-                        m_app->getRenderer()->pan(dx, dy);
-                    }
-                    m_isPanning = true;
-                    m_lastMousePos = mousePos;
-                }
-                else {
-                    m_isPanning = false;
-                }
-
-                // Mouse wheel - zoom
-                if (io.MouseWheel != 0.0f) {
-                    m_app->getRenderer()->zoom(io.MouseWheel * 0.1f);
-                }
+                // Adjust pan so zoom centers on cursor position
+                ImVec2 afterS = m_canvas2D.WorldToScreen(beforeW);
+                ImVec2 delta = ImVec2(mouseS.x - afterS.x, mouseS.y - afterS.y);
+                m_sketchPan.x += delta.x;
+                m_sketchPan.y += delta.y;
             }
         }
 
-        // Camera gizmo overlay
-        renderCameraGizmo();
-    }
-    else {
-        ImGui::TextWrapped("No renderer available");
-    }
+        // Pan with RMB drag
+        if (hovered && ImGui::IsMouseDragging(ImGuiMouseButton_Right, 0.0f)) {
+            ImVec2 d = ImGui::GetIO().MouseDelta;
+            m_sketchPan.x += d.x;
+            m_sketchPan.y += d.y;
+        }
 
-    ImGui::End();
-}
+        // Zoom with wheel (towards cursor) - alternative zoom method
+        if (hovered && ImGui::GetIO().MouseWheel != 0.0f && !ImGui::IsAnyItemActive()) {
+            float old = m_sketchZoom;
+            float next = std::clamp(old * (1.0f + ImGui::GetIO().MouseWheel * 0.10f), 5.0f, 400.0f);
+            if (next != old) {
+                ImVec2 mouseS = ImGui::GetIO().MousePos;
+                ImVec2 beforeW = m_canvas2D.ScreenToWorld(mouseS);
 
-void ImGuiAdapter::renderCameraGizmo() {
-    if (!m_app || !m_app->getRenderer()) return;
+                m_sketchZoom = next;
+                m_canvas2D.pixels_per_unit = m_sketchZoom;
 
-    // Position in top-right corner of viewport
-    ImVec2 windowPos = ImGui::GetWindowPos();
-    ImVec2 windowSize = ImGui::GetWindowSize();
+                ImVec2 afterS = m_canvas2D.WorldToScreen(beforeW);
+                ImVec2 delta = ImVec2(mouseS.x - afterS.x, mouseS.y - afterS.y);
+                m_sketchPan.x += delta.x;
+                m_sketchPan.y += delta.y;
+            }
+        }
 
-    ImGui::SetNextWindowPos(ImVec2(windowPos.x + windowSize.x - 120, windowPos.y + 30));
-    ImGui::SetNextWindowSize(ImVec2(110, 200));
-
-    ImGui::Begin("Camera", nullptr,
-        ImGuiWindowFlags_NoTitleBar |
-        ImGuiWindowFlags_NoResize |
-        ImGuiWindowFlags_NoMove |
-        ImGuiWindowFlags_NoScrollbar |
-        ImGuiWindowFlags_NoCollapse);
-
-    ImGui::Text("View");
-    ImGui::Separator();
-
-    if (ImGui::Button("Front", ImVec2(90, 0))) {
-        m_app->getRenderer()->setViewDirection(0);
-    }
-    if (ImGui::Button("Back", ImVec2(90, 0))) {
-        m_app->getRenderer()->setViewDirection(1);
-    }
-    if (ImGui::Button("Top", ImVec2(90, 0))) {
-        m_app->getRenderer()->setViewDirection(2);
-    }
-    if (ImGui::Button("Bottom", ImVec2(90, 0))) {
-        m_app->getRenderer()->setViewDirection(3);
-    }
-    if (ImGui::Button("Left", ImVec2(90, 0))) {
-        m_app->getRenderer()->setViewDirection(4);
-    }
-    if (ImGui::Button("Right", ImVec2(90, 0))) {
-        m_app->getRenderer()->setViewDirection(5);
-    }
-
-    ImGui::Separator();
-    if (ImGui::Button("Fit All", ImVec2(90, 0))) {
-        m_app->getRenderer()->fitAll();
-    }
-
-    ImGui::End();
-}
-
-
-static bool PointInConvexPoly(const ImVec2* pts, int count, ImVec2 p)
-{
-    // Convex polygon point test using cross-product sign consistency.
-    // Works for clockwise or counter-clockwise point order.
-    float prev = 0.0f;
-    for (int i = 0; i < count; ++i)
-    {
-        const ImVec2 a = pts[i];
-        const ImVec2 b = pts[(i + 1) % count];
-        const ImVec2 ab(b.x - a.x, b.y - a.y);
-        const ImVec2 ap(p.x - a.x, p.y - a.y);
-        const float cross = ab.x * ap.y - ab.y * ap.x;
-
-        if (cross != 0.0f)
+        // Draw grid
         {
-            if (prev != 0.0f && (cross > 0.0f) != (prev > 0.0f))
+            const float ppu = m_canvas2D.pixels_per_unit;
+            const ImVec2 origin = canvasPos;
+            const ImVec2 end = ImVec2(canvasPos.x + canvasSize.x, canvasPos.y + canvasSize.y);
+            const ImVec2 center = ImVec2(
+                canvasPos.x + canvasSize.x * 0.5f + m_sketchPan.x,
+                canvasPos.y + canvasSize.y * 0.5f + m_sketchPan.y);
+
+            ImVec2 w0 = m_canvas2D.ScreenToWorld(origin);
+            ImVec2 w1 = m_canvas2D.ScreenToWorld(end);
+            float xmin = std::floor((std::min)(w0.x, w1.x)) - 1.0f;
+            float xmax = std::ceil((std::max)(w0.x, w1.x)) + 1.0f;
+            float ymin = std::floor((std::min)(w0.y, w1.y)) - 1.0f;
+            float ymax = std::ceil((std::max)(w0.y, w1.y)) + 1.0f;
+
+            for (int x = (int)xmin; x <= (int)xmax; ++x) {
+                ImVec2 a = ImVec2(center.x + x * ppu, origin.y);
+                ImVec2 b = ImVec2(center.x + x * ppu, end.y);
+                ImU32 col = (x == 0) ? IM_COL32(80, 120, 255, 255) : IM_COL32(40, 40, 40, 255);
+                dl->AddLine(a, b, col, (x == 0) ? 2.0f : 1.0f);
+            }
+
+            for (int y = (int)ymin; y <= (int)ymax; ++y) {
+                ImVec2 a = ImVec2(origin.x, center.y - y * ppu);
+                ImVec2 b = ImVec2(end.x, center.y - y * ppu);
+                ImU32 col = (y == 0) ? IM_COL32(255, 80, 80, 255) : IM_COL32(40, 40, 40, 255);
+                dl->AddLine(a, b, col, (y == 0) ? 2.0f : 1.0f);
+            }
+        }
+
+        // Render existing entities
+        {
+            auto isHi = [&](domain::sketch::EntityId id) -> bool {
+                if (m_uiHoverId != 0 && id == m_uiHoverId) return true;
+                for (auto pid : m_uiPickedIds) if (pid == id) return true;
                 return false;
-            prev = cross;
+                };
+
+            const ImU32 baseCol = IM_COL32(60, 90, 180, 255);
+            const ImU32 hiCol = IM_COL32(255, 220, 0, 255);
+
+            // Lines
+            for (const auto& l : sketch.entities.lines()) {
+                ImVec2 aW{ (float)l.a.x, (float)l.a.y };
+                ImVec2 bW{ (float)l.b.x, (float)l.b.y };
+                dl->AddLine(m_canvas2D.WorldToScreen(aW), m_canvas2D.WorldToScreen(bW), isHi(l.h.id) ? hiCol : baseCol, 2.0f);
+            }
+
+            // Circles
+            for (const auto& c : sketch.entities.circles()) {
+                ImVec2 ctrW{ (float)c.center.x, (float)c.center.y };
+                float r = (float)c.radius;
+                dl->AddCircle(m_canvas2D.WorldToScreen(ctrW), r * m_canvas2D.pixels_per_unit, isHi(c.h.id) ? hiCol : baseCol, 0, 2.0f);
+            }
+
+            // Points (optional)
+            for (const auto& p : sketch.entities.points()) {
+                ImVec2 pW{ (float)p.p.x, (float)p.p.y };
+                dl->AddCircleFilled(m_canvas2D.WorldToScreen(pW), 3.0f, IM_COL32(200, 200, 200, 255));
+            }
+
+            // Constraint glyphs (geometric)
+            {
+                using namespace domain::sketch;
+
+                auto findLine = [&](EntityId id) -> const Line2D* {
+                    for (const auto& l : sketch.entities.lines()) if (l.h.id == id) return &l;
+                    return nullptr;
+                    };
+                auto findCircle = [&](EntityId id) -> const Circle2D* {
+                    for (const auto& c : sketch.entities.circles()) if (c.h.id == id) return &c;
+                    return nullptr;
+                    };
+
+                auto norm2 = [](ImVec2 v) { return v.x * v.x + v.y * v.y; };
+                auto len = [&](ImVec2 v) { return std::sqrt(norm2(v)); };
+                auto norm = [&](ImVec2 v) {
+                    float l = len(v);
+                    return (l > 1e-6f) ? ImVec2(v.x / l, v.y / l) : ImVec2(1, 0);
+                    };
+                auto sub = [&](ImVec2 a, ImVec2 b) { return ImVec2(a.x - b.x, a.y - b.y); };
+                auto add = [&](ImVec2 a, ImVec2 b) { return ImVec2(a.x + b.x, a.y + b.y); };
+                auto mul = [&](ImVec2 a, float s) { return ImVec2(a.x * s, a.y * s); };
+                auto dot = [&](ImVec2 a, ImVec2 b) { return a.x * b.x + a.y * b.y; };
+
+                const ImU32 iconCol = IM_COL32(255, 255, 255, 220);
+                const float iconSizePx = 18.0f;
+
+                for (const auto& cvar : sketch.constraints) {
+                    if (!std::holds_alternative<GeometricConstraint>(cvar))
+                        continue;
+
+                    const auto& gc = std::get<GeometricConstraint>(cvar);
+                    if (!gc.meta.enabled || gc.meta.suppressed)
+                        continue;
+                    if (gc.type != GeometricConstraintType::Tangent)
+                        continue;
+                    if (gc.refs.size() < 2)
+                        continue;
+
+                    const EntityId aId = gc.refs[0].id;
+                    const EntityId bId = gc.refs[1].id;
+
+                    // Try Line-Circle first (either order)
+                    const Line2D* line = findLine(aId);
+                    const Circle2D* cir = findCircle(bId);
+                    if (!line || !cir) {
+                        line = findLine(bId);
+                        cir = findCircle(aId);
+                    }
+
+                    bool drawn = false;
+
+                    if (line && cir) {
+                        ImVec2 A{ (float)line->a.x, (float)line->a.y };
+                        ImVec2 B{ (float)line->b.x, (float)line->b.y };
+                        ImVec2 C{ (float)cir->center.x, (float)cir->center.y };
+
+                        ImVec2 d = sub(B, A);
+                        float d2 = norm2(d);
+                        if (d2 > 1e-8f) {
+                            float t = dot(sub(C, A), d) / d2;
+                            ImVec2 P = add(A, mul(d, t));
+
+                            ImVec2 Ps = m_canvas2D.WorldToScreen(P);
+                            ImVec2 Cs = m_canvas2D.WorldToScreen(C);
+                            ImVec2 nS = norm(sub(Cs, Ps));
+                            ImVec2 iconPos = add(Ps, mul(nS, 14.0f));
+
+                            adapters::sketchui::DrawConstraintIcon(
+                                dl, iconPos, iconSizePx, iconCol, adapters::sketchui::ConstraintIcon::Tangent);
+
+                            drawn = true;
+                        }
+                    }
+
+                    if (drawn) continue;
+
+                    // Circle-Circle (external tangency)
+                    const Circle2D* c1 = findCircle(aId);
+                    const Circle2D* c2 = findCircle(bId);
+                    if (c1 && c2) {
+                        ImVec2 C1{ (float)c1->center.x, (float)c1->center.y };
+                        ImVec2 C2{ (float)c2->center.x, (float)c2->center.y };
+                        ImVec2 v = sub(C2, C1);
+                        float L = len(v);
+                        if (L > 1e-6f) {
+                            ImVec2 dir = mul(v, 1.0f / L);
+                            ImVec2 P = add(C1, mul(dir, (float)c1->radius));
+
+                            ImVec2 Ps = m_canvas2D.WorldToScreen(P);
+                            ImVec2 C1s = m_canvas2D.WorldToScreen(C1);
+                            ImVec2 nS = norm(sub(Ps, C1s));
+                            ImVec2 iconPos = add(Ps, mul(nS, 12.0f));
+
+                            adapters::sketchui::DrawConstraintIcon(
+                                dl, iconPos, iconSizePx, iconCol, adapters::sketchui::ConstraintIcon::Tangent);
+                        }
+                    }
+                }
+            }
         }
-    }
-    return true;
-}
 
- bool ImGuiAdapter::HexButtonTrueHit(const char* label, float radius, bool pointy_top)
-{
-    ImGuiWindow* window = ImGui::GetCurrentWindow();
-    if (window->SkipItems) return false;
-
-    ImGuiContext& g = *GImGui;
-    const ImGuiID id = window->GetID(label);
-
-    // Hex bounds
-    //const float sqrt3 = 1.7320508f;
-    const float sqrt3 = 1.8f;
-
-    const float w = sqrt3 * radius;
-    const float h = sqrt3 * radius;
-
-    const ImVec2 pos = window->DC.CursorPos;           // local (screen) item pos
-    const ImRect bb(pos, ImVec2(pos.x + w, pos.y + h));
-    ImGui::ItemSize(bb);
-    if (!ImGui::ItemAdd(bb, id)) return false;
-
-    //ImGui::PushItemFlag(ImGuiItemFlags_AllowOverlap, true);
-    // Build hex points (screen space)
-    ImVec2 c((bb.Min.x + bb.Max.x) * 0.5f, (bb.Min.y + bb.Max.y) * 0.5f);
-    ImVec2 pts[6];
-
-    const float rot = pointy_top ? (IM_PI / 6.0f) : 0.0f; // 30° rotation for pointy-top
-    for (int i = 0; i < 6; ++i)
-    {
-        float a = rot + (float)i * (IM_PI / 3.0f);
-        pts[i] = ImVec2(c.x + cosf(a) * radius, c.y + sinf(a) * radius);
-    }
-
-    // True hit test: mouse must be inside polygon
-    const ImVec2 mp = g.IO.MousePos;
-    const bool inside = bb.Contains(mp) && PointInConvexPoly(pts, 6, mp);
-
-    // Use normal ImGui behavior, but only allow hover/press if inside.
-    // Allow continuing an active hold even if mouse drifts slightly.
-    bool hovered = false, held = false;
-    bool pressed = false;
-
-    if (inside || g.ActiveId == id)
-    {
-        pressed = ImGui::ButtonBehavior(bb, id, &hovered, &held);
-        // Mask hover/press if not actually inside the hex
-        if (!inside && g.ActiveId != id)
+        // Tool update/draw (draft geometry + in-canvas dimension editing)
         {
-            hovered = false;
-            pressed = false;
-            held = false;
+            adapters::sketchui::ToolContext tctx{
+                sketch,
+                m_cmdHistory,
+                &m_activeConstraintIcon,
+                &m_sketchNeedsSolve,
+                &m_sketchChangeSerial,
+                &m_uiPickedIds,
+                &m_uiHoverId
+            };
+            if (m_skipToolUpdateOnce)
+            {
+                // Prevent the same click that activated a tool from being processed
+                // by the tool/canvas logic later in this frame.
+                m_skipToolUpdateOnce = false;
+            }
+            else
+            {
+                m_toolManager.UpdateAndDraw(tctx, m_canvas2D, dl);
+            }
         }
-        // If pressed happens when mouse is outside polygon (rare edge), cancel it.
-        if (pressed && !inside) pressed = false;
-        // If held and mouse is outside, you can choose to cancel hold:
-        if (held && !inside && g.ActiveId == id) held = false;
+
+        // ---- Always-on sketch cursor (draw last so it's on top) ----
+        if (hovered)
+        {
+            const ImVec2 p = ImGui::GetMousePos();
+            const ImVec2 cmin = canvasPos;
+            const ImVec2 cmax = ImVec2(canvasPos.x + canvasSize.x, canvasPos.y + canvasSize.y);
+            const bool inside =
+                (p.x >= cmin.x && p.x <= cmax.x && p.y >= cmin.y && p.y <= cmax.y);
+
+            if (inside)
+            {
+                const ImU32 col = (m_uiHoverId != 0)
+                    ? IM_COL32(255, 210, 0, 255)
+                    : IM_COL32(220, 220, 220, 255);
+
+                const float s = 7.0f;
+                const float thickness = 2.0f;
+
+                dl->AddLine(ImVec2(p.x - s, p.y - s), ImVec2(p.x + s, p.y + s), col, thickness);
+                dl->AddLine(ImVec2(p.x - s, p.y + s), ImVec2(p.x + s, p.y - s), col, thickness);
+            }
+        }
+
+        // (OCCT overlay sync disabled in plugin-hotload build)
+        ImGui::End();
+
+        if (m_config && wasOpen != m_viewSketchEditor)
+            m_config->set("pistachio.UI", "views.sketchEditor", m_viewSketchEditor);
     }
-    ImGui::PopItemFlag();
-    // Colors from current style
-    const ImU32 col_fill = ImGui::GetColorU32(
-        held ? ImGuiCol_ButtonActive :
-        hovered ? ImGuiCol_ButtonHovered :
-        ImGuiCol_Button);
-    
-    const ImU32 col_border = ImGui::GetColorU32(ImGuiCol_Border);
-    const ImU32 col_text = ImGui::GetColorU32(ImGuiCol_Text);
-
-    
-
-    // Draw
-    ImDrawList* dl = ImGui::GetWindowDrawList();
-    dl->AddConvexPolyFilled(pts, 6, col_fill);
-    dl->AddPolyline(pts, 6, col_border, ImDrawFlags_Closed, 1.0f);
-
-    // Center text
-    ImVec2 ts = ImGui::CalcTextSize(label);
-    dl->AddText(ImVec2(c.x - ts.x * 0.5f, c.y - ts.y * 0.5f), col_text, label);
-
-    return pressed;
-}
-  
-
- // Shared polygon button behavior + drawing
- static bool PolyButtonTrueHit(const char* label, const ImRect& bb, const ImVec2* pts, int pt_count)
- {
-     ImGuiWindow* window = ImGui::GetCurrentWindow();
-     if (window->SkipItems) return false;
-
-     ImGuiContext& g = *GImGui;
-     const ImGuiID id = window->GetID(label);
-
-     ImGui::ItemSize(bb);
-     if (!ImGui::ItemAdd(bb, id)) return false;
-
-     const ImVec2 mp = g.IO.MousePos;
-     const bool inside = bb.Contains(mp) && PointInConvexPoly(pts, pt_count, mp);
-
-     bool hovered = false, held = false;
-     bool pressed = false;
-
-     if (inside || g.ActiveId == id)
-     {
-         pressed = ImGui::ButtonBehavior(bb, id, &hovered, &held);
-
-         // Mask hover/press if outside polygon (but allow active-id continuity)
-         if (!inside && g.ActiveId != id)
-         {
-             hovered = false;
-             pressed = false;
-             held = false;
-         }
-         if (pressed && !inside) pressed = false;
-     }
-
-     // Colors based on ImGui style (theme-friendly)
-     const ImU32 col_fill = ImGui::GetColorU32(
-         held ? ImGuiCol_ButtonActive :
-         hovered ? ImGuiCol_ButtonHovered :
-         ImGuiCol_Button);
-
-     const ImU32 col_border = ImGui::GetColorU32(ImGuiCol_Border);
-     const ImU32 col_text = ImGui::GetColorU32(ImGuiCol_Text);
-
-     ImDrawList* dl = ImGui::GetWindowDrawList();
-     dl->AddConvexPolyFilled(pts, pt_count, col_fill);
-     dl->AddPolyline(pts, pt_count, col_border, ImDrawFlags_Closed, 1.0f);
-
-     // Center text using polygon bounding box
-     const float cx = (bb.Min.x + bb.Max.x) * 0.5f;
-     const float cy = (bb.Min.y + bb.Max.y) * 0.5f;
-     ImVec2 ts = ImGui::CalcTextSize(label);
-     dl->AddText(ImVec2(cx - ts.x * 0.5f, cy - ts.y * 0.5f), col_text, label);
-     
-     return pressed;
- }
- static ImRect PolyAabb(const ImVec2* pts, int count)
- {
-     ImVec2 mn = pts[0];
-     ImVec2 mx = pts[0];
-     for (int i = 1; i < count; ++i)
-     {
-         mn.x = (pts[i].x < mn.x) ? pts[i].x : mn.x;
-         mn.y = (pts[i].y < mn.y) ? pts[i].y : mn.y;
-         mx.x = (pts[i].x > mx.x) ? pts[i].x : mx.x;
-         mx.y = (pts[i].y > mx.y) ? pts[i].y : mx.y;
-     }
-     return ImRect(mn, mx);
- }
-
- // Returns true if the MAIN area (not the square) was clicked.
- // Dropdown selection is returned via selected_index (optional).
-
-// Returns true if the MAIN area (not the square) was clicked.
-// Dropdown selection is returned via selected_index (optional).
- bool ImGuiAdapter::RibbonButtonIconTextWithDropDown(
-     const char* id,
-     ImTextureID icon_tex,
-     ImVec2 icon_size,
-     const char* label,
-     const char* const* items,
-     int item_count,
-     int* selected_index,
-     ImVec2 size,
-     float square_size
- )
- {
-     ImGuiWindow* window = ImGui::GetCurrentWindow();
-     if (window->SkipItems) return false;
-
-     ImGuiID wid = window->GetID(id);
-
-     ImVec2 pos = window->DC.CursorPos;
-     ImRect bb(pos, Add(pos, size));
-
-     ImGui::ItemSize(bb);
-     if (!ImGui::ItemAdd(bb, wid))
-         return false;
-
-     ImDrawList* dl = ImGui::GetWindowDrawList();
-     const ImGuiStyle& style = ImGui::GetStyle();
-
-     const float pady = style.FramePadding.y;
-
-     // Dropdown square at bottom center
-     float square_y = bb.Max.y - pady - square_size;
-     ImVec2 square_center(bb.GetCenter().x, square_y + square_size * 0.5f);
-
-     ImVec2 square_min(square_center.x - square_size * 0.5f, square_center.y - square_size * 0.5f);
-     ImVec2 square_max(square_center.x + square_size * 0.5f, square_center.y + square_size * 0.5f);
-     ImRect square_bb(square_min, square_max);
-
-     // Hover states
-     bool square_hovered = ImGui::IsMouseHoveringRect(square_bb.Min, square_bb.Max);
-     bool whole_hovered = ImGui::IsMouseHoveringRect(bb.Min, bb.Max);
-
-     // Background + border
-     ImU32 bg = ImGui::GetColorU32(whole_hovered ? ImGuiCol_ButtonHovered : ImGuiCol_Button);
-     dl->AddRectFilled(bb.Min, bb.Max, bg, style.FrameRounding);
-     dl->AddRect(bb.Min, bb.Max, ImGui::GetColorU32(ImGuiCol_Border), style.FrameRounding);
-
-     // Layout region (space above dropdown square)
-     float content_top = bb.Min.y + pady;
-     float content_bottom = square_bb.Min.y - pady;
-     float content_h = content_bottom - content_top;
-
-     // Optional icon
-     const bool has_icon = (icon_tex != nullptr) && (icon_size.x > 0.0f) && (icon_size.y > 0.0f);
-     const float icon_h = has_icon ? icon_size.y : 0.0f;
-     const float icon_gap = has_icon ? 4.0f : 0.0f; // spacing between icon and label
-
-     // Measure label
-     ImVec2 label_size = ImGui::CalcTextSize(label, nullptr, true);
-     const float text_h = ImGui::GetTextLineHeight();
-
-     // Total stack height we want to place (icon + gap + label)
-     float stack_h = icon_h + icon_gap + text_h;
-
-     // Top of stack, vertically centered in content area
-     float stack_y = content_top + (content_h - stack_h) * 0.5f;
-     if (stack_y < content_top) stack_y = content_top; // clamp if space is tight
-
-     // Icon pos (only if icon exists)
-     if (has_icon)
-     {
-         ImVec2 icon_pos(bb.GetCenter().x - icon_size.x * 0.5f, stack_y);
-         ImVec2 icon_max = Add(icon_pos, icon_size);
-         dl->AddImage(icon_tex, icon_pos, icon_max);
-     }
-
-     // Label pos (below icon if present, otherwise centered stack)
-     float label_y = stack_y + icon_h + icon_gap;
-     ImVec2 label_pos(bb.GetCenter().x - label_size.x * 0.5f, label_y);
-     dl->AddText(label_pos, ImGui::GetColorU32(ImGuiCol_Text), label);
-
-     // Draw dropdown square + chevron
-     ImU32 sq_col = ImGui::GetColorU32(square_hovered ? ImGuiCol_FrameBgHovered : ImGuiCol_FrameBg);
-     dl->AddRectFilled(square_bb.Min, square_bb.Max, sq_col, 2.0f);
-     dl->AddRect(square_bb.Min, square_bb.Max, ImGui::GetColorU32(ImGuiCol_Border), 2.0f);
-
-     ImVec2 c = square_bb.GetCenter();
-     float t = square_size * 0.25f;
-     dl->AddTriangleFilled(
-         ImVec2(c.x - t, c.y - t * 0.25f),
-         ImVec2(c.x + t, c.y - t * 0.25f),
-         ImVec2(c.x, c.y + t),
-         ImGui::GetColorU32(ImGuiCol_Text)
-     );
-
-     // Click logic
-     bool main_clicked = false;
-     if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) && whole_hovered)
-     {
-         if (square_hovered)
-             ImGui::OpenPopup(id);
-         else
-             main_clicked = true;
-     }
-
-     // Optional: better popup placement (under the square)
-     if (ImGui::IsPopupOpen(id, ImGuiPopupFlags_None))
-         ImGui::SetNextWindowPos(ImVec2(square_bb.Min.x, square_bb.Max.y));
-
-     // Popup menu
-     if (ImGui::BeginPopup(id))
-     {
-         for (int i = 0; i < item_count; ++i)
-         {
-             bool is_sel = (selected_index && *selected_index == i);
-             if (ImGui::MenuItem(items[i], nullptr, is_sel))
-             {
-                 if (selected_index) *selected_index = i;
-             }
-         }
-         ImGui::EndPopup();
-     }
-
-     return main_clicked;
- }
-
-  
-
- bool ImGuiAdapter::ParallelogramButtonTrueHit(const char* label, ImVec2 size, float skew_x)
- {
-     ImVec2 pos = ImGui::GetCursorScreenPos();
-     return ImGuiAdapter::ParallelogramButtonTrueHit(label, pos,size, skew_x);
-
- }
- bool ImGuiAdapter::ParallelogramButtonTrueHit(const char* label, ImVec2 pos, ImVec2 size, float skew_x)
- {
-     ImGuiWindow* window = ImGui::GetCurrentWindow();
-     if (window->SkipItems) return false;
-
-     // Define a "nominal" rect just to position the shape
-     ImRect nominal(pos, ImVec2(pos.x + size.x, pos.y + size.y));
-
-     float s = ImClamp(skew_x, -size.x * 0.49f, size.x * 0.49f);
-
-     ImVec2 pts[4];
-     pts[0] = ImVec2(nominal.Min.x, nominal.Max.y);
-     pts[1] = ImVec2(nominal.Max.x, nominal.Max.y);
-     pts[2] = ImVec2(nominal.Max.x + s, nominal.Min.y);
-     pts[3] = ImVec2(nominal.Min.x + s, nominal.Min.y);
-
-     // Tight bounding box around the actual polygon (THIS reduces spacing)
-     ImRect bb = PolyAabb(pts, 4);
-
-     return PolyButtonTrueHit(label, bb, pts, 4);
- }
-
-
-
- bool ImGuiAdapter::TrapeziumButtonTrueHit(
-     const char* label,
-     ImVec2 pos,
-     ImVec2 size,
-     float inset_x,
-     bool short_edge_on_bottom // false = short top, true = short bottom
- )
-
- {
-     ImGuiWindow* window = ImGui::GetCurrentWindow();
-     if (window->SkipItems) return false;
-
-     ImRect nominal(pos, ImVec2(pos.x + size.x, pos.y + size.y));
-
-     // inset_x is how much to trim EACH SIDE of the short edge (so width reduces by 2*inset)
-     float inset = ImClamp(inset_x, 0.0f, size.x * 0.49f);
-
-     ImVec2 pts[4];
-
-     if (!short_edge_on_bottom)
-     {
-         // Normal: short TOP, long BOTTOM
-         // bottom edge full width
-         pts[0] = ImVec2(nominal.Min.x, nominal.Max.y); // bottom-left
-         pts[1] = ImVec2(nominal.Max.x, nominal.Max.y); // bottom-right
-         // top edge trimmed equally => centered
-         pts[2] = ImVec2(nominal.Max.x - inset, nominal.Min.y); // top-right
-         pts[3] = ImVec2(nominal.Min.x + inset, nominal.Min.y); // top-left
-     }
-     else
-     {
-         // Inverted: long TOP, short BOTTOM
-         // bottom edge trimmed equally => centered
-         pts[0] = ImVec2(nominal.Min.x + inset, nominal.Max.y); // bottom-left
-         pts[1] = ImVec2(nominal.Max.x - inset, nominal.Max.y); // bottom-right
-         // top edge full width
-         pts[2] = ImVec2(nominal.Max.x, nominal.Min.y); // top-right
-         pts[3] = ImVec2(nominal.Min.x, nominal.Min.y); // top-left
-     }
-
-     ImRect bb = PolyAabb(pts, 4);
-     return PolyButtonTrueHit(label, bb, pts, 4);
- }
-
-
- bool ImGuiAdapter::TrapeziumButtonTrueHit(const char* label, ImVec2 size, float top_inset_x)
- {
-     ImVec2 pos = ImGui::GetCursorScreenPos();
-     return ImGuiAdapter::TrapeziumButtonTrueHit(label, pos, size, top_inset_x,false);
- }
-
- bool ImGuiAdapter::TrapeziumButtonTrueHit(const char* label, ImVec2 pos, ImVec2 size, float top_inset_x)
- {
-     ImGuiWindow* window = ImGui::GetCurrentWindow();
-     if (window->SkipItems) return false;
-
-     ImRect nominal(pos, ImVec2(pos.x + size.x, pos.y + size.y));
-
-     // Allow both orientations:
-     //  +inset => narrow top (normal)
-     //  -inset => wide top (inverted)
-     float inset = ImClamp(top_inset_x, -size.x * 0.49f, size.x * 0.49f);
-
-     ImVec2 pts[4];
-
-     // Bottom edge is always the nominal full width
-     pts[0] = ImVec2(nominal.Min.x, nominal.Max.y); // bottom-left
-     pts[1] = ImVec2(nominal.Max.x, nominal.Max.y); // bottom-right
-
-     // Top edge: inset can be negative (expands outward)
-     pts[2] = ImVec2(nominal.Max.x - inset, nominal.Min.y); // top-right
-     pts[3] = ImVec2(nominal.Min.x + inset, nominal.Min.y); // top-left
-
-     ImRect bb = PolyAabb(pts, 4);
-     return PolyButtonTrueHit(label, bb, pts, 4);
- }
-
- bool ImGuiAdapter::IsMaximized() const
- {
-     return (bool)glfwGetWindowAttrib(m_window, GLFW_MAXIMIZED);
- }
-
- void ImGuiAdapter::UI_DrawTitlebar(float& outTitlebarHeight)
- {
-     const float titlebarHeight = outTitlebarHeight;// 60.0f;
-     const bool isMaximized = IsMaximized();
-     float titlebarVerticalOffset = isMaximized ? -6.0f : 0.0f;
-     const ImVec2 windowPadding = ImGui::GetCurrentWindow()->WindowPadding;
-
-     ImGui::SetCursorPos(ImVec2(windowPadding.x, windowPadding.y + titlebarVerticalOffset));
-     const ImVec2 titlebarMin = ImGui::GetCursorScreenPos();
-     const ImVec2 titlebarMax = { ImGui::GetCursorScreenPos().x + ImGui::GetWindowWidth() - windowPadding.y * 2.0f,
-                                  ImGui::GetCursorScreenPos().y + titlebarHeight };
-     auto* bgDrawList = ImGui::GetBackgroundDrawList();
-     auto* fgDrawList = ImGui::GetForegroundDrawList();
-     bgDrawList->AddRectFilled(titlebarMin, titlebarMax, UI::Colors::Theme::titlebar);
-     // DEBUG TITLEBAR BOUNDS
-     //fgDrawList->AddRect(titlebarMin, titlebarMax, UI::Colors::Theme::invalidPrefab);
-
-     // Logo
-     {
-         const int logoWidth = 48;// m_LogoTex->GetWidth();
-         const int logoHeight = 48;// m_LogoTex->GetHeight();
-         const ImVec2 logoOffset(16.0f + windowPadding.x, 5.0f + windowPadding.y + titlebarVerticalOffset);
-         const ImVec2 logoRectStart = { ImGui::GetItemRectMin().x + logoOffset.x, ImGui::GetItemRectMin().y + logoOffset.y };
-         const ImVec2 logoRectMax = { logoRectStart.x + logoWidth, logoRectStart.y + logoHeight };
-
-         fgDrawList->AddImage(m_AppHeaderIcon->GetDescriptorSet(), logoRectStart, logoRectMax);
-     }
-
-     ImGui::BeginHorizontal("Titlebar", { ImGui::GetWindowWidth() - windowPadding.y * 2.0f, ImGui::GetFrameHeightWithSpacing() });
-
-     static float moveOffsetX;
-     static float moveOffsetY;
-     const float w = ImGui::GetContentRegionAvail().x;
-     const float buttonsAreaWidth = 94;
-
-     // Title bar drag area
-     // On Windows we hook into the GLFW win32 window internals
-     ImGui::SetCursorPos(ImVec2(windowPadding.x, windowPadding.y + titlebarVerticalOffset)); // Reset cursor pos
-     // DEBUG DRAG BOUNDS
-     //fgDrawList->AddRect(ImGui::GetCursorScreenPos(), ImVec2(ImGui::GetCursorScreenPos().x + w - buttonsAreaWidth, ImGui::GetCursorScreenPos().y + titlebarHeight), UI::Colors::Theme::invalidPrefab);
-     ImGui::InvisibleButton("##titleBarDragZone", ImVec2(w - buttonsAreaWidth, titlebarHeight));
-
-     m_TitleBarHovered = ImGui::IsItemHovered();
-
-     const bool dragZoneHovered = ImGui::IsItemHovered(ImGuiHoveredFlags_RectOnly);
-     const bool dragZoneClicked = ImGui::IsItemClicked(ImGuiMouseButton_Left); // first press
-     // or: const bool dragZoneActive = ImGui::IsItemActive();
-
-#ifdef _WIN32
-     if (dragZoneClicked)  // only begin a drag when click begins in the zone
-     {
-         HWND hwnd = glfwGetWin32Window(m_window);
-
-         // Optional: ignore double-click if you use it for maximize/restore
-         // if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) { ... }
-
-         ReleaseCapture();
-         SendMessage(hwnd, WM_NCLBUTTONDOWN, HTCAPTION, 0);
-     }
-#endif
-
-
-     if (isMaximized)
-     {
-         float windowMousePosY = ImGui::GetMousePos().y - ImGui::GetCursorScreenPos().y;
-         if (windowMousePosY >= 0.0f && windowMousePosY <= 5.0f)
-             m_TitleBarHovered = true; // Account for the top-most pixels which don't register
-     }
-
-     // Draw Menubar
-     // TODO DN menu callbacks
-     if (m_MenubarCallback)
-     {
-         ImGui::SuspendLayout();
-         {
-             ImGui::SetItemAllowOverlap();
-             const float logoHorizontalOffset = 16.0f * 2.0f + 48.0f + windowPadding.x;
-             ImGui::SetCursorPos(ImVec2(logoHorizontalOffset, 6.0f + titlebarVerticalOffset));
-             UI_DrawMenubar();
-
-             if (ImGui::IsItemHovered())
-                 m_TitleBarHovered = false;
-         }
-
-         ImGui::ResumeLayout();
-     }
-
-     {
-         // Centered Window title
-         ImVec2 currentCursorPos = ImGui::GetCursorPos();
-         ImVec2 textSize = ImGui::CalcTextSize("m_Specification");
-         ImGui::SetCursorPos(ImVec2(ImGui::GetWindowWidth() * 0.5f - textSize.x * 0.5f, 2.0f + windowPadding.y + 6.0f));
-         ImGui::Text("%s", "m_Specification"); // Draw title
-         ImGui::SetCursorPos(currentCursorPos);
-     }
-
-
-
-
-     // Window buttons
-     const ImU32 buttonColN = UI::Colors::ColorWithMultipliedValue(UI::Colors::Theme::text, 0.9f);
-     const ImU32 buttonColH = UI::Colors::ColorWithMultipliedValue(UI::Colors::Theme::text, 1.2f);
-     const ImU32 buttonColP = UI::Colors::Theme::textDarker;
-     const float buttonWidth = 14.0f;
-     const float buttonHeight = 14.0f;
-
-     //// Minimize Button
-
-     ImGui::Spring();
-     Walnut::UI::ShiftCursorY(8.0f);
-     {
-         const int iconWidth = m_IconMinimize->GetWidth();
-         const int iconHeight = m_IconMinimize->GetHeight();
-         const float padY = (buttonHeight - (float)iconHeight) / 2.0f;
-         if (ImGui::InvisibleButton("Minimize", ImVec2(iconWidth, iconHeight)))
-         {
-             // TODO: move this stuff to a better place, like Window class
-             if (m_window)
-             {
-                 glfwIconifyWindow(m_window);
-                 // we need to send the event so that Application knows its minimizing.
-                 //   // Application::Get().QueueEvent([windowHandle = m_Window]() { glfwIconifyWindow(windowHandle); });
-             }
-         }
-
-         Walnut::UI::DrawButtonImage(m_IconMinimize, buttonColN, buttonColH, buttonColP, Walnut::UI::RectExpanded(Walnut::UI::GetItemRect(), 0.0f, -padY));
-     }
-
-
-     //// Maximize Button
-     ImGui::Spring(-1.0f, 17.0f);
-     Walnut::UI::ShiftCursorY(8.0f);
-     {
-         const int iconWidth = m_IconMaximize->GetWidth();
-         const int iconHeight = m_IconMaximize->GetHeight();
-
-         const bool isMaximized = IsMaximized();
-
-         if (ImGui::InvisibleButton("Maximize", ImVec2(iconWidth, iconHeight)))
-         {
-
-             if (isMaximized)
-                 glfwRestoreWindow(m_window);
-             else
-                 glfwMaximizeWindow(m_window);
-
-             // TOO DN add event queue
-            /* Application::Get().QueueEvent([isMaximized, windowHandle = m_WindowHandle]()
-                 {
-                     if (isMaximized)
-                         glfwRestoreWindow(windowHandle);
-                     else
-                         glfwMaximizeWindow(windowHandle);
-                 });*/
-         }
-
-         Walnut::UI::DrawButtonImage(isMaximized ? m_IconRestore : m_IconMaximize, buttonColN, buttonColH, buttonColP);
-     }
-
-     // Close Button
-     ImGui::Spring(-1.0f, 15.0f);
-     Walnut::UI::ShiftCursorY(8.0f);
-     {
-         const int iconWidth = m_IconClose->GetWidth();
-         const int iconHeight = m_IconClose->GetHeight();
-         if (ImGui::InvisibleButton("Close", ImVec2(iconWidth, iconHeight)))
-         {
-             glfwSetWindowShouldClose(m_window, GLFW_TRUE);
-             // TODO DN send the event to the application
-            //Application::Get().Close();
-         }
-         Walnut::UI::DrawButtonImage(m_IconClose, UI::Colors::Theme::text, UI::Colors::ColorWithMultipliedValue(UI::Colors::Theme::text, 1.4f), buttonColP);
-     }
-
-     ImGui::Spring(-1.0f, 18.0f);
-     ImGui::EndHorizontal();
-
-     {
-
-         const ImU32 iconColN = UI::Colors::ColorWithMultipliedValue(UI::Colors::Theme::text, 0.9f);
-         const ImU32 iconColH = UI::Colors::ColorWithMultipliedValue(UI::Colors::Theme::text, 1.2f);
-         const ImU32 iconColP = UI::Colors::Theme::textDarker;
-         const float iconWidth = 36.f;//  // 14.0f;// 256.0f;
-         const float iconHeight = 36.f;//14.0f;// 256.0f;
-
-         // after you've computed titlebarMin/titlebarMax, w, buttonsAreaWidth etc.
-
-         const float buttonsAreaWidth = 94.0f; //titlebarMin/titlebarMax/titlebarClose
-         const float w = ImGui::GetWindowWidth() - windowPadding.y * 2.0f;
-         const float dragWidth = w - buttonsAreaWidth;
-
-         const float panelHeight = buttonHeight + buttonHeight + 90.0f;
-         ImVec2 panelPos = ImVec2(titlebarMin.x, titlebarMax.y);
-         ImVec2 panelSize = ImVec2(w, panelHeight);
-
-         //Make TitlebarToolsOverlay use this size and pos
-         ImGui::SetNextWindowPos(panelPos);
-         ImGui::SetNextWindowSize(panelSize);
-
-         // optional: keep it above other stuff
-         ImGui::SetNextWindowViewport(ImGui::GetWindowViewport()->ID);
-
-         ImGuiWindowFlags flags =
-             ImGuiWindowFlags_NoDecoration |
-             ImGuiWindowFlags_NoDocking |
-             ImGuiWindowFlags_NoMove |
-             ImGuiWindowFlags_NoSavedSettings |
-             ImGuiWindowFlags_NoScrollbar |
-             ImGuiWindowFlags_NoScrollWithMouse |
-             ImGuiWindowFlags_NoFocusOnAppearing |
-             ImGuiWindowFlags_NoNav;
-
-         ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
-         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(10, 10));
-         // if you want it to match titlebar:
-         ImGui::PushStyleColor(ImGuiCol_WindowBg, UI::Colors::Theme::titlebar);
-
-         ImGui::Begin("##TitlebarToolsOverlay", nullptr, flags);
-         if (ImGui::Button("Sketch", ImVec2(120, 36))) {}
-         ImGui::SameLine();
-
-         bool lineClicked = ImGui::InvisibleButton("Line", ImVec2(iconWidth, iconHeight));
-         if (lineClicked) {
-             if (auto doc = m_app->getSketchDocument(); doc && !doc->sketches.empty()) {
-                 if (m_activeSketchIndex < 0) m_activeSketchIndex = 0;
-                 if (m_activeSketchIndex >= (int)doc->sketches.size()) m_activeSketchIndex = (int)doc->sketches.size() - 1;
-                 adapters::sketchui::ToolContext tctx{ doc->sketches[(size_t)m_activeSketchIndex], m_cmdHistory, &m_activeConstraintIcon, &m_sketchNeedsSolve, &m_sketchChangeSerial , &m_uiPickedIds, &m_uiHoverId };
-                 m_toolManager.Activate(adapters::sketchui::ToolKind::Line2Pt, tctx);
-             }
-         }
-
-         if (ImGui::IsItemHovered())
-         {
-
-             ImVec2 min = ImGui::GetItemRectMin();
-             ImVec2 max = ImGui::GetItemRectMax();
-             ImVec2 size = ImGui::GetItemRectSize();
-             ImVec2 center = { max.x,(min.y + max.y) + iconHeight };
-             ImGui::SetNextWindowBgAlpha(0.95f);
-             //ImVec2 pos = ImGui::GetMousePos();
-             //center.y = center.y +(iconHeight*3);
-             ImGui::SetNextWindowPos(center, ImGuiCond_Always, ImVec2(0.0f, 1.0f));
-             ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 1.0f);
-             ImGui::Begin("##LineTooltip",
-                 nullptr,
-                 ImGuiWindowFlags_NoDecoration |
-                 ImGuiWindowFlags_NoInputs |
-                 ImGuiWindowFlags_AlwaysAutoResize |
-                 ImGuiWindowFlags_NoSavedSettings |
-                 ImGuiWindowFlags_NoFocusOnAppearing
-             );
-             ImGui::PushFont(m_smallFont);
-             ImGui::TextUnformatted("Two point line");
-             ImGui::Separator();
-             ImGui::TextUnformatted("First click at Start point followed by clicking End point");
-             ImGui::TextDisabled("Shortcut: L");
-             ImGui::PopFont();
-             ImGui::End();
-             ImGui::PopStyleVar();
-         }
-         Walnut::UI::DrawButtonImage(m_ToolBarLineIcon, UI::Colors::Theme::text, UI::Colors::ColorWithMultipliedValue(UI::Colors::Theme::text, 1.4f), iconColP);
-
-         ImGui::SameLine();
-         ImGui::InvisibleButton("Rectangle", ImVec2(iconWidth, iconHeight));
-         Walnut::UI::DrawButtonImage(m_ToolBarRectIcon, UI::Colors::Theme::text, UI::Colors::ColorWithMultipliedValue(UI::Colors::Theme::text, 1.4f), iconColP);
-
-         ImGui::SameLine();
-         bool circleClicked = ImGui::InvisibleButton("Circle", ImVec2(iconWidth, iconHeight));
-          if (circleClicked) {
-              if (auto doc = m_app->getSketchDocument(); doc && !doc->sketches.empty()) {
-                  if (m_activeSketchIndex < 0) m_activeSketchIndex = 0;
-                  if (m_activeSketchIndex >= (int)doc->sketches.size()) m_activeSketchIndex = (int)doc->sketches.size() - 1;
-                  adapters::sketchui::ToolContext tctx{ doc->sketches[(size_t)m_activeSketchIndex], m_cmdHistory, &m_activeConstraintIcon, &m_sketchNeedsSolve, &m_sketchChangeSerial , &m_uiPickedIds, &m_uiHoverId };
-                  m_toolManager.Activate(adapters::sketchui::ToolKind::CircleCenterRadius, tctx);
-              }
-          }
-         Walnut::UI::DrawButtonImage(m_ToolBarCircleIcon, UI::Colors::Theme::text, UI::Colors::ColorWithMultipliedValue(UI::Colors::Theme::text, 1.4f), iconColP);
-         ImGui::SameLine();
-         ImGui::InvisibleButton("Arc", ImVec2(iconWidth, iconHeight));
-         Walnut::UI::DrawButtonImage(m_ToolBarArcIcon, UI::Colors::Theme::text, UI::Colors::ColorWithMultipliedValue(UI::Colors::Theme::text, 1.4f), iconColP);
-         ImGui::SameLine();
-
-         if (ImGui::Button("Square", ImVec2(120, 36))) {}
-         ImGui::SameLine();
-         if (ImGui::Button("Dimension", ImVec2(120, 36))) {}
-         ImGui::SameLine();
-        
-         static int variant = 0;
-         const char* opts[] = { "Horizontial", "Vertical", "Coincident","Distance","Length","Raduis","Angle","Tangent","Fixed","Parallel"};
-
-         RibbonButtonIconTextWithDropDown(
-             "##LineTool",
-             nullptr,
-             ImVec2(32, 32),
-             "Constraints",
-             opts,
-             IM_ARRAYSIZE(opts),
-             &variant,
-             ImVec2(120, 36),
-             16.0f
-         );
-
-         const float buttonWidth = 120.0f;
-         const float buttonHeight = 36.0f;
-
-         ImVec2 pos;
-         pos.y = ImGui::GetCursorScreenPos().y;
-
-
-
-         // Center horizontally
-         pos.x = (ImGui::GetWindowWidth() - buttonWidth) * 0.5f;
-         if (TrapeziumButtonTrueHit("Home", pos, ImVec2(120, 36), 18.0f, false)) { /* tool = dimension */ }
-
-         int count = 5;
-         float totalWidth = count * buttonWidth;
-         float startX = (ImGui::GetWindowWidth() - totalWidth) * 0.5f + 18;
-         pos.y = ImGui::GetCursorScreenPos().y; // Cursor changed as we have aded a button
-         pos.x = startX;
-
-         if (TrapeziumButtonTrueHit("Reset", pos, ImVec2(120, 36), 18.0f, false)) {
-             // reset view
-             m_sketchPan = ImVec2(0, 0);
-             m_sketchZoom = 40.0f;
-         }
-         pos.x += buttonWidth;
-         if (ParallelogramButtonTrueHit("Move", pos, ImVec2(120, 36), -18.0f)) { /* tool = line */ }
-         pos.x += buttonWidth - 18;
-         //ImGui::SameLine(120,0);
-         if (TrapeziumButtonTrueHit("Scale", pos, ImVec2(120, 36), 18.0f, true)) { /* tool = dimension */ }
-         pos.x += buttonWidth - 18;
-         //ImGui::SameLine(120,0);
-         if (ParallelogramButtonTrueHit("Undo", pos, ImVec2(120, 36), 18.0f)) {
-             m_cmdHistory.Undo();
-         }
-         pos.x += buttonWidth;;
-         if (TrapeziumButtonTrueHit("Redo", pos, ImVec2(120, 36), 18.0f, false)) {
-             m_cmdHistory.Redo();
-         }
-
-         ImGui::End();
-
-         ImGui::PopStyleColor();
-         ImGui::PopStyleVar(2);
-
-         outTitlebarHeight = titlebarHeight + panelHeight;
-     }
- }
- 
- void ImGuiAdapter::UI_DrawMenubar()
- {
-     if (!this->m_MenubarCallback)
-         return;
-
-         const ImRect menuBarRect = { ImGui::GetCursorPos(), { ImGui::GetContentRegionAvail().x + ImGui::GetCursorScreenPos().x, ImGui::GetFrameHeightWithSpacing() } };
-
-         ImGui::BeginGroup();
-         if (Walnut::UI::BeginMenubar(menuBarRect))
-         {
-             m_MenubarCallback();
-         }
-
-         Walnut::UI::EndMenubar();
-         ImGui::EndGroup();
- }
 
 } // namespace adapters
+
+// -----------------------------------------------------------------------------
+// Build integration helper
+// -----------------------------------------------------------------------------
+// Some Visual Studio project configurations do not automatically include newly
+// added .cpp files in the pistachio_ui target. If GlSketch3DViewRenderer.cpp is
+// not part of that target, you'll see linker errors for GlSketch3DViewRenderer
+// symbols. Including the implementation here ensures the Sketch3D renderer is
+// compiled into the UI plugin without requiring build-file changes.
+
+#include "../rendering/GlSketch3DViewRenderer.cpp"
+#include "../rendering/FramebufferManager.cpp"

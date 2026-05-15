@@ -1,5 +1,7 @@
 #include "adapters/rendering/OpenGlRenderer.h"
 
+#include <iostream>
+
 #include <glm/gtc/matrix_transform.hpp>
 
 #include <stdexcept>
@@ -118,7 +120,7 @@ namespace adapters {
         return ports::RendererBackend::OpenGL;
     }
 
-    void OpenGlRenderer::render() {
+    void OpenGlRenderer::render(GLFWwindow* /*window*/) {
         if (!m_initialized || m_fbo == 0) return;
 
         glBindFramebuffer(GL_FRAMEBUFFER, m_fbo);
@@ -130,6 +132,7 @@ namespace adapters {
 
         // Basic grid + scene
         drawWorkplaneGrid();
+        drawDemoSolid();
         drawScenePrimitives();
 
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
@@ -246,14 +249,186 @@ namespace adapters {
             glDeleteProgram(m_program);
             m_program = 0;
         }
+        if (m_solidProgram) {
+            glDeleteProgram(m_solidProgram);
+            m_solidProgram = 0;
+        }
         if (m_vbo) {
             glDeleteBuffers(1, &m_vbo);
             m_vbo = 0;
+        }
+        if (m_solidVbo) {
+            glDeleteBuffers(1, &m_solidVbo);
+            m_solidVbo = 0;
+        }
+        if (m_solidEbo) {
+            glDeleteBuffers(1, &m_solidEbo);
+            m_solidEbo = 0;
+        }
+        if (m_solidVbo) {
+            glDeleteBuffers(1, &m_solidVbo);
+            m_solidVbo = 0;
+        }
+        if (m_solidVao) {
+            glDeleteVertexArrays(1, &m_solidVao);
+            m_solidVao = 0;
         }
         if (m_vao) {
             glDeleteVertexArrays(1, &m_vao);
             m_vao = 0;
         }
+        if (m_solidVao) {
+            glDeleteVertexArrays(1, &m_solidVao);
+            m_solidVao = 0;
+        }
+    }
+
+    void OpenGlRenderer::ensureSolidProgram()
+    {
+        if (m_solidProgram)
+            return;
+
+        const char* vsSrc = R"GLSL(
+            #version 330 core
+            layout(location=0) in vec3 aPos;
+            layout(location=1) in vec3 aNormal;
+            uniform mat4 uModel;
+            uniform mat4 uView;
+            uniform mat4 uProj;
+            out vec3 vNormal;
+            out vec3 vWorldPos;
+            void main() {
+                vec4 world = uModel * vec4(aPos, 1.0);
+                vWorldPos = world.xyz;
+                vNormal = mat3(transpose(inverse(uModel))) * aNormal;
+                gl_Position = uProj * uView * world;
+            }
+        )GLSL";
+
+        const char* fsSrc = R"GLSL(
+            #version 330 core
+            in vec3 vNormal;
+            in vec3 vWorldPos;
+            out vec4 FragColor;
+            uniform vec3 uViewPos;
+            void main() {
+                vec3 N = normalize(vNormal);
+                vec3 L = normalize(vec3(0.6, 1.0, 0.8));
+                vec3 V = normalize(uViewPos - vWorldPos);
+                vec3 H = normalize(L + V);
+                float diff = max(dot(N, L), 0.0);
+                float spec = pow(max(dot(N, H), 0.0), 64.0);
+                vec3 base = vec3(0.70, 0.72, 0.76);
+                vec3 color = base * (0.25 + 0.75 * diff) + vec3(1.0) * (0.15 * spec);
+                FragColor = vec4(color, 1.0);
+            }
+        )GLSL";
+
+        auto compile = [](GLenum type, const char* src) -> GLuint {
+            GLuint sh = glCreateShader(type);
+            glShaderSource(sh, 1, &src, nullptr);
+            glCompileShader(sh);
+            GLint ok = 0;
+            glGetShaderiv(sh, GL_COMPILE_STATUS, &ok);
+            if (!ok) {
+                char log[2048];
+                glGetShaderInfoLog(sh, (GLsizei)sizeof(log), nullptr, log);
+                std::cerr << "[OpenGlRenderer][Solid] shader compile failed: " << log << std::endl;
+            }
+            return sh;
+        };
+
+        GLuint vs = compile(GL_VERTEX_SHADER, vsSrc);
+        GLuint fs = compile(GL_FRAGMENT_SHADER, fsSrc);
+
+        m_solidProgram = glCreateProgram();
+        glAttachShader(m_solidProgram, vs);
+        glAttachShader(m_solidProgram, fs);
+        glLinkProgram(m_solidProgram);
+
+        GLint linked = 0;
+        glGetProgramiv(m_solidProgram, GL_LINK_STATUS, &linked);
+        if (!linked) {
+            char log[2048];
+            glGetProgramInfoLog(m_solidProgram, (GLsizei)sizeof(log), nullptr, log);
+            std::cerr << "[OpenGlRenderer][Solid] program link failed: " << log << std::endl;
+        }
+
+        glDeleteShader(vs);
+        glDeleteShader(fs);
+    }
+
+    void OpenGlRenderer::ensureSolidMesh()
+    {
+        if (m_solidVao)
+            return;
+
+        // A unit cube centered at origin, with per-face normals
+        struct V { float px, py, pz; float nx, ny, nz; };
+        static const V verts[] = {
+            // +Z
+            {-0.5f,-0.5f, 0.5f, 0,0,1}, { 0.5f,-0.5f, 0.5f, 0,0,1}, { 0.5f, 0.5f, 0.5f, 0,0,1}, {-0.5f, 0.5f, 0.5f, 0,0,1},
+            // -Z
+            { 0.5f,-0.5f,-0.5f, 0,0,-1}, {-0.5f,-0.5f,-0.5f, 0,0,-1}, {-0.5f, 0.5f,-0.5f, 0,0,-1}, { 0.5f, 0.5f,-0.5f, 0,0,-1},
+            // +X
+            { 0.5f,-0.5f, 0.5f, 1,0,0}, { 0.5f,-0.5f,-0.5f, 1,0,0}, { 0.5f, 0.5f,-0.5f, 1,0,0}, { 0.5f, 0.5f, 0.5f, 1,0,0},
+            // -X
+            {-0.5f,-0.5f,-0.5f,-1,0,0}, {-0.5f,-0.5f, 0.5f,-1,0,0}, {-0.5f, 0.5f, 0.5f,-1,0,0}, {-0.5f, 0.5f,-0.5f,-1,0,0},
+            // +Y
+            {-0.5f, 0.5f, 0.5f, 0,1,0}, { 0.5f, 0.5f, 0.5f, 0,1,0}, { 0.5f, 0.5f,-0.5f, 0,1,0}, {-0.5f, 0.5f,-0.5f, 0,1,0},
+            // -Y
+            {-0.5f,-0.5f,-0.5f, 0,-1,0}, { 0.5f,-0.5f,-0.5f, 0,-1,0}, { 0.5f,-0.5f, 0.5f, 0,-1,0}, {-0.5f,-0.5f, 0.5f, 0,-1,0},
+        };
+        static const uint16_t idx[] = {
+            0,1,2, 2,3,0,
+            4,5,6, 6,7,4,
+            8,9,10, 10,11,8,
+            12,13,14, 14,15,12,
+            16,17,18, 18,19,16,
+            20,21,22, 22,23,20,
+        };
+
+        glGenVertexArrays(1, &m_solidVao);
+        glBindVertexArray(m_solidVao);
+
+        glGenBuffers(1, &m_solidVbo);
+        glBindBuffer(GL_ARRAY_BUFFER, m_solidVbo);
+        glBufferData(GL_ARRAY_BUFFER, sizeof(verts), verts, GL_STATIC_DRAW);
+
+        glGenBuffers(1, &m_solidEbo);
+        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, m_solidEbo);
+        glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(idx), idx, GL_STATIC_DRAW);
+
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(V), (void*)offsetof(V, px));
+        glEnableVertexAttribArray(1);
+        glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sizeof(V), (void*)offsetof(V, nx));
+
+        glBindVertexArray(0);
+    }
+
+    void OpenGlRenderer::drawDemoSolid()
+    {
+        ensureSolidProgram();
+        ensureSolidMesh();
+
+        // Spin slowly so it's obvious we're rendering a real solid.
+        m_demoAngle += 0.01f;
+
+        glUseProgram(m_solidProgram);
+
+        const glm::mat4 view = makeView(m_camera);
+        const glm::mat4 proj = makeProj(m_camera, (float)m_width / (float)m_height);
+        const glm::mat4 model = glm::rotate(glm::mat4(1.0f), m_demoAngle, glm::normalize(glm::vec3(0.3f, 1.0f, 0.2f)));
+
+        glUniformMatrix4fv(glGetUniformLocation(m_solidProgram, "uModel"), 1, GL_FALSE, &model[0][0]);
+        glUniformMatrix4fv(glGetUniformLocation(m_solidProgram, "uView"), 1, GL_FALSE, &view[0][0]);
+        glUniformMatrix4fv(glGetUniformLocation(m_solidProgram, "uProj"), 1, GL_FALSE, &proj[0][0]);
+        glUniform3f(glGetUniformLocation(m_solidProgram, "uViewPos"), m_camera.position.x, m_camera.position.y, m_camera.position.z);
+
+        glBindVertexArray(m_solidVao);
+        glDrawElements(GL_TRIANGLES, 36, GL_UNSIGNED_SHORT, 0);
+        glBindVertexArray(0);
     }
 
     void OpenGlRenderer::ensureProgram() {

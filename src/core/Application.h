@@ -10,6 +10,10 @@
 #include "ports/IExporterPort.h"
 #include "ports/IRendererPort.h"
 #include "ports/ISketchResolverPort.h"
+#include "ports/IConfigPort.h"
+
+// Host-owned config store
+#include "core/ConfigStore.h"
 #include "domain/Model.h"
 #include "domain/SketchModel.h"
 
@@ -36,11 +40,19 @@ namespace core {
         void shutdown();
 
         void setupToolbarMenus();
+        void setRibbonbarCallback(const std::function<void()>& ribbonbarCallback);
         bool loadFile(const std::string& filepath);
         bool loadFileAsync(const std::string& filepath);
         bool exportFile(const std::string& filepath, const std::string& format);
         std::shared_ptr<domain::Model> getCurrentModel() const;
         ports::IRendererPort* getRenderer() const;
+
+        // Host-owned configuration registry (persists across UI hot-reloads)
+        ports::IConfigPort* getConfig() { return &m_config; }
+        const ports::IConfigPort* getConfig() const { return &m_config; }
+
+        // Optional helper for plugins: persist configuration immediately.
+        void saveConfigNow();
 
         std::string getStatus() const;
         bool isLoading() const;
@@ -53,6 +65,9 @@ namespace core {
         std::vector<std::unique_ptr<ports::IExporterPort>> m_exporters;
         std::shared_ptr<domain::Model> m_currentModel;
         std::unique_ptr<ports::ISketchResolverPort> m_resolverAdapter;
+
+        core::ConfigStore m_config;
+        std::string m_configPath = "pistachio.config.json";
 
         std::string m_statusMessage;
         std::atomic<bool> m_isLoading;
@@ -68,6 +83,10 @@ namespace core {
 
     public:
         bool loadSketchDocument(const std::string& filepath);
+        bool saveSketchDocument(const std::string& filepath);
+        // Creates an in-memory document with a single sketch and a few entities.
+        // Useful when no file is present so the 2D sketch UI always has something to show.
+        void createDefaultSketchDocument();
         bool runSolver();
         std::shared_ptr<domain::sketch::Document> getSketchDocument() const;
 

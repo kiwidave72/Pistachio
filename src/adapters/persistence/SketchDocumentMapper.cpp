@@ -46,6 +46,7 @@ namespace adapters::persistence {
             sd.id = s.id;
             sd.name = s.name;
             sd.visible = s.visible;
+            sd.plane = static_cast<int>(s.plane);  // Serialize plane as int
 
             // Entities - flatten typed vectors into a single list.
             for (const auto& p : s.entities.points()) {
@@ -168,6 +169,11 @@ namespace adapters::persistence {
             sk.id = s.id;
             sk.name = s.name;
             sk.visible = s.visible;
+            
+            // Deserialize plane with validation (clamp to valid range)
+            int planeInt = s.plane;
+            if (planeInt < 0 || planeInt > 2) planeInt = 0;  // Default to XY if invalid
+            sk.plane = static_cast<SketchPlane>(planeInt);
 
             // Entities
             for (const auto& ent : s.entities) {

@@ -5,7 +5,8 @@
 #include <cstdint>
 
 // Use ImGui's OpenGL loader so we don't add a second GL loader to the build.
-#include <imgui_impl_opengl3_loader.h>
+// Use glad as the OpenGL loader. (See CMake: IMGUI_IMPL_OPENGL_LOADER_GLAD)
+#include <glad/glad.h>
 
 namespace adapters {
 
@@ -22,7 +23,7 @@ namespace adapters {
 
         bool initialize() override;
         void shutdown() override;
-        void render() override;
+        void render(GLFWwindow* window) override;
 
         void setModel(std::shared_ptr<domain::Model> model) override;
         void fitAll() override;
@@ -65,8 +66,19 @@ namespace adapters {
         void ensureProgram();
         void drawWorkplaneGrid();
         void drawScenePrimitives();
+        void drawDemoSolid();
+
+        void ensureSolidProgram();
+        void ensureSolidMesh();
         static glm::mat4 makeView(const ports::CameraState& c);
         static glm::mat4 makeProj(const ports::CameraState& c, float aspect);
+
+        // Shaded solid demo resources (until we have CAD mesh extraction)
+        GLuint m_solidProgram = 0;
+        GLuint m_solidVao = 0;
+        GLuint m_solidVbo = 0;
+        GLuint m_solidEbo = 0;
+        float m_demoAngle = 0.0f;
     };
 
 } // namespace adapters

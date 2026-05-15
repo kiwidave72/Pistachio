@@ -1,0 +1,20 @@
+{
+  "pistachio.Render": {
+    "msaa.samples": 4
+  },
+  "pistachio.Sketch": {
+    "grid.spacing": 10.0,
+    "snap.enabled": true
+  },
+  "pistachio.UI": {
+    "config.showAdvanced": true,
+    "config.windowOpen": true,
+    "theme": "Pistachio",
+    "views.fileOperations": false,
+    "views.modelInfo": false,
+    "views.sketch3dViewport": false,
+    "views.sketchEditor": false,
+    "views.status": false,
+    "views.viewport3d": false
+  }
+}

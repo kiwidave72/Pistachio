@@ -181,7 +181,7 @@ namespace adapters::persistence::dto {
 
     // --- Sketch/Document/File ---
     void to_json(json& j, const SketchDto& s) {
-        j = json{ {"id", s.id}, {"name", s.name}, {"visible", s.visible} };
+        j = json{ {"id", s.id}, {"name", s.name}, {"visible", s.visible}, {"plane", s.plane} };
         j["entities"] = json::array();
         for (const auto& e : s.entities) j["entities"].push_back(entityToJson(e));
         j["constraints"] = json::array();
@@ -191,6 +191,7 @@ namespace adapters::persistence::dto {
         s.id = require<domain::sketch::SketchId>(j, "id");
         s.name = j.value("name", "");
         s.visible = j.value("visible", true);
+        s.plane = j.value("plane", 0);  // Default to 0 (XY) if not present
 
         s.entities.clear();
         for (const auto& je : j.value("entities", json::array())) {

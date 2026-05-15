@@ -1,0 +1,180 @@
+{
+  "document": {
+    "id": 1,
+    "name": "Updated with resolver",
+    "sketches": [
+      {
+        "plane" : 1,
+        "constraints": [
+          {
+            "data": {
+              "meta": {
+                "enabled": true,
+                "id": 2000,
+                "name": "Horizontal L1",
+                "suppressed": false
+              },
+              "refs": [
+                {
+                  "anchor": 5,
+                  "id": 1002
+                }
+              ],
+              "type": 0
+            },
+            "kind": "Geometric"
+          },
+          {
+            "data": {
+              "meta": {
+                "enabled": true,
+                "id": 2001,
+                "name": "Line start → Point 1000",
+                "suppressed": false
+              },
+              "refs": [
+                {
+                  "anchor": 2,
+                  "id": 1002
+                },
+                {
+                  "anchor": 1,
+                  "id": 1000
+                }
+              ],
+              "type": 2
+            },
+            "kind": "Geometric"
+          },
+          {
+            "data": {
+              "meta": {
+                "enabled": true,
+                "id": 2002,
+                "name": "Line end → Point 1001",
+                "suppressed": false
+              },
+              "refs": [
+                {
+                  "anchor": 3,
+                  "id": 1002
+                },
+                {
+                  "anchor": 1,
+                  "id": 1001
+                }
+              ],
+              "type": 2
+            },
+            "kind": "Geometric"
+          }
+        ],
+        "entities": [
+          {
+            "data": {
+              "id": 1000,
+              "p": {
+                "x": 0.0,
+                "y": 50.0
+              }
+            },
+            "kind": "Point"
+          },
+          {
+            "data": {
+              "id": 1001,
+              "p": {
+                "x": 100.0,
+                "y": 50.0
+              }
+            },
+            "kind": "Point"
+          },
+          {
+            "data": {
+              "a": {
+                "x": 0.0,
+                "y": 50.0
+              },
+              "b": {
+                "x": 100.0,
+                "y": 50.0
+              },
+              "id": 1002
+            },
+            "kind": "Line"
+          },
+          {
+            "data": {
+              "a": {
+                "x": 14.634753227233887,
+                "y": 70.73746490478516
+              },
+              "b": {
+                "x": 71.03514099121094,
+                "y": 85.73756408691406
+              },
+              "id": 1004,
+              "name": "Line"
+            },
+            "kind": "Line"
+          },
+          {
+            "data": {
+              "a": {
+                "x": -17.00104522705078,
+                "y": 4.64192533493042
+              },
+              "b": {
+                "x": 0.04782867431640625,
+                "y": 4.837889671325684
+              },
+              "id": 1006,
+              "name": "Line"
+            },
+            "kind": "Line"
+          },
+          {
+            "data": {
+              "center": {
+                "x": 60.0,
+                "y": 20.0
+              },
+              "id": 1003,
+              "radius": 20.0
+            },
+            "kind": "Circle"
+          },
+          {
+            "data": {
+              "center": {
+                "x": 26.599761962890625,
+                "y": 97.17503356933594
+              },
+              "id": 1005,
+              "name": "Circle",
+              "radius": 19.375
+            },
+            "kind": "Circle"
+          },
+          {
+            "data": {
+              "center": {
+                "x": -1.936208963394165,
+                "y": 10.055402755737305
+              },
+              "id": 1007,
+              "name": "Circle",
+              "radius": 3.701
+            },
+            "kind": "Circle"
+          }
+        ],
+        "id": 100,
+        "name": "Updated with resolver",
+        "visible": true
+      }
+    ]
+  },
+  "fileVersion": 1
+}

@@ -122,6 +122,7 @@ namespace adapters::persistence::dto {
         domain::sketch::SketchId id{};
         std::string name;
         bool visible{ true };
+        int plane{ 0 };  // 0=XY, 1=YZ, 2=XZ (default to XY)
 
         std::vector<EntityDto> entities;
         std::vector<ConstraintDto> constraints;

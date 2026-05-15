@@ -4,10 +4,29 @@ project(Pistachio VERSION 1.0.0 LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# Set output directories
-set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin/${CMAKE_BUILD_TYPE})
-set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib/${CMAKE_BUILD_TYPE})
-set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib/${CMAKE_BUILD_TYPE})
+# -------------------------
+# Output directories (multi-config safe)
+# -------------------------
+foreach(cfg Debug Release RelWithDebInfo MinSizeRel)
+    string(TOUPPER "${cfg}" CFGU)
+    set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_${CFGU} ${CMAKE_BINARY_DIR}/bin/${cfg})
+    set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY_${CFGU} ${CMAKE_BINARY_DIR}/lib/${cfg})
+    set(CMAKE_LIBRARY_OUTPUT_DIRECTORY_${CFGU} ${CMAKE_BINARY_DIR}/lib/${cfg})
+endforeach()
+
+if(NOT CMAKE_CONFIGURATION_TYPES)
+    set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
+    set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
+    set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
+endif()
+
+# -------------------------
+# Windows: export symbols from SHARED libs automatically (fast-path for plugins)
+# Later you can replace this with explicit __declspec(dllexport/dllimport) macros.
+# -------------------------
+if(WIN32)
+    set(CMAKE_WINDOWS_EXPORT_ALL_SYMBOLS ON)
+endif()
 
 # -------------------------
 # OpenCASCADE Configuration
@@ -18,11 +37,12 @@ else()
     set(OpenCASCADE_DIR "C:/opencascade-7.9.3/opencascade-7.9.3-vc14-64" CACHE PATH "OpenCASCADE installation directory")
 endif()
 
-# Find OpenCASCADE directories
 if(EXISTS "${OpenCASCADE_DIR}/inc")
     set(OpenCASCADE_INCLUDE_DIR "${OpenCASCADE_DIR}/inc")
 elseif(EXISTS "${OpenCASCADE_DIR}/include/opencascade")
     set(OpenCASCADE_INCLUDE_DIR "${OpenCASCADE_DIR}/include/opencascade")
+else()
+    message(FATAL_ERROR "Could not find OpenCASCADE include dir under: ${OpenCASCADE_DIR}")
 endif()
 
 if(EXISTS "${OpenCASCADE_DIR}/win64/vc14/lib")
@@ -31,21 +51,67 @@ if(EXISTS "${OpenCASCADE_DIR}/win64/vc14/lib")
 elseif(EXISTS "${OpenCASCADE_DIR}/lib")
     set(OpenCASCADE_LIBRARY_DIR "${OpenCASCADE_DIR}/lib")
     set(OpenCASCADE_BINARY_DIR "${OpenCASCADE_DIR}/bin")
+else()
+    message(FATAL_ERROR "Could not find OpenCASCADE lib dir under: ${OpenCASCADE_DIR}")
 endif()
-
-# 3rd party directory (OCC DLL search)
-set(OpenCASCADE_3RDPARTY_ROOT "C:/opencascade-7.9.3/3rdparty-vc14-64")
 
 message(STATUS "OpenCASCADE root: ${OpenCASCADE_DIR}")
 message(STATUS "OpenCASCADE includes: ${OpenCASCADE_INCLUDE_DIR}")
 message(STATUS "OpenCASCADE libraries: ${OpenCASCADE_LIBRARY_DIR}")
 message(STATUS "OpenCASCADE binaries: ${OpenCASCADE_BINARY_DIR}")
-message(STATUS "OpenCASCADE 3rd party: ${OpenCASCADE_3RDPARTY_ROOT}")
 
 # -------------------------
 # Packages
 # -------------------------
 find_package(OpenGL REQUIRED)
+
+
+## GLAD (OpenGL loader)
+# We keep OpenGL 3.x symbols/defines available on Windows by using GLAD.
+# Expected layout (generated GLAD files):
+#   external/glad/include/glad/glad.h
+#   external/glad/include/KHR/khrplatform.h
+#   external/glad/src/glad.c
+set(GLAD_DIR ${CMAKE_SOURCE_DIR}/external/glad)
+if (EXISTS ${GLAD_DIR}/include/glad/glad.h AND EXISTS ${GLAD_DIR}/src/glad.c)
+    add_library(glad STATIC ${GLAD_DIR}/src/glad.c)
+    target_include_directories(glad PUBLIC ${GLAD_DIR}/include)
+    target_compile_definitions(glad PUBLIC GLFW_INCLUDE_NONE)
+else()
+    message(FATAL_ERROR
+        "GLAD not found or not generated.
+"
+        "Expected:
+"
+        "  external/glad/include/glad/glad.h
+"
+        "  external/glad/src/glad.c
+"
+        "Add GLAD as a submodule (or folder) under external/glad and generate GLAD files for OpenGL 3.3 core.
+")
+endif()
+
+# -------------------------
+# Walnut (Image helper)
+# -------------------------
+# ImGuiHost uses Walnut::Image (Decode + ctor/dtor). Build it as a tiny static
+# library and link it into the host EXE (and plugin, if desired).
+set(WALNUT_IMAGE_CPP "${CMAKE_CURRENT_SOURCE_DIR}/Walnut/Image.cpp")
+set(WALNUT_IMAGE_H   "${CMAKE_CURRENT_SOURCE_DIR}/Walnut/Image.h")
+if(NOT EXISTS "${WALNUT_IMAGE_CPP}")
+    # Fallback if Walnut is vendored under src/
+    set(WALNUT_IMAGE_CPP "${CMAKE_CURRENT_SOURCE_DIR}/src/Walnut/Image.cpp")
+    set(WALNUT_IMAGE_H   "${CMAKE_CURRENT_SOURCE_DIR}/src/Walnut/Image.h")
+endif()
+
+add_library(walnut STATIC ${WALNUT_IMAGE_CPP} ${WALNUT_IMAGE_H})
+target_include_directories(walnut PUBLIC
+    "${CMAKE_CURRENT_SOURCE_DIR}"
+    "${CMAKE_CURRENT_SOURCE_DIR}/Walnut"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src"
+    "${CMAKE_CURRENT_SOURCE_DIR}/external/stb"
+)
+target_link_libraries(walnut PUBLIC glad OpenGL::GL)
 
 # -------------------------
 # External deps: GLFW + ImGui + GLM + STB + nlohmann-json
@@ -57,7 +123,6 @@ set(GLM_DIR      "${EXTERNAL_DIR}/glm")
 set(STB_DIR      "${EXTERNAL_DIR}/stb")
 set(NLOHMANN_JSON_DIR "${EXTERNAL_DIR}/nlohmann_json")
 
-# Your custom ImGui extension folder
 set(IMGUI_CUSTOM_DIR "${CMAKE_CURRENT_SOURCE_DIR}/ImGui")
 
 # ---- GLFW from submodule ----
@@ -69,23 +134,32 @@ target_include_directories(nlohmann_json INTERFACE
     "${NLOHMANN_JSON_DIR}/single_include"
 )
 
-# ---- ImGui from submodule ----
-add_library(imgui STATIC
-    # Core ImGui
+# ---- ImGui (SHARED) ----
+# IMPORTANT: Host + plugin must share a single ImGui context (GImGui),
+# so ImGui must NOT be statically linked into both.
+add_library(imgui SHARED
     "${IMGUI_DIR}/imgui.cpp"
     "${IMGUI_DIR}/imgui_draw.cpp"
     "${IMGUI_DIR}/imgui_tables.cpp"
     "${IMGUI_DIR}/imgui_widgets.cpp"
     "${IMGUI_DIR}/imgui_demo.cpp"
 
-    # Backends
     "${IMGUI_DIR}/backends/imgui_impl_glfw.cpp"
     "${IMGUI_DIR}/backends/imgui_impl_opengl3.cpp"
 
-    # Custom ImGui additions
-    "${IMGUI_CUSTOM_DIR}/ImGuiBuild.cpp"
+    # IMPORTANT:
+    # Your repo also has ImGui/ImGuiBuild.cpp, which is a "unity build" TU that
+    # *also* compiles ImGui + backends by including their .cpp files. If we compile
+    # both the real .cpp files AND ImGuiBuild.cpp you get LNK2005 multiply-defined
+    # symbols (exactly what you're seeing).
+    #
+    # Therefore: do NOT compile ImGuiBuild.cpp here.
     "${IMGUI_CUSTOM_DIR}/ImGuiTheme.cpp"
     "${IMGUI_CUSTOM_DIR}/Image.cpp"
+
+
+    # stb_image implementation TU (required for stbi_* exports)
+    "${IMGUI_CUSTOM_DIR}/StbImageImpl.cpp"
 )
 
 target_include_directories(imgui PUBLIC
@@ -96,7 +170,27 @@ target_include_directories(imgui PUBLIC
     "${STB_DIR}"
 )
 
-target_link_libraries(imgui PUBLIC OpenGL::GL glfw)
+target_include_directories(imgui PUBLIC ${GLAD_DIR}/include)
+target_link_libraries(imgui PUBLIC OpenGL::GL glfw glad)
+
+# IMPORTANT (Windows / hot-reload):
+# Host EXE and UI plugin DLL must share a single ImGui context (GImGui).
+# Therefore we build ImGui as a DLL and export/import its API properly.
+#
+# Do NOT pass raw "IMGUI_API=__declspec(...)" on the compiler command line.
+# MSBuild can mangle those parens and you can end up with weird system-header
+# compile errors. Instead, use ImGui's supported IMGUI_USER_CONFIG hook.
+#
+# We define IMGUI_USER_CONFIG to point at our own config header (in ./ImGui)
+# and set IMGUI_BUILD_DLL on the imgui target to enable __declspec(dllexport).
+if(WIN32)
+    target_compile_definitions(imgui PUBLIC IMGUI_USER_CONFIG=\"imconfig_pistachio.h\"
+        IMGUI_DLL
+     IMGUI_IMPL_OPENGL_LOADER_GLAD)
+    target_compile_definitions(imgui PRIVATE
+        IMGUI_BUILD_DLL
+    )
+endif()
 
 # -------------------------
 # Include OpenCASCADE
@@ -104,105 +198,55 @@ target_link_libraries(imgui PUBLIC OpenGL::GL glfw)
 include_directories(${OpenCASCADE_INCLUDE_DIR})
 
 # -------------------------
-# Source files
+# pistachio_core (SHARED)
 # -------------------------
-set(DOMAIN_SOURCES
+file(GLOB_RECURSE SOLVER_SOURCES
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/adapters/solver/*.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/adapters/solvers/*.cpp"
+)
+
+add_library(pistachio_core SHARED
+    # Domain
     src/domain/Model.cpp
     src/domain/Geometry.cpp
-
-    # ---- Sketch domain (NEW) ----
     src/domain/SketchEntities.cpp
     src/domain/SketchConstraints.cpp
-)
 
-set(CORE_SOURCES
+    # Core
     src/core/Application.cpp
-
-    # ---- Rendering (NEW) ----
+    src/core/ConfigStore.cpp
     src/core/rendering/SketchRenderBuilder.cpp
-)
 
-set(ADAPTER_SOURCES
-    src/adapters/ui/ImGuiAdapter.cpp
-    src/adapters/ui/UI.cpp
+    # Adapters
+    src/adapters/rendering/OcctRenderer.cpp
     src/adapters/loaders/StepFileLoader.cpp
     src/adapters/exporters/ObjExporter.cpp
     src/adapters/exporters/StlExporter.cpp
-    src/adapters/rendering/OcctRenderer.cpp
 
-    # ---- Persistence (NEW) ----
+    # Persistence
     src/adapters/persistence/SketchDocumentMapper.cpp
     src/adapters/persistence/SketchDocumentJson.cpp
     src/adapters/persistence/JsonSketchDocumentAdapter.cpp
+
+    ${SOLVER_SOURCES}
 )
 
-set(HEADER_FILES
-    src/domain/Model.h
-    src/domain/Geometry.h
-
-    # ---- Sketch domain (NEW) ----
-    src/domain/SketchIds.h
-    src/domain/SketchMath.h
-    src/domain/SketchEntities.h
-    src/domain/SketchConstraints.h
-    src/domain/SketchModel.h
-
-    # ---- Rendering DTOs (NEW) ----
-    src/core/rendering/RenderScene.h
-    src/core/rendering/CameraState.h
-    src/core/rendering/SketchRenderBuilder.h
-
-    # ---- Ports (NEW) ----
-    src/ports/ISketchDocumentPersistencePort.h
-
-    # ---- Persistence DTO (NEW) ----
-    src/adapters/persistence/SketchDocumentDto.h
-    src/adapters/persistence/SketchDocumentMapper.h
-    src/adapters/persistence/SketchDocumentJson.h
-    src/adapters/persistence/JsonSketchDocumentAdapter.h
-
-    src/ports/IUIPort.h
-    src/ports/IFileLoaderPort.h
-    src/ports/IExporterPort.h
-    src/ports/IRendererPort.h
-    src/core/Application.h
-    src/adapters/ui/ImGuiAdapter.h
-    src/adapters/ui/UI.h
-    src/adapters/loaders/StepFileLoader.h
-    src/adapters/exporters/ObjExporter.h
-    src/adapters/exporters/StlExporter.h
-    src/adapters/rendering/OcctRenderer.h
-)
-
-# -------------------------
-# Main executable
-# -------------------------
-add_executable(${PROJECT_NAME}
-    src/main.cpp
-    ${DOMAIN_SOURCES}
-    ${CORE_SOURCES}
-    ${ADAPTER_SOURCES}
-    ${HEADER_FILES}
-)
-
-target_include_directories(${PROJECT_NAME} PRIVATE
+target_include_directories(pistachio_core PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${GLM_DIR}
+    ${STB_DIR}
+    "${NLOHMANN_JSON_DIR}/single_include"
 )
 
-# Add OpenCASCADE link directories
-target_link_directories(${PROJECT_NAME} PRIVATE
+target_link_directories(pistachio_core PUBLIC
     ${OpenCASCADE_LIBRARY_DIR}
 )
 
-# Link all libraries
-target_link_libraries(${PROJECT_NAME} PRIVATE
+target_link_libraries(pistachio_core PUBLIC
     imgui
-    OpenGL::GL
-    glfw
     nlohmann_json
 
-    # Core OpenCASCADE libraries
+    # OpenCASCADE libs
     TKernel
     TKMath
     TKG2d
@@ -219,20 +263,92 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
     TKXCAF
     TKBin
     TKBinXCAF
-
-    # Data Exchange libraries
     TKXSBase
     TKDESTEP
-
-    # Additional required libraries
     TKLCAF
     TKCAF
     TKCDF
 )
 
 if(WIN32)
-    target_link_libraries(${PROJECT_NAME} PRIVATE opengl32)
+    target_link_libraries(pistachio_core PUBLIC opengl32)
 endif()
 
-set_property(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
-    PROPERTY VS_STARTUP_PROJECT ${PROJECT_NAME})
+# -------------------------
+# pistachio_ui plugin (SHARED)
+# -------------------------
+add_library(pistachio_ui SHARED
+    src/adapters/ui/ImGuiAdapter.cpp
+    src/adapters/ui/UI.cpp
+
+    # Defines UI::Colors::Theme::* (used by ImGuiHost drawing code)
+    src/adapters/ui/ThemeColors.cpp
+
+    src/adapters/ui/plugins/PistachioUiModule.cpp
+)
+
+target_include_directories(pistachio_ui PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+    "${IMGUI_DIR}"
+    "${IMGUI_DIR}/backends"
+    "${IMGUI_CUSTOM_DIR}"
+    ${GLM_DIR}
+    ${STB_DIR}
+)
+
+target_link_libraries(pistachio_ui PRIVATE
+    pistachio_core
+    imgui
+    OpenGL::GL
+    nlohmann_json
+    glad
+    walnut
+)
+
+
+
+# Put the plugin DLL next to the exe in bin/<cfg>/plugins
+foreach(cfg Debug Release RelWithDebInfo MinSizeRel)
+    string(TOUPPER "${cfg}" CFGU)
+    set_target_properties(pistachio_ui PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY_${CFGU} "${CMAKE_BINARY_DIR}/bin/${cfg}/plugins"
+        LIBRARY_OUTPUT_DIRECTORY_${CFGU} "${CMAKE_BINARY_DIR}/bin/${cfg}/plugins"
+        ARCHIVE_OUTPUT_DIRECTORY_${CFGU} "${CMAKE_BINARY_DIR}/lib/${cfg}"
+    )
+endforeach()
+
+# -------------------------
+# Main executable
+# -------------------------
+add_executable(${PROJECT_NAME}
+    src/main.cpp
+    src/adapters/ui/ImGuiHost.cpp
+    src/adapters/ui/ThemeColors.cpp
+    src/adapters/ui/plugins/UiPluginLoader.cpp
+
+    # --- OpenGL 3D viewport (offscreen FBO -> ImGui::Image) ---
+    src/adapters/rendering/GLLoader.cpp
+    src/adapters/rendering/FramebufferManager.cpp
+    src/adapters/rendering/OpenGlRenderer.cpp
+    src/adapters/rendering/GlCubeViewRenderer.cpp
+)
+
+target_include_directories(${PROJECT_NAME} PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${GLM_DIR}
+)
+
+target_link_libraries(${PROJECT_NAME} PRIVATE
+    pistachio_core
+    imgui
+    OpenGL::GL
+    glfw
+    nlohmann_json
+    glad
+    walnut
+)
+
+
+if(WIN32)
+    target_link_libraries(${PROJECT_NAME} PRIVATE opengl32)
+endif()
