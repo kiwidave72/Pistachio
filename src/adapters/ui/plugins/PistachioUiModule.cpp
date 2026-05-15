@@ -43,37 +43,37 @@ public:
             using ports::SettingInfo;
             using ports::SettingType;
             cfg->registerSetting(SettingInfo(
-                "pistachio.ui", "config.showAdvanced", "Show advanced settings",
+                "pistachio.UI", "config.showAdvanced", "Show advanced settings",
                 "Show settings marked as advanced.", "Configuration", SettingType::Bool, false, false
             ));
             cfg->registerSetting(SettingInfo(
-                "pistachio.ui", "config.windowOpen", "Config window open",
+                "pistachio.UI", "config.windowOpen", "Config window open",
                 "Whether the configuration editor window is visible.", "Configuration", SettingType::Bool, true, true
             ));
 
             // Views (dockable windows)
             cfg->registerSetting(SettingInfo(
-                "pistachio.ui", "views.fileOperations", "File Operations",
+                "pistachio.UI", "views.fileOperations", "File Operations",
                 "Show/hide the File Operations window.", "Views", SettingType::Bool, true, true
             ));
             cfg->registerSetting(SettingInfo(
-                "pistachio.ui", "views.status", "Status",
+                "pistachio.UI", "views.status", "Status",
                 "Show/hide the Status window.", "Views", SettingType::Bool, true, true
             ));
             cfg->registerSetting(SettingInfo(
-                "pistachio.ui", "views.modelInfo", "Model Info",
+                "pistachio.UI", "views.modelInfo", "Model Info",
                 "Show/hide the Model Info window.", "Views", SettingType::Bool, true, true
             ));
             cfg->registerSetting(SettingInfo(
-                "pistachio.ui", "views.viewport3d", "3D Viewport",
+                "pistachio.UI", "views.viewport3d", "3D Viewport",
                 "Show/hide the 3D Viewport window.", "Views", SettingType::Bool, true, true
             ));
             cfg->registerSetting(SettingInfo(
-                "pistachio.ui", "views.sketch3dViewport", "Sketch 3D View",
+                "pistachio.UI", "views.sketch3dViewport", "Sketch 3D View",
                 "Show/hide the Sketch 3D View window.", "Views", SettingType::Bool, true, true
             ));
             cfg->registerSetting(SettingInfo(
-                "pistachio.ui", "views.sketchEditor", "Sketch Editor",
+                "pistachio.UI", "views.sketchEditor", "Sketch Editor",
                 "Show/hide the Sketch Editor window.", "Views", SettingType::Bool, true, true
             ));
         }
@@ -126,17 +126,17 @@ void renderConfigEditor()
     // ------------------------------
     // UE5-style Settings Window
     // ------------------------------
-    nlohmann::json jOpen = m_config->get("pistachio.ui", "config.windowOpen");
+    nlohmann::json jOpen = m_config->get("pistachio.UI", "config.windowOpen");
     bool open = jOpen.is_boolean() ? jOpen.get<bool>() : true;
     if (!open)
         return;
 
     // Persisted UI state
-    nlohmann::json jAdv = m_config->get("pistachio.ui", "config.showAdvanced");
+    nlohmann::json jAdv = m_config->get("pistachio.UI", "config.showAdvanced");
     bool showAdvanced = jAdv.is_boolean() ? jAdv.get<bool>() : false;
 
     // Local UI state
-    static float s_leftWidth = 320.0f;
+    static float s_leftWidth = 220.0f;
     static char  s_search[256] = {};
     static bool  s_onlyModified = false;
     static bool  s_showIcons = true;
@@ -438,8 +438,8 @@ default:
     if (!ImGui::Begin("Settings", &open))
     {
         ImGui::End();
-        m_config->set("pistachio.ui", "config.windowOpen", open);
-        m_config->set("pistachio.ui", "config.showAdvanced", showAdvanced);
+        m_config->set("pistachio.UI", "config.windowOpen", open);
+        m_config->set("pistachio.UI", "config.showAdvanced", showAdvanced);
         return;
     }
 
@@ -675,8 +675,8 @@ default:
     ImGui::End();
 
     // Persist toggles
-    m_config->set("pistachio.ui", "config.windowOpen", open);
-    m_config->set("pistachio.ui", "config.showAdvanced", showAdvanced);
+    m_config->set("pistachio.UI", "config.windowOpen", open);
+    m_config->set("pistachio.UI", "config.showAdvanced", showAdvanced);
 }
 };
 
@@ -700,7 +700,7 @@ PISTACHIO_UI_EXPORT void pistachio_destroy_ui_module(IUiModule* m)
 static const UiPluginManifestV1 g_manifest = {
     sizeof(UiPluginManifestV1),
     1,
-    "pistachio.ui",
+    "pistachio.UI",
     "Pistachio UI",
     "0.1.0",
     "Sketching"

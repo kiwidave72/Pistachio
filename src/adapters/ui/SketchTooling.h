@@ -133,6 +133,75 @@ namespace adapters::sketchui {
 
         return best;
     }
+
+    // --------------------------------------------------------------------
+    // Snap-to-endpoint support for line creation tools
+    // --------------------------------------------------------------------
+    
+    struct SnapResult {
+        bool hasSnap = false;
+        ImVec2 snapPointWorld{0, 0};
+        domain::sketch::EntityId snapToEntityId = 0;
+        domain::sketch::EntityAnchor snapAnchor = domain::sketch::EntityAnchor::None;
+        float distance = 1e30f;
+    };
+
+    // Find the nearest line endpoint or point to snap to
+    static inline SnapResult FindSnapPoint(
+        const domain::sketch::Sketch& sketch,
+        ImVec2 mouseW,
+        float snapTolW)
+    {
+        SnapResult result;
+        
+        // Check all line endpoints
+        for (const auto& ln : sketch.entities.lines()) {
+            // Check start point
+            ImVec2 startW = ImVec2((float)ln.a.x, (float)ln.a.y);
+            float distToStart = VLen(VSub(mouseW, startW));
+            
+            if (distToStart <= snapTolW && distToStart < result.distance) {
+                result.hasSnap = true;
+                result.snapPointWorld = startW;
+                result.snapToEntityId = ln.h.id;
+                result.snapAnchor = domain::sketch::EntityAnchor::LineStart;
+                result.distance = distToStart;
+            }
+            
+            // Check end point
+            ImVec2 endW = ImVec2((float)ln.b.x, (float)ln.b.y);
+            float distToEnd = VLen(VSub(mouseW, endW));
+            
+            if (distToEnd <= snapTolW && distToEnd < result.distance) {
+                result.hasSnap = true;
+                result.snapPointWorld = endW;
+                result.snapToEntityId = ln.h.id;
+                result.snapAnchor = domain::sketch::EntityAnchor::LineEnd;
+                result.distance = distToEnd;
+            }
+        }
+        
+        // Also check standalone points
+        for (const auto& pt : sketch.entities.points()) {
+            ImVec2 ptW = ImVec2((float)pt.p.x, (float)pt.p.y);
+            float dist = VLen(VSub(mouseW, ptW));
+            
+            if (dist <= snapTolW && dist < result.distance) {
+                result.hasSnap = true;
+                result.snapPointWorld = ptW;
+                result.snapToEntityId = pt.h.id;
+                result.snapAnchor = domain::sketch::EntityAnchor::None;
+                result.distance = dist;
+            }
+        }
+        
+        return result;
+    }
+
+    // --------------------------------------------------------------------
+    // Tool types and base classes
+    // --------------------------------------------------------------------
+
 enum class ToolKind { None, Line2Pt, CircleCenterRadius, Constraint };
     enum class DraftStage { Idle, PickingStart, PickingEnd, AdjustingValue };
 

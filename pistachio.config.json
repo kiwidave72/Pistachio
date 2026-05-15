@@ -1,20 +1,20 @@
 {
-  "pistachio.render": {
-    "msaa.samples": 0
+  "pistachio.Render": {
+    "msaa.samples": 4
   },
-  "pistachio.sketch": {
+  "pistachio.Sketch": {
     "grid.spacing": 10.0,
     "snap.enabled": true
   },
-  "pistachio.ui": {
+  "pistachio.UI": {
     "config.showAdvanced": true,
-    "config.windowOpen": false,
+    "config.windowOpen": true,
     "theme": "Pistachio",
     "views.fileOperations": false,
     "views.modelInfo": false,
-    "views.sketch3dViewport": true,
-    "views.sketchEditor": true,
+    "views.sketch3dViewport": false,
+    "views.sketchEditor": false,
     "views.status": false,
-    "views.viewport3d": true
+    "views.viewport3d": false
   }
 }

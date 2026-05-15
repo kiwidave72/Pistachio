@@ -143,12 +143,12 @@ namespace adapters {
             return v.is_boolean() ? v.get<bool>() : defVal;
             };
 
-        m_viewFileOperations = readBool("pistachio.ui", "views.fileOperations", true);
-        m_viewStatus = readBool("pistachio.ui", "views.status", true);
-        m_viewModelInfo = readBool("pistachio.ui", "views.modelInfo", true);
-        m_view3DViewport = readBool("pistachio.ui", "views.viewport3d", true);
-        m_viewSketchEditor = readBool("pistachio.ui", "views.sketchEditor", true);
-        m_viewSketch3DViewport = readBool("pistachio.ui", "views.sketch3dViewport", true);
+        m_viewFileOperations = readBool("pistachio.UI", "views.fileOperations", true);
+        m_viewStatus = readBool("pistachio.UI", "views.status", true);
+        m_viewModelInfo = readBool("pistachio.UI", "views.modelInfo", true);
+        m_view3DViewport = readBool("pistachio.UI", "views.viewport3d", true);
+        m_viewSketchEditor = readBool("pistachio.UI", "views.sketchEditor", true);
+        m_viewSketch3DViewport = readBool("pistachio.UI", "views.sketch3dViewport", true);
 
         // Phase 2: dedicated renderer for the Sketch 3D View (kept separate from the app\'s primary renderer)
         m_sketch3dRenderer = std::make_unique<adapters::GlSketch3DViewRenderer>();
@@ -293,12 +293,12 @@ namespace adapters {
             return v.is_boolean() ? v.get<bool>() : defVal;
             };
 
-        m_viewFileOperations = readBool("pistachio.ui", "views.fileOperations", m_viewFileOperations);
-        m_viewStatus = readBool("pistachio.ui", "views.status", m_viewStatus);
-        m_viewModelInfo = readBool("pistachio.ui", "views.modelInfo", m_viewModelInfo);
-        m_view3DViewport = readBool("pistachio.ui", "views.viewport3d", m_view3DViewport);
-        m_viewSketch3DViewport = readBool("pistachio.ui", "views.sketch3dViewport", m_viewSketch3DViewport);
-        m_viewSketchEditor = readBool("pistachio.ui", "views.sketchEditor", m_viewSketchEditor);
+        m_viewFileOperations = readBool("pistachio.UI", "views.fileOperations", m_viewFileOperations);
+        m_viewStatus = readBool("pistachio.UI", "views.status", m_viewStatus);
+        m_viewModelInfo = readBool("pistachio.UI", "views.modelInfo", m_viewModelInfo);
+        m_view3DViewport = readBool("pistachio.UI", "views.viewport3d", m_view3DViewport);
+        m_viewSketch3DViewport = readBool("pistachio.UI", "views.sketch3dViewport", m_viewSketch3DViewport);
+        m_viewSketchEditor = readBool("pistachio.UI", "views.sketchEditor", m_viewSketchEditor);
 
         renderMainMenu();
         renderStatusBar();
@@ -1205,7 +1205,7 @@ namespace adapters {
         ImGui::End();
 
         if (m_config && wasOpen != m_viewSketch3DViewport)
-            m_config->set("pistachio.ui", "views.sketch3dViewport", m_viewSketch3DViewport);
+            m_config->set("pistachio.UI", "views.sketch3dViewport", m_viewSketch3DViewport);
     }
 
 
@@ -1239,7 +1239,7 @@ namespace adapters {
 
         // Persist close/open state
         if (m_config && wasOpen != m_viewFileOperations)
-            m_config->set("pistachio.ui", "views.fileOperations", m_viewFileOperations);
+            m_config->set("pistachio.UI", "views.fileOperations", m_viewFileOperations);
     }
 
     void ImGuiAdapter::renderStatusBar()
@@ -1256,7 +1256,7 @@ namespace adapters {
         ImGui::End();
 
         if (m_config && wasOpen != m_viewStatus)
-            m_config->set("pistachio.ui", "views.status", m_viewStatus);
+            m_config->set("pistachio.UI", "views.status", m_viewStatus);
     }
 
     void ImGuiAdapter::renderModelInfo()
@@ -1272,7 +1272,7 @@ namespace adapters {
             ImGui::TextDisabled("No application");
             ImGui::End();
             if (m_config && wasOpen != m_viewModelInfo)
-                m_config->set("pistachio.ui", "views.modelInfo", m_viewModelInfo);
+                m_config->set("pistachio.UI", "views.modelInfo", m_viewModelInfo);
             return;
         }
 
@@ -1282,14 +1282,14 @@ namespace adapters {
             ImGui::TextDisabled("No model loaded");
             ImGui::End();
             if (m_config && wasOpen != m_viewModelInfo)
-                m_config->set("pistachio.ui", "views.modelInfo", m_viewModelInfo);
+                m_config->set("pistachio.UI", "views.modelInfo", m_viewModelInfo);
             return;
         }
 
         ImGui::Text("Model loaded");
         ImGui::End();
         if (m_config && wasOpen != m_viewModelInfo)
-            m_config->set("pistachio.ui", "views.modelInfo", m_viewModelInfo);
+            m_config->set("pistachio.UI", "views.modelInfo", m_viewModelInfo);
     }
 
 
@@ -1392,7 +1392,7 @@ namespace adapters {
         ImGui::End();
 
         if (m_config && wasOpen != m_view3DViewport)
-            m_config->set("pistachio.ui", "views.viewport3d", m_view3DViewport);
+            m_config->set("pistachio.UI", "views.viewport3d", m_view3DViewport);
     }
     void ImGuiAdapter::renderRibbonBar()
     {
@@ -1708,7 +1708,7 @@ namespace adapters {
             ImGui::TextDisabled("No sketch document loaded");
             ImGui::End();
             if (m_config && wasOpen != m_viewSketchEditor)
-                m_config->set("pistachio.ui", "views.sketchEditor", m_viewSketchEditor);
+                m_config->set("pistachio.UI", "views.sketchEditor", m_viewSketchEditor);
             return;
         }
 
@@ -2190,7 +2190,7 @@ namespace adapters {
         ImGui::End();
 
         if (m_config && wasOpen != m_viewSketchEditor)
-            m_config->set("pistachio.ui", "views.sketchEditor", m_viewSketchEditor);
+            m_config->set("pistachio.UI", "views.sketchEditor", m_viewSketchEditor);
     }
 
 } // namespace adapters

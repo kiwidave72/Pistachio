@@ -23,18 +23,18 @@ namespace core {
         using ports::SettingType;
 
         m_config.registerSetting(SettingInfo(
-            "pistachio.ui", "theme", "Theme", "UI theme name", "UI", SettingType::String, "Pistachio", false
+            "pistachio.UI", "theme", "Theme", "UI theme name", "UI", SettingType::String, "Pistachio", false
         ));
 
         m_config.registerSetting(SettingInfo(
-            "pistachio.sketch", "grid.spacing", "Grid spacing", "Grid spacing in sketch units", "Sketch", SettingType::Float, 10.0, false
+            "pistachio.Sketch", "grid.spacing", "Grid spacing", "Grid spacing in sketch units", "Sketch", SettingType::Float, 10.0, false
         ));
         m_config.registerSetting(SettingInfo(
-            "pistachio.sketch", "snap.enabled", "Snap", "Enable snapping in the sketch canvas", "Sketch", SettingType::Bool, true, false
+            "pistachio.Sketch", "snap.enabled", "Snap", "Enable snapping in the sketch canvas", "Sketch", SettingType::Bool, true, false
         ));
 
         m_config.registerSetting(SettingInfo(
-            "pistachio.render", "msaa.samples", "MSAA samples", "Multisample AA samples (restart may be required)", "Rendering", SettingType::Int, 4, true
+            "pistachio.Render", "msaa.samples", "MSAA samples", "Multisample AA samples (restart may be required)", "Rendering", SettingType::Int, 4, true
         ));
     }
 
@@ -359,71 +359,71 @@ namespace core {
     void Application::setupToolbarMenus() {
         m_uiAdapter->setMenubarCallback([this]()
             {
-               
-                    if (ImGui::BeginMenu("File"))
-                    {
-                        if (ImGui::MenuItem("Open")) {}
-                        ImGui::Separator();
-                        if (ImGui::MenuItem("Save", "Ctrl+S")) {
-                            // Save to the current file (test.pistachio.json for now)
-                            if (saveSketchDocument("test.pistachio.json")) {
-                                updateStatus("Sketch saved successfully");
-                            }
+
+                if (ImGui::BeginMenu("File"))
+                {
+                    if (ImGui::MenuItem("Open")) {}
+                    ImGui::Separator();
+                    if (ImGui::MenuItem("Save", "Ctrl+S")) {
+                        // Save to the current file (test.pistachio.json for now)
+                        if (saveSketchDocument("test.pistachio.json")) {
+                            updateStatus("Sketch saved successfully");
                         }
-                        if (ImGui::MenuItem("Save as ...")) {
-                            // TODO: Show file dialog to choose save location
-                            // For now, save to a timestamped file
-                            auto now = std::time(nullptr);
-                            char filename[256];
-                            std::strftime(filename, sizeof(filename), "sketch_%Y%m%d_%H%M%S.pistachio.json", std::localtime(&now));
-                            if (saveSketchDocument(filename)) {
-                                updateStatus(std::string("Sketch saved as: ") + filename);
-                            }
+                    }
+                    if (ImGui::MenuItem("Save as ...")) {
+                        // TODO: Show file dialog to choose save location
+                        // For now, save to a timestamped file
+                        auto now = std::time(nullptr);
+                        char filename[256];
+                        std::strftime(filename, sizeof(filename), "sketch_%Y%m%d_%H%M%S.pistachio.json", std::localtime(&now));
+                        if (saveSketchDocument(filename)) {
+                            updateStatus(std::string("Sketch saved as: ") + filename);
                         }
-                        ImGui::Separator();
-                        if (ImGui::MenuItem("Import Sketch")) {}
-                        ImGui::Separator();
-                        if (ImGui::MenuItem("Exit"))
-                        {
-                            this->shutdown();
-                        }
-                        ImGui::EndMenu();
                     }
-                    if (ImGui::BeginMenu("Sketch"))
+                    ImGui::Separator();
+                    if (ImGui::MenuItem("Import Sketch")) {}
+                    ImGui::Separator();
+                    if (ImGui::MenuItem("Exit"))
                     {
-                        ImGui::EndMenu();
+                        this->shutdown();
                     }
-                    if (ImGui::BeginMenu("Options"))
-                    {
-                        ImGui::EndMenu();
-                    }
-                    if (ImGui::BeginMenu("Tools"))
-                    {
-                        // NOTE: you probably want tools here
-                        ImGui::EndMenu();
-                    }
-                    if (ImGui::BeginMenu("Views"))
-                    {
-                        auto getBool = [&](const char* ns, const char* key, bool defVal) {
-                            nlohmann::json v = m_config.get(ns, key);
-                            return v.is_boolean() ? v.get<bool>() : defVal;
+                    ImGui::EndMenu();
+                }
+                if (ImGui::BeginMenu("Sketch"))
+                {
+                    ImGui::EndMenu();
+                }
+                if (ImGui::BeginMenu("Options"))
+                {
+                    ImGui::EndMenu();
+                }
+                if (ImGui::BeginMenu("Tools"))
+                {
+                    // NOTE: you probably want tools here
+                    ImGui::EndMenu();
+                }
+                if (ImGui::BeginMenu("Views"))
+                {
+                    auto getBool = [&](const char* ns, const char* key, bool defVal) {
+                        nlohmann::json v = m_config.get(ns, key);
+                        return v.is_boolean() ? v.get<bool>() : defVal;
                         };
 
-                        auto toggle = [&](const char* key, const char* label) {
-                            bool open = getBool("pistachio.ui", key, true);
-                            if (ImGui::MenuItem(label, nullptr, open))
-                                m_config.set("pistachio.ui", key, !open);
+                    auto toggle = [&](const char* key, const char* label) {
+                        bool open = getBool("pistachio.UI", key, true);
+                        if (ImGui::MenuItem(label, nullptr, open))
+                            m_config.set("pistachio.UI", key, !open);
                         };
 
-                        toggle("views.fileOperations", "File Operations");
-                        toggle("views.status", "Status");
-                        toggle("views.modelInfo", "Model Info");
-                        toggle("views.viewport3d", "3D Viewport");
-                        toggle("views.sketchEditor", "Sketch Editor");
+                    toggle("views.fileOperations", "File Operations");
+                    toggle("views.status", "Status");
+                    toggle("views.modelInfo", "Model Info");
+                    toggle("views.viewport3d", "3D Viewport");
+                    toggle("views.sketchEditor", "Sketch Editor");
 
-                        ImGui::Separator();
-                        if (ImGui::MenuItem("Settings"))
-                            m_config.set("pistachio.ui", "config.windowOpen", true);
+                    ImGui::Separator();
+                    if (ImGui::MenuItem("Settings"))
+                        m_config.set("pistachio.UI", "config.windowOpen", true);
 
                         ImGui::EndMenu();
                     }
