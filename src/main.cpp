@@ -17,10 +17,10 @@
 #include "domain/DataContext.h"
 #include "adapters/ui/ImGuiHost.h"
 #include "adapters/ui/plugins/UiPluginRegistry.h"
-
-// UI plugin loader (loads pistachio_ui.dll and calls PistachioUiModule)
 #include "adapters/ui/plugins/UiPluginLoader.h"
 #include "adapters/ui/plugins/UiModuleApi.h"
+#include "adapters/plugins/ServiceModuleRegistry.h"
+ 
 
 #include "adapters/loaders/StlMeshLoader.h"
 #include "adapters/loaders/StepFileLoader.h"
@@ -89,6 +89,9 @@ namespace
             if (m_app)
                 m_app->registerCoreServices();
 
+            int servicesLoaded = m_serviceRegistry.loadAll(*m_app);
+            printf("[HotReload] initialize: %d service plugin(s) loaded\n", servicesLoaded);
+
             int loaded = m_registry.loadAll(m_svc,*m_dataContext);
             printf("[HotReload] initialize: %d plugin(s) loaded\n", loaded);
 
@@ -99,6 +102,7 @@ namespace
         void shutdown() override
         {
             m_registry.unloadAll(m_svc, *m_dataContext);
+            m_serviceRegistry.unloadAll(*m_app);
             m_host.shutdown();
         }
 
@@ -413,8 +417,9 @@ void beginFrame() override
         core::Application* m_app = nullptr;
 
         adapters::ImGuiHost m_host;
-        //UiPluginLoader m_loader;
+        
         UiPluginRegistry m_registry;
+        ServiceModuleRegistry m_serviceRegistry;
 
         UiHostServices m_svc{};
         domain::DataContext* m_dataContext;

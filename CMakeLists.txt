@@ -372,6 +372,9 @@ add_executable(${PROJECT_NAME}
     src/adapters/ui/plugins/UiPluginLoader.cpp
     src/adapters/ui/plugins/UiPluginRegistry.cpp
 
+    src/adapters/plugins/ServiceModuleLoader.cpp
+    src/adapters/plugins/ServiceModuleRegistry.cpp
+
     # --- OpenGL 3D viewport (offscreen FBO -> ImGui::Image) ---
     src/adapters/rendering/GLLoader.cpp
     src/adapters/rendering/FramebufferManager.cpp
