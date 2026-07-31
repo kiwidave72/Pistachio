@@ -5,6 +5,7 @@
 
 #include <cstdint>
 
+namespace core { class IApplication; }
 
 
 // -----------------------------------------------------------------------
@@ -28,6 +29,13 @@ struct UiHostServices
     void* config = nullptr;
     void* registry = nullptr; // adapters::ContributionRegistry*
     void* taskRunner = nullptr;
+
+
+    // NEW — typed access to the service registry. Prefer this for new code:
+    //   svc.application->services().resolve<T>()
+    // The fields above are kept for backwards compatibility; no plugin
+    // needs to change to keep working.
+    core::IApplication* application = nullptr;
 };
 
 // -----------------------------------------------------------------------

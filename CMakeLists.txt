@@ -254,10 +254,11 @@ add_library(pistachio_core SHARED
 
 
     # Adapters
+    src/adapters/eventbus/EventBus.cpp
     src/adapters/rendering/OcctRenderer.cpp
     src/adapters/loaders/StepFileLoader.cpp
     src/adapters/loaders/StlMeshLoader.cpp
-     src/adapters/loaders/StlLoaderAdapter.cpp
+    src/adapters/loaders/StlLoaderAdapter.cpp
 
     src/adapters/exporters/ObjExporter.cpp
     src/adapters/exporters/StlExporter.cpp

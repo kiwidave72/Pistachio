@@ -15,7 +15,9 @@
 #include "ports/IConfigPort.h"
 #include "ports/ISlicerPort.h"
 #include "core/TaskRunner.h"
-
+#include "core/IApplication.h"
+#include "core/ServiceRegistry.h"
+#include "ports/IEventBus.h"
 // Host-owned config store
 
 #include "core/ConfigStore.h"
@@ -23,9 +25,13 @@
 #include "domain/Model.h"
 #include "domain/SketchModel.h"
 
+namespace adapters { class EventBus; }
+
+
 namespace core {
 
-    class Application {
+
+    class Application : public IApplication {
     public:
         Application();
         ~Application();
@@ -76,6 +82,10 @@ namespace core {
         float getLoadingProgress() const;
 
         std::unique_ptr<TaskRunner> taskRunner = std::make_unique<TaskRunner>();
+        
+        ServiceRegistry& services() override { return m_services; }
+        void registerCoreServices();
+
 
     private:
 
@@ -92,6 +102,10 @@ namespace core {
 
         core::ConfigStore m_config;
         std::string m_configPath = "pistachio.config.json";
+
+
+        ServiceRegistry m_services;
+        std::unique_ptr<adapters::EventBus> m_eventBus;
 
         std::string m_statusMessage;
         std::atomic<bool> m_isLoading;

@@ -86,6 +86,9 @@ namespace
             
             m_dataContext = m_app->getDataContext() ;
 
+            if (m_app)
+                m_app->registerCoreServices();
+
             int loaded = m_registry.loadAll(m_svc,*m_dataContext);
             printf("[HotReload] initialize: %d plugin(s) loaded\n", loaded);
 

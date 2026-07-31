@@ -1,5 +1,7 @@
 
 #include "core/Application.h"
+#include "adapters/eventbus/EventBus.h"
+
 #include <algorithm>
 #include <variant>
 #include "adapters/persistence/JsonSketchDocumentAdapter.h"
@@ -29,6 +31,15 @@ namespace core {
             m_loadingThread.join();
         }
     }
+    
+    void Application::registerCoreServices() {
+        m_services.registerService<ports::IConfigPort>(getConfig());
+        m_services.registerService<TaskRunner>(taskRunner.get());
+
+        m_eventBus = std::make_unique<adapters::EventBus>();
+        m_services.registerService<ports::IEventBus>(m_eventBus.get());
+    }
+
     void Application::setSlicerAdapter(std::unique_ptr<ports::ISlicerPort> slicer) {
         m_slicerAdapter = std::move(slicer);
     }
