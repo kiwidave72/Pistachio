@@ -50,7 +50,8 @@ namespace adapters {
         ::ImFont* fontTitle() const { return m_titleFont; }
 
     private:
-        void renderMainMenu();
+        void renderFileOperations();
+        void renderSlicerOperations();
         void renderStatusBar();
         void renderModelInfo();
         void render3DView();
@@ -69,6 +70,8 @@ namespace adapters {
 
         // View visibility (defaults to true; persisted via config when available)
         bool m_viewFileOperations = true;
+        bool m_viewSlicerOperations = true;;
+
         bool m_viewStatus = true;
         bool m_viewModelInfo = true;
         bool m_view3DViewport = true;

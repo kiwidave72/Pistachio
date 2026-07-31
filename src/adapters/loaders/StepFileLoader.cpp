@@ -12,7 +12,7 @@ namespace adapters {
 
     std::shared_ptr<domain::Model> StepFileLoader::load(
         const std::string& filepath,
-        ports::ProgressCallback progressCallback)
+        ports::ProgressCallback progressCallback) 
     {
         if (progressCallback) {
             progressCallback("Reading STEP file...", 10.0f);

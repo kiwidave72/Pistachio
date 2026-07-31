@@ -1,5 +1,6 @@
 # Build directories
 .vs/
+_deps/
 build/
 bin/
 lib/
@@ -8,8 +9,8 @@ bin/
 bin-int/
 x64/
 *.dir/
-*.log
-
+*.log 
+Assets/STEP/core_one_assembly.step
 
 # Files
 *.vcxproj
@@ -19,6 +20,7 @@ x64/
 
 # Exclude
 !external/bin
+
 
 # CMake
 CMakeCache.txt

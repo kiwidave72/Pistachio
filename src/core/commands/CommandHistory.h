@@ -9,6 +9,9 @@ namespace core::commands {
 
     class CommandHistory {
     public:
+        
+        std::function<void()> OnHistoryChanged;
+
         void Execute(std::unique_ptr<ICommand> cmd)
         {
             if (!cmd) return;
@@ -20,6 +23,7 @@ namespace core::commands {
             cmd->Do();
             m_commands.push_back(std::move(cmd));
             m_index = m_commands.size();
+            if (OnHistoryChanged) OnHistoryChanged();
         }
 
         bool CanUndo() const { return m_index > 0; }
@@ -30,6 +34,7 @@ namespace core::commands {
             if (!CanUndo()) return;
             --m_index;
             m_commands[m_index]->Undo();
+            if (OnHistoryChanged) OnHistoryChanged();
         }
 
         void Redo()
@@ -37,12 +42,14 @@ namespace core::commands {
             if (!CanRedo()) return;
             m_commands[m_index]->Do();
             ++m_index;
+            if (OnHistoryChanged) OnHistoryChanged();
         }
 
         void Clear()
         {
             m_commands.clear();
             m_index = 0;
+            if (OnHistoryChanged) OnHistoryChanged();
         }
 
     private:

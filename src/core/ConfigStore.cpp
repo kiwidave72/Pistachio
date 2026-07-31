@@ -30,6 +30,162 @@ void ConfigStore::registerSetting(const ports::SettingInfo& info)
         }
     }
 }
+ 
+
+void ConfigStore::registerNamespace(const ports::NamespaceInfo& info)
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+
+    // Upsert — if already registered, update metadata in place.
+    // This lets a plugin re-register during hot-reload without losing
+    // any child namespaces or settings that were registered independently.
+    m_namespaces[info.ns] = info;
+
+    // Auto-register all ancestor namespaces so the tree is always
+    // navigable from the root even if callers only register leaf nodes.
+    // e.g. registering "toolhead.0.nozzle" also ensures "toolhead.0"
+    // and "toolhead" exist as navigable nodes.
+    std::string cursor = info.ns;
+    for (;;)
+    {
+        const auto dot = cursor.rfind('.');
+        if (dot == std::string::npos)
+            break;
+
+        const std::string parent = cursor.substr(0, dot);
+
+        // Only insert if not already registered — never overwrite
+        // a namespace that was explicitly registered with display metadata.
+        if (m_namespaces.find(parent) == m_namespaces.end())
+        {
+            ports::NamespaceInfo ancestor;
+            ancestor.ns = parent;
+            ancestor.parentNs = (parent.rfind('.') != std::string::npos)
+                ? parent.substr(0, parent.rfind('.'))
+                : "";
+            ancestor.displayName = parent; // placeholder — caller can override
+            ancestor.sortOrder = 0;
+            m_namespaces[parent] = ancestor;
+        }
+
+        cursor = parent;
+    }
+}
+
+void ConfigStore::removeNamespace(const std::string& ns)
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+
+    // Remove the namespace itself
+    m_namespaces.erase(ns);
+
+    // Remove all descendant namespaces (prefix match: "toolhead.0." ...)
+    const std::string prefix = ns + ".";
+    for (auto it = m_namespaces.begin(); it != m_namespaces.end(); )
+    {
+        if (it->first.rfind(prefix, 0) == 0)
+            it = m_namespaces.erase(it);
+        else
+            ++it;
+    }
+
+    // Remove all settings registered under this namespace or any descendant.
+    // A setting id is "ns:key" so we match on "ns:" prefix or exact "ns" prefix.
+    const std::string settingPrefix = ns + ":";
+    const std::string settingChildPrefix = ns + ".";
+
+    for (auto it = m_registry.begin(); it != m_registry.end(); )
+    {
+        const auto& id = it->first;
+        if (id.rfind(settingPrefix, 0) == 0 ||
+            it->second.ns.rfind(settingChildPrefix, 0) == 0 ||
+            it->second.ns == ns)
+        {
+            // Also remove any stored values
+            m_values.erase(id);
+            it = m_registry.erase(it);
+        }
+        else
+            ++it;
+    }
+}
+
+bool ConfigStore::hasNamespace(const std::string& ns) const
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    return m_namespaces.find(ns) != m_namespaces.end();
+}
+
+ports::NamespaceInfo ConfigStore::getNamespace(const std::string& ns) const
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    for (const auto& kv : m_namespaces) {
+
+        if (kv.second.ns == ns) {
+            return kv.second;
+        }
+    }
+}
+
+std::vector<ports::NamespaceInfo> ConfigStore::listNamespaces() const
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+
+    std::vector<ports::NamespaceInfo> out;
+    out.reserve(m_namespaces.size());
+    for (const auto& kv : m_namespaces)
+        out.push_back(kv.second);
+
+    // Sort by sortOrder first, then lexicographically by ns so the tree
+    // renders consistently regardless of registration order.
+    std::sort(out.begin(), out.end(),
+        [](const ports::NamespaceInfo& a, const ports::NamespaceInfo& b)
+        {
+            if (a.sortOrder != b.sortOrder)
+                return a.sortOrder < b.sortOrder;
+            return a.ns < b.ns;
+        });
+
+    return out;
+}
+std::vector<ports::SettingInfo> ConfigStore::listSettingsInNamespace(
+    const std::string& parentNs) const
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+
+    std::vector<ports::SettingInfo> out;
+    for (const auto& kv : m_registry)
+    {
+        if (kv.second.ns.rfind(parentNs,0) == 0)
+            out.push_back(kv.second);
+    }
+
+ 
+    return out;
+}
+
+std::vector<ports::NamespaceInfo> ConfigStore::listChildNamespaces(
+    const std::string& parentNs) const
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+
+    std::vector<ports::NamespaceInfo> out;
+    for (const auto& kv : m_namespaces)
+    {
+        if (kv.second.parentNs == parentNs)
+            out.push_back(kv.second);
+    }
+
+    std::sort(out.begin(), out.end(),
+        [](const ports::NamespaceInfo& a, const ports::NamespaceInfo& b)
+        {
+            if (a.sortOrder != b.sortOrder)
+                return a.sortOrder < b.sortOrder;
+            return a.ns < b.ns;
+        });
+
+    return out;
+}
 
 bool ConfigStore::has(const std::string& ns, const std::string& key) const
 {
@@ -37,6 +193,23 @@ bool ConfigStore::has(const std::string& ns, const std::string& key) const
     const auto id = makeId(ns, key);
     return m_registry.find(id) != m_registry.end();
 }
+
+std::optional<ports::SettingInfo> ConfigStore::get(const std::string& setting) const
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+  
+    std::optional<ports::SettingInfo> result = std::nullopt;
+
+    for (const auto& kv : m_registry) {
+
+        if (makeId(kv.second.ns, kv.second.key) == setting) {
+            result = kv.second;
+        }
+    }
+
+    return result;
+}
+
 
 nlohmann::json ConfigStore::get(const std::string& ns, const std::string& key) const
 {
@@ -205,4 +378,6 @@ bool ConfigStore::saveToFile(const std::string& path) const
     return true;
 }
 
+
+ 
 } // namespace core

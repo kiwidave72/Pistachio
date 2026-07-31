@@ -29,6 +29,84 @@
 #pragma once
 #include <imgui.h>
 
+static void* GetOpenGLProcAddress(const char* name)
+{
+    // Try WGL first (requires a current context).
+    void* p = (void*)wglGetProcAddress(name);
+
+    // wglGetProcAddress returns small sentinel values on failure.
+    if (p == nullptr || p == (void*)0x1 || p == (void*)0x2 || p == (void*)0x3 || p == (void*)-1)
+    {
+        static HMODULE s_opengl32 = ::GetModuleHandleA("opengl32.dll");
+        if (!s_opengl32)
+            s_opengl32 = ::LoadLibraryA("opengl32.dll");
+        if (s_opengl32)
+            p = (void*)::GetProcAddress(s_opengl32, name);
+    }
+    return p;
+}
+
+static bool EnsureGladLoaded()
+{
+    static bool s_loaded = false;
+    if (s_loaded)
+        return true;
+
+    if (!gladLoadGLLoader((GLADloadproc)GetOpenGLProcAddress))
+        return false;
+
+    s_loaded = true;
+    return true;
+}
+
+
+static GLuint CreateGLTextureRGBA_Minimal(const unsigned char* rgba, int w, int h)
+{
+    if (!EnsureGladLoaded())
+        return 0;
+    GLuint tex = 0;
+    glGenTextures(1, &tex);
+    glBindTexture(GL_TEXTURE_2D, tex);
+
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+
+    // Avoid enums missing in your build:
+    // - no GL_TEXTURE_WRAP_S/T
+    // - no GL_CLAMP_TO_EDGE
+    // - no GL_UNPACK_ALIGNMENT
+    // - no GL_RGBA8
+
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, rgba);
+
+    glBindTexture(GL_TEXTURE_2D, 0);
+    return tex;
+}
+
+static bool CreateTextureFromEmbeddedPng(
+    const unsigned char* bytes,
+    int bytesSize,
+    GLuint& outTex,
+    ImTextureID& outId,
+    ImVec2& outSize)
+{
+    int w = 0, h = 0, comp = 0;
+
+    // Force RGBA output
+    stbi_uc* data = stbi_load_from_memory(bytes, bytesSize, &w, &h, &comp, 4);
+    if (!data || w <= 0 || h <= 0)
+        return false;
+
+    // Minimal upload (avoids GL_CLAMP_TO_EDGE / GL_RGBA8 / GL_UNPACK_ALIGNMENT)
+    outTex = CreateGLTextureRGBA_Minimal(data, w, h);
+
+    stbi_image_free(data);
+
+    // ImGui OpenGL convention: ImTextureID is the GLuint cast to void*
+    outId = (ImTextureID)(intptr_t)outTex;
+    outSize = ImVec2((float)w, (float)h);
+    return outTex != 0;
+}
 
 
 
@@ -312,14 +390,15 @@ namespace adapters {
 
             return nullptr;
         }
-        glfwSwapInterval(1); // vsync
+        glfwSwapInterval(0); // vsync
 
 
 
         // Load embedded Roboto font
-       // ImFontConfig fontConfig;
-       // fontConfig.FontDataOwnedByAtlas = false;
-       // io.FontDefault = io.Fonts->AddFontFromMemoryTTF((void*)g_RobotoRegular, sizeof(g_RobotoRegular), 17.0f, &fontConfig);
+       
+        //io.FontDefault = m_bodyFont;
+
+         //io.FontDefault = io.Fonts->AddFontFromMemoryTTF((void*)g_RobotoRegular, sizeof(g_RobotoRegular), 17.0f, &fontConfig);
      /*   m_smallFont = io.Fonts->AddFontFromMemoryTTF((void*)g_RobotoRegular, sizeof(g_RobotoRegular), 14.0f, &fontConfig);
 
         m_ToolBarLineIcon = LoadIcon("assets/icons/SketchTwoPointLine_256.png");
@@ -342,6 +421,8 @@ namespace adapters {
     {
         if (m_diagStdout)
             std::printf("[ImGuiHost] ctor\n");
+
+       // taskRunner = std::make_unique<TaskRunner>();
     }
 
     ImGuiHost::~ImGuiHost()
@@ -356,8 +437,7 @@ namespace adapters {
 
     bool ImGuiHost::initialize()
     {
-        if (m_initialized)
-            return true;
+        
 
         if (m_diagStdout)
             std::printf("[ImGuiHost] >>> initialize()\n");
@@ -386,7 +466,13 @@ namespace adapters {
 
         IMGUI_CHECKVERSION();
         ImGui::CreateContext();
-ImGuiIO& io = ImGui::GetIO();
+        ImGuiIO& io = ImGui::GetIO();
+
+        glfwSetScrollCallback(m_window, [](GLFWwindow*, double xoff, double yoff) {
+            ImGuiIO& io = ImGui::GetIO();
+            io.MouseWheelH += (float)xoff;
+            io.MouseWheel += (float)yoff;
+            });
 
         // Docking is fine
         io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
@@ -397,6 +483,13 @@ ImGuiIO& io = ImGui::GetIO();
         io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
 
         ImGui::StyleColorsDark();
+
+        ImFontConfig fontConfig;
+        fontConfig.FontDataOwnedByAtlas = false;
+
+        
+
+        io.FontDefault = io.Fonts->AddFontFromMemoryTTF((void*)g_RobotoRegular, sizeof(g_RobotoRegular), 14.0f, &fontConfig);
 
         // CRITICAL FIX: Initialize ImGui KeyMap for keyboard navigation
         // This must be done BEFORE we install callbacks
@@ -596,6 +689,10 @@ ImGuiIO& io = ImGui::GetIO();
         return (bool)glfwGetWindowAttrib(m_window, GLFW_MAXIMIZED);
     }
 
+   /* TaskRunner* ImGuiHost::getTaskRunner() {
+        return taskRunner;
+    }*/
+
     void ImGuiHost::setWindowControlIcons(
         ImTextureID minimize,
         ImTextureID maximize,
@@ -611,357 +708,7 @@ ImGuiIO& io = ImGui::GetIO();
         m_iconSize = size;
     }
 
-    void ImGuiHost::beginFrame()
-    {
-        ++m_frameIndex;
-
-        if (m_diagStdout)
-            std::printf("[ImGuiHost] >>> beginFrame frame=%llu\n",
-                (unsigned long long)m_frameIndex);
-        glfwMakeContextCurrent(m_window);
-        glfwPollEvents();
-
-        ImGuiIO& io = ImGui::GetIO();
-
-        // Backend NewFrame first (your fork is clobbering DisplaySize)
-        ImGui_ImplGlfw_NewFrame();
-        ImGui_ImplOpenGL3_NewFrame();
-
-        // NOW force DisplaySize (must be non-zero)
-        {
-            int ww = 0, wh = 0;
-            int fbw = 0, fbh = 0;
-            glfwGetWindowSize(m_window, &ww, &wh);
-            glfwGetFramebufferSize(m_window, &fbw, &fbh);
-
-            if (ww <= 0) ww = 1;
-            if (wh <= 0) wh = 1;
-
-            io.DisplaySize = ImVec2((float)ww, (float)wh);
-
-            if (ww > 0 && wh > 0)
-                io.DisplayFramebufferScale = ImVec2((float)fbw / (float)ww, (float)fbh / (float)wh);
-        }
-
-        // (optional) force mouse after backend NewFrame too
-        {
-            double mx, my;
-            glfwGetCursorPos(m_window, &mx, &my);
-            io.MousePos = ImVec2((float)mx, (float)my);
-            io.MouseDown[0] = (glfwGetMouseButton(m_window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS);
-            io.MouseDown[1] = (glfwGetMouseButton(m_window, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS);
-            io.MouseDown[2] = (glfwGetMouseButton(m_window, GLFW_MOUSE_BUTTON_MIDDLE) == GLFW_PRESS);
-        }
-
-        ImGui::NewFrame();
-
-        // CRITICAL TEST: Check if keyboard input is working at all
-        static bool s_glfwTestDone = false;
-        static bool s_imguiTestDone = false;
-        
-        if (!s_glfwTestDone && m_window) {
-            // Test if GLFW is receiving keyboard input
-            if (glfwGetKey(m_window, GLFW_KEY_A) == GLFW_PRESS ||
-                glfwGetKey(m_window, GLFW_KEY_DELETE) == GLFW_PRESS ||
-                glfwGetKey(m_window, GLFW_KEY_SPACE) == GLFW_PRESS ||
-                glfwGetKey(m_window, GLFW_KEY_ENTER) == GLFW_PRESS) {
-                std::printf("[KEYBOARD TEST] ✓ GLFW IS receiving keyboard input!\n");
-                s_glfwTestDone = true;
-            }
-        }
-        
-        if (!s_imguiTestDone) {
-            // Test if ImGui is receiving keyboard input
-            ImGuiIO& io = ImGui::GetIO();
-            for (int i = 0; i < 512; i++) {
-                if (ImGui::IsKeyPressed((ImGuiKey)i)) {
-                    std::printf("[KEYBOARD TEST] ✓ ImGui IS receiving keyboard input! (key=%d)\n", i);
-                    s_imguiTestDone = true;
-                    break;
-                }
-            }
-        }
-        
-        // After both tests are done, print summary if neither worked
-        static bool s_summaryPrinted = false;
-        if (!s_summaryPrinted && m_frameIndex > 120) { // Wait 2 seconds at 60fps
-            if (!s_glfwTestDone && !s_imguiTestDone) {
-                std::printf("\n[KEYBOARD TEST FAILED] ✗ No keyboard input detected after 2 seconds!\n");
-                std::printf("  - GLFW is NOT receiving keyboard events\n");
-                std::printf("  - ImGui is NOT receiving keyboard events\n");
-                std::printf("  Try: Press any key (A, Space, Enter, Delete) to test\n\n");
-            }
-            s_summaryPrinted = true;
-        }
-
-
-        float titlebarHeight = 96.0f; // includes menu row + ribbon row
-        const bool isMaximized = IsMaximized();
-        float titlebarVerticalOffset = isMaximized ? -6.0f : 0.0f;
-        const ImVec2 windowPadding = ImGui::GetCurrentWindow()->WindowPadding;
-
-        ImGuiWindowFlags titlebar_flags =
-            ImGuiWindowFlags_NoTitleBar |
-
-            ImGuiWindowFlags_NoResize |
-            ImGuiWindowFlags_NoMove |
-            ImGuiWindowFlags_NoScrollbar |
-            ImGuiWindowFlags_NoScrollWithMouse |
-            ImGuiWindowFlags_NoDocking;
-        // Position at top of viewport
-        ImGuiViewport* viewport = ImGui::GetMainViewport();
-        ImGui::SetNextWindowPos(viewport->Pos);
-        ImGui::SetNextWindowSize(ImVec2(viewport->Size.x, titlebarHeight)); // Adjust height as needed
-        ImGui::SetNextWindowViewport(viewport->ID);
-
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
-
-        ImGui::Begin("##Titlebar", nullptr, titlebar_flags);
-        {
-
-            ImGui::SetCursorPos(ImVec2(windowPadding.x, windowPadding.y + titlebarVerticalOffset));
-            const ImVec2 titlebarMin = ImGui::GetCursorScreenPos();
-            const ImVec2 titlebarMax = { ImGui::GetCursorScreenPos().x + ImGui::GetWindowWidth() - windowPadding.y * 2.0f,
-                                         ImGui::GetCursorScreenPos().y + titlebarHeight };
-            auto* bgDrawList = ImGui::GetBackgroundDrawList();
-            auto* fgDrawList = ImGui::GetForegroundDrawList();
-            bgDrawList->AddRectFilled(titlebarMin, titlebarMax, UI::Colors::Theme::titlebar);
-            // DEBUG TITLEBAR BOUNDS
-            //fgDrawList->AddRect(titlebarMin, titlebarMax, UI::Colors::Theme::invalidPrefab);
-
-            // Logo
-            {
-                const int logoWidth = 48;// m_LogoTex->GetWidth();
-                const int logoHeight = 48;// m_LogoTex->GetHeight();
-                const ImVec2 logoOffset(16.0f + windowPadding.x, 5.0f + windowPadding.y + titlebarVerticalOffset);
-                const ImVec2 logoRectStart = { ImGui::GetItemRectMin().x + logoOffset.x, ImGui::GetItemRectMin().y + logoOffset.y };
-                const ImVec2 logoRectMax = { logoRectStart.x + logoWidth, logoRectStart.y + logoHeight };
-
-                fgDrawList->AddImage(m_AppHeaderIcon->GetDescriptorSet(), logoRectStart, logoRectMax);
-            }
-
-            // ImGui::BeginHorizontal("Titlebar-2", { ImGui::GetWindowWidth() - windowPadding.y * 2.0f, ImGui::GetFrameHeightWithSpacing() });
-             //HostUI::BeginHorizontal("Titlebar-2", { ImGui::GetWindowWidth() - windowPadding.y * 2.0f, ImGui::GetFrameHeightWithSpacing() });
-
-            static float moveOffsetX;
-            static float moveOffsetY;
-            const float w = ImGui::GetContentRegionAvail().x;
-            const float buttonsAreaWidth = 94;
-
-
-            // Title bar drag area
-            // On Windows we hook into the GLFW win32 window internals
-            ImGui::SetCursorPos(ImVec2(windowPadding.x, windowPadding.y + titlebarVerticalOffset)); // Reset cursor pos
-            // DEBUG DRAG BOUNDS
-            //fgDrawList->AddRect(ImGui::GetCursorScreenPos(), ImVec2(ImGui::GetCursorScreenPos().x + w - buttonsAreaWidth, ImGui::GetCursorScreenPos().y + titlebarHeight), UI::Colors::Theme::invalidPrefab);
-            ImGui::InvisibleButton("##titleBarDragZone", ImVec2(w - buttonsAreaWidth, titlebarHeight));
-
-            
-            ImGui::SetItemAllowOverlap(); // allow menubar/buttons drawn on top to receive clicks
-m_TitleBarHovered = ImGui::IsItemHovered();
-
-            const bool dragZoneHovered = ImGui::IsItemHovered(ImGuiHoveredFlags_RectOnly);
-            const bool dragZoneClicked = ImGui::IsItemClicked(ImGuiMouseButton_Left); // first press
-
-            // IMPORTANT:
-            // The titlebar drag-zone covers the entire titlebar area. Even with SetItemAllowOverlap(),
-            // it can still "eat" the first click intended for the menubar/ribbon buttons.
-            // Suppress dragging when the mouse is over the menu/ribbon strip.
-            const ImVec2 mouse = ImGui::GetMousePos();
-            const float logoHorizontalOffset = 16.0f * 2.0f + 48.0f + windowPadding.x;
-            const float menuTopY = viewport->Pos.y + (windowPadding.y + titlebarVerticalOffset);
-            const float menuHeight = ImGui::GetFrameHeightWithSpacing();
-            const float ribbonTopY = menuTopY + menuHeight;
-            const float ribbonHeight = menuHeight; // one row of buttons
-
-            const bool mouseOverMenu = (mouse.x >= viewport->Pos.x + logoHorizontalOffset) &&
-                                      (mouse.y >= menuTopY) && (mouse.y <= menuTopY + menuHeight);
-            const bool mouseOverRibbon = (mouse.x >= viewport->Pos.x + logoHorizontalOffset) &&
-                                        (mouse.y >= ribbonTopY) && (mouse.y <= ribbonTopY + ribbonHeight);
-            const bool mouseOverMenuOrRibbon = mouseOverMenu || mouseOverRibbon;
-            // or: const bool dragZoneActive = ImGui::IsItemActive();
-
-#ifdef _WIN32
-            if (dragZoneClicked && !mouseOverMenuOrRibbon)  // only begin a drag when click begins in the zone
-            {
-                HWND hwnd = glfwGetWin32Window(m_window);
-
-                // Optional: ignore double-click if you use it for maximize/restore
-                // if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) { ... }
-
-                ReleaseCapture();
-                SendMessage(hwnd, WM_NCLBUTTONDOWN, HTCAPTION, 0);
-            }
-#endif
-
-            // ImGui::End();
-             // ImGui::PopStyleColor();
-             // ImGui::PopStyleVar(2);
-
-            if (m_menubarCallback) {
-
-                //m_menubarCallback();   // menus only, no Begin/End
-
-                ImGui::SuspendLayout();
-                {
-                    ImGui::SetItemAllowOverlap();
-                    const float logoHorizontalOffset = 16.0f * 2.0f + 48.0f + windowPadding.x;
-                    ImGui::SetCursorPos(ImVec2(logoHorizontalOffset, 6.0f + titlebarVerticalOffset));
-
-                    const ImRect menuBarRect = { ImGui::GetCursorPos(), { ImGui::GetContentRegionAvail().x + ImGui::GetCursorScreenPos().x, ImGui::GetFrameHeightWithSpacing() } };
-
-                    ImGui::BeginGroup();
-                    if (HostUI::BeginMenubar(menuBarRect))
-                    {
-                        m_menubarCallback();   // menus only, no Begin/End
-                    }
-
-                    HostUI::EndMenubar();
-                    ImGui::EndGroup();
-
-                    // Ribbon bar (second row)
-                    if (m_ribbonbarCallback) {
-                        ImGui::SetCursorPos(ImVec2(logoHorizontalOffset, 6.0f + titlebarVerticalOffset + ImGui::GetFrameHeightWithSpacing()));
-                        const ImRect ribbonRect = { ImGui::GetCursorPos(), { ImGui::GetContentRegionAvail().x + ImGui::GetCursorScreenPos().x, ImGui::GetFrameHeightWithSpacing() * 2.0f } };
-                        ImGui::BeginGroup();
-                        // Ribbon callback draws content only (no Begin/End)
-                        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(6.0f, 4.0f));
-                        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(6.0f, 4.0f));
-                        m_ribbonbarCallback();
-                        ImGui::PopStyleVar(2);
-                        ImGui::EndGroup();
-                    }
-
-
-                    if (ImGui::IsItemHovered())
-                        m_TitleBarHovered = false;
-                }
-
-                ImGui::ResumeLayout();
-
-            }
-
-            {
-                // Centered Window title
-                ImVec2 currentCursorPos = ImGui::GetCursorPos();
-                ImVec2 textSize = ImGui::CalcTextSize("m_Specification");
-                ImGui::SetCursorPos(ImVec2(ImGui::GetWindowWidth() * 0.5f - textSize.x * 0.5f, 2.0f + windowPadding.y + 6.0f));
-                ImGui::Text("%s", "m_Specification"); // Draw title
-                ImGui::SetCursorPos(currentCursorPos);
-            }
-
-            // Window buttons (top-right, grouped)
-            const ImU32 buttonColN = UI::Colors::ColorWithMultipliedValue(UI::Colors::Theme::text, 0.9f);
-            const ImU32 buttonColH = UI::Colors::ColorWithMultipliedValue(UI::Colors::Theme::text, 1.2f);
-            const ImU32 buttonColP = UI::Colors::Theme::textDarker;
-
-
-            ImGui::SetCursorPosY(ImGui::GetFrameHeightWithSpacing() / 2);
-
-            auto layout = HostUI::BeginHorizontal();
-
-            const float iconW = (m_iconSize.x > 0.0f) ? m_iconSize.x : 16.0f;
-            const float iconH = (m_iconSize.y > 0.0f) ? m_iconSize.y : 16.0f;
-
-            // Match your “feel” here (I used small, tight spacing)
-            const float gap = 8.0f;
-            const float rightPadding = 16.0f;
-
-            // total width of 3 buttons + 2 gaps + right padding
-            const float totalFromRight = rightPadding + (iconW * 3.0f) + (gap * 2.0f);
-
-            // Jump cursor so the FIRST button starts at the correct top-right X
-            HostUI::Spring(layout, totalFromRight);
-            HostUI::ShiftCursorY(8.0f);
-
-            ImGui::BeginGroup();
-
-            // Minimize
-            if (ImGui::InvisibleButton("Minimize", ImVec2(iconW, iconH)))
-            {
-                if (m_window) glfwIconifyWindow(m_window);
-            }
-            HostUI::DrawButtonImage(m_iconMinimize, buttonColN, buttonColH, buttonColP);
-
-            ImGui::SameLine(0.0f, gap);
-
-            // Maximize / Restore
-           // const bool isMaximized = IsMaximized();
-            if (ImGui::InvisibleButton("Maximize", ImVec2(iconW, iconH)))
-            {
-                if (isMaximized) glfwRestoreWindow(m_window);
-                else             glfwMaximizeWindow(m_window);
-            }
-            HostUI::DrawButtonImage(isMaximized ? m_iconRestore : m_iconMaximize, buttonColN, buttonColH, buttonColP);
-
-            ImGui::SameLine(0.0f, gap);
-
-            // Close
-            if (ImGui::InvisibleButton("Close", ImVec2(iconW, iconH)))
-            {
-                glfwSetWindowShouldClose(m_window, GLFW_TRUE);
-            }
-            HostUI::DrawButtonImage(
-                m_iconClose,
-                UI::Colors::Theme::text,
-                UI::Colors::ColorWithMultipliedValue(UI::Colors::Theme::text, 1.4f),
-                buttonColP
-            );
-
-            ImGui::EndGroup();
-
-
-        } // toolbar group
-        ImGui::End();
-        ImGui::PopStyleVar(3);
-        {
-            ImGuiWindowFlags window_flags = ImGuiWindowFlags_NoDocking;
-            ImGuiViewport* viewport = ImGui::GetMainViewport();
-
-            //float titlebarHeight = 130.0f; // Should match the titlebar window height
-            ImVec2 size = viewport->Size;
-
-            // Position BELOW the titlebar
-            ImGui::SetNextWindowPos(ImVec2(viewport->Pos.x, viewport->Pos.y + titlebarHeight));
-            ImGui::SetNextWindowSize(ImVec2(viewport->Size.x, viewport->Size.y - titlebarHeight));
-            ImGui::SetNextWindowViewport(viewport->ID);
-
-            ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
-            ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
-
-            window_flags |= ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_MenuBar
-                | ImGuiWindowFlags_NoCollapse
-                | ImGuiWindowFlags_NoResize
-                | ImGuiWindowFlags_NoMove;
-
-            window_flags |= ImGuiWindowFlags_NoBringToFrontOnFocus
-                | ImGuiWindowFlags_NoNavFocus;
-
-            const bool isMaximized = IsMaximized();
-            ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, isMaximized ? ImVec2(6.0f, 6.0f) : ImVec2(1.0f, 1.0f));
-            ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 3.0f);
-            ImGui::PushStyleColor(ImGuiCol_MenuBarBg, ImVec4{ 0.0f, 0.0f, 0.0f, 0.0f });
-
-            ImGui::Begin("DockSpaceWindow", nullptr, window_flags);
-            ImGui::PopStyleColor(); // MenuBarBg
-            ImGui::PopStyleVar(4);
-
-            {
-                ImGui::PushStyleColor(ImGuiCol_Border, IM_COL32(50, 50, 50, 255));
-                // Draw window border if needed
-                ImGui::PopStyleColor(); // ImGuiCol_Border
-            }
-
-            // Create the docking space (single dockspace for the whole app)
-            ImGuiID dockspace_id = ImGui::GetID("MainDockspace");
-            ImGui::DockSpace(dockspace_id, ImVec2(0.0f, 0.0f), ImGuiDockNodeFlags_PassthruCentralNode);
-
-            ImGui::End();
-        }
-    }
-
+    
     void ImGuiHost::render()
     {
         // Host does not render content; plugins do.
@@ -969,6 +716,8 @@ m_TitleBarHovered = ImGui::IsItemHovered();
             std::printf("[ImGuiHost] render() frame=%llu\n",
                 (unsigned long long)m_frameIndex);
         }
+        //taskRunner.get()->renderUI();
+
     }
 
     void ImGuiHost::endFrame()
@@ -1031,37 +780,547 @@ m_TitleBarHovered = ImGui::IsItemHovered();
         m_menubarCallback = menubarCallback;
     }
 
-void ImGuiHost::setRibbonbarCallback(const std::function<void()>& ribbonbarCallback)
+    void ImGuiHost::setRibbonbarCallback(const std::function<void()>& ribbonbarCallback)
+    {
+        printf("[ImGuiHost] setRibbonbarCallback: this=%p m_ribbonbarCallback=%p\n",
+            (void*)this,
+            (void*)&m_ribbonbarCallback);
+        std::function<void()> empty;
+        m_ribbonbarCallback.swap(empty);
+        printf("[ImGuiHost] setRibbonbarCallback: old swapped, assigning new\n");
+        m_ribbonbarCallback = ribbonbarCallback;
+        printf("[ImGuiHost] setRibbonbarCallback: done\n");
+    }
+
+
+
+    ports::UiPluginStatus ImGuiHost::getUiPluginStatus() const
+    {
+        ports::UiPluginStatus s;
+        s.enabled = m_uiPluginEnabled;
+        // This host does not load plugins itself in this build; mark as not-loaded but enabled state is tracked.
+        s.loaded = false;
+        s.id = "pistachio_ui";
+        s.name = "Pistachio UI";
+        s.version = "0.0.0";
+        s.featureGroup = "UI";
+        if (m_uiPluginHotReloadRequested)
+            s.lastError = "Hot reload requested (pending)";
+        return s;
+    }
+
+    void ImGuiHost::setUiPluginEnabled(bool enabled)
+    {
+        m_uiPluginEnabled = enabled;
+    }
+
+    void ImGuiHost::requestHotReloadUiPlugin()
+    {
+        m_uiPluginHotReloadRequested = true; // auto-clear pending after reload trigger
+
+    }
+    // -----------------------------------------------------------------------
+// ImGuiHost::beginFrame() — cleaned up
+// Replace the existing beginFrame() in ImGuiHost.cpp with this.
+// The large monolithic method is split into focused private helpers.
+// -----------------------------------------------------------------------
+
+void ImGuiHost::beginFrame()
 {
-    m_ribbonbarCallback = ribbonbarCallback;
+    ++m_frameIndex;
+    if (m_diagStdout)
+        std::printf("[ImGuiHost] >>> beginFrame frame=%llu\n",
+            (unsigned long long)m_frameIndex);
+
+    
+
+
+    beginFrame_PollAndNewFrame();
+    beginFrame_RenderTitlebar();
+    beginFrame_RenderDockSpace();
+
+   
+}
+
+// -----------------------------------------------------------------------
+// Private helpers — add declarations to ImGuiHost.h:
+//
+//   void beginFrame_PollAndNewFrame();
+//   void beginFrame_RenderTitlebar();
+//   void beginFrame_RenderDockSpace();
+//   void beginFrame_RenderLogo(ImDrawList* fg, const ImVec2& windowPadding, float titlebarVerticalOffset);
+//   void beginFrame_RenderMenuAndRibbon(const ImVec2& windowPadding, float titlebarVerticalOffset);
+//   void beginFrame_RenderWindowTitle(const ImVec2& windowPadding, float titlebarVerticalOffset);
+//   void beginFrame_RenderWindowButtons();
+//   bool beginFrame_HandleDragZone(const ImVec2& windowPadding, float titlebarVerticalOffset, float titlebarHeight);
+// -----------------------------------------------------------------------
+
+void ImGuiHost::beginFrame_PollAndNewFrame()
+{
+    glfwMakeContextCurrent(m_window);
+    glfwPollEvents();
+
+    ImGuiIO& io = ImGui::GetIO();
+
+    // Backend NewFrame — fork clobbers DisplaySize so we fix it after
+    ImGui_ImplGlfw_NewFrame();
+    ImGui_ImplOpenGL3_NewFrame();
+
+    // Force DisplaySize (must be non-zero)
+    {
+        int ww = 0, wh = 0, fbw = 0, fbh = 0;
+        glfwGetWindowSize(m_window, &ww, &wh);
+        glfwGetFramebufferSize(m_window, &fbw, &fbh);
+        if (ww <= 0) ww = 1;
+        if (wh <= 0) wh = 1;
+        io.DisplaySize = ImVec2((float)ww, (float)wh);
+        if (ww > 0 && wh > 0)
+            io.DisplayFramebufferScale = ImVec2((float)fbw / ww, (float)fbh / wh);
+    }
+
+    // Force mouse state after backend NewFrame
+    {
+        double mx, my;
+        glfwGetCursorPos(m_window, &mx, &my);
+        io.MousePos     = ImVec2((float)mx, (float)my);
+        io.MouseDown[0] = glfwGetMouseButton(m_window, GLFW_MOUSE_BUTTON_LEFT)   == GLFW_PRESS;
+        io.MouseDown[1] = glfwGetMouseButton(m_window, GLFW_MOUSE_BUTTON_RIGHT)  == GLFW_PRESS;
+        io.MouseDown[2] = glfwGetMouseButton(m_window, GLFW_MOUSE_BUTTON_MIDDLE) == GLFW_PRESS;
+    }
+
+ 
+    ImGui::NewFrame();
+
+
+    ImVec2 szMin, szMax, szRes, szClose;
+
+    bool ok1 = CreateTextureFromEmbeddedPng(g_WindowMinimizeIcon, (int)sizeof(g_WindowMinimizeIcon), m_glTexMinimize, m_iconMinimize, szMin);
+    bool ok2 = CreateTextureFromEmbeddedPng(g_WindowMaximizeIcon, (int)sizeof(g_WindowMaximizeIcon), m_glTexMaximize, m_iconMaximize, szMax);
+    bool ok3 = CreateTextureFromEmbeddedPng(g_WindowRestoreIcon, (int)sizeof(g_WindowRestoreIcon), m_glTexRestore, m_iconRestore, szRes);
+    bool ok4 = CreateTextureFromEmbeddedPng(g_WindowCloseIcon, (int)sizeof(g_WindowCloseIcon), m_glTexClose, m_iconClose, szClose);
+
+    if (!(ok1 && ok2 && ok3 && ok4))
+        return;
+
+    // Pick a consistent button icon size (you can scale in draw code too)
+    ImVec2 m_iconSize = ImVec2(16, 16);
+
+    // Push to host
+
+    setWindowControlIcons(
+        m_iconMinimize,
+        m_iconMaximize,
+        m_iconRestore,
+        m_iconClose,
+        m_iconSize
+    );
+}
+
+void ImGuiHost::beginFrame_RenderTitlebar()
+{
+    constexpr float k_titlebarHeight        = 96.0f;
+    const bool      isMaximized             = IsMaximized();
+    const float     titlebarVerticalOffset  = isMaximized ? 6.0f : 6.0f;
+
+    // Position titlebar window at top of viewport
+    ImGuiViewport* vp = ImGui::GetMainViewport();
+    ImGui::SetNextWindowPos(vp->Pos);
+    ImGui::SetNextWindowSize(ImVec2(vp->Size.x, k_titlebarHeight));
+    ImGui::SetNextWindowViewport(vp->ID);
+
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
+
+    constexpr ImGuiWindowFlags k_flags =
+        ImGuiWindowFlags_NoTitleBar   |
+        ImGuiWindowFlags_NoResize     |
+        ImGuiWindowFlags_NoMove       |
+        ImGuiWindowFlags_NoScrollbar  |
+        ImGuiWindowFlags_NoScrollWithMouse |
+        ImGuiWindowFlags_NoDocking;
+
+    ImGui::Begin("##Titlebar", nullptr, k_flags);
+    {
+        const ImVec2 windowPadding = ImGui::GetCurrentWindow()->WindowPadding;
+
+        // Background fill
+        {
+            ImGui::SetCursorPos(ImVec2(windowPadding.x, windowPadding.y + titlebarVerticalOffset));
+            const ImVec2 tMin = ImGui::GetCursorScreenPos();
+            const ImVec2 tMax = {
+                tMin.x + ImGui::GetWindowWidth() - windowPadding.y * 2.0f,
+                tMin.y + k_titlebarHeight
+            };
+            ImGui::GetBackgroundDrawList()->AddRectFilled(tMin, tMax, UI::Colors::Theme::titlebar);
+        }
+
+        beginFrame_RenderLogo(
+            ImGui::GetForegroundDrawList(), windowPadding, titlebarVerticalOffset);
+
+        beginFrame_HandleDragZone(
+            windowPadding, titlebarVerticalOffset, k_titlebarHeight);
+
+        beginFrame_RenderMenuAndRibbon(windowPadding, titlebarVerticalOffset);
+
+        beginFrame_RenderWindowTitle(windowPadding, titlebarVerticalOffset);
+
+        beginFrame_RenderWindowButtons();
+    }
+    ImGui::End();
+    ImGui::PopStyleVar(3);
+}
+
+void ImGuiHost::beginFrame_RenderLogo(
+    ImDrawList* fg,
+    const ImVec2& windowPadding,
+    float titlebarVerticalOffset)
+{
+    if (!m_AppHeaderIcon || m_AppHeaderIcon->GetTextureID() == 0)
+        return;
+
+    constexpr float k_logoW = 48.0f;
+    constexpr float k_logoH = 48.0f;
+
+    const ImVec2 offset(16.0f + windowPadding.x, 5.0f + windowPadding.y + titlebarVerticalOffset);
+    const ImVec2 rMin = { ImGui::GetItemRectMin().x + offset.x, ImGui::GetItemRectMin().y + offset.y };
+    const ImVec2 rMax = { rMin.x + k_logoW, rMin.y + k_logoH };
+
+    fg->AddImage(m_AppHeaderIcon->GetDescriptorSet(), rMin, rMax);
 }
 
 
 
-ports::UiPluginStatus ImGuiHost::getUiPluginStatus() const
+void ImGuiHost::beginFrame_HandleDragZone(
+    const ImVec2& windowPadding,
+    float titlebarVerticalOffset,
+    float titlebarHeight)
 {
-    ports::UiPluginStatus s;
-    s.enabled = m_uiPluginEnabled;
-    // This host does not load plugins itself in this build; mark as not-loaded but enabled state is tracked.
-    s.loaded = false;
-    s.id = "pistachio_ui";
-    s.name = "Pistachio UI";
-    s.version = "0.0.0";
-    s.featureGroup = "UI";
-    if (m_uiPluginHotReloadRequested)
-        s.lastError = "Hot reload requested (pending)";
-    return s;
+    ImGuiViewport* vp = ImGui::GetMainViewport();
+//
+//    const float w               = ImGui::GetContentRegionAvail().x;
+//    constexpr float k_btnArea   = 94.0f;
+//
+//    ImGui::SetCursorPos(ImVec2(windowPadding.x, windowPadding.y + titlebarVerticalOffset));
+//    ImGui::InvisibleButton("##titleBarDragZone", ImVec2(w - k_btnArea, titlebarHeight));
+//
+//
+//
+//    ImVec2 min = ImGui::GetItemRectMin();
+//    ImVec2 max = ImGui::GetItemRectMax();
+//
+//    ImGui::GetForegroundDrawList()->AddRect(
+//        min,
+//        max,
+//        IM_COL32(255, 0, 0, 255)
+//    );
+//
+//    ImGui::SetItemAllowOverlap();
+//    m_TitleBarHovered = ImGui::IsItemHovered();
+//
+//    const bool dragClicked = ImGui::IsItemClicked(ImGuiMouseButton_Left);
+//
+    // Suppress drag when mouse is over menu or ribbon strip
+    const ImVec2  mouse             = ImGui::GetMousePos();
+    const float   logoOffset        = 16.0f * 2.0f + 48.0f + windowPadding.x;
+    const float   menuTopY          = vp->Pos.y + windowPadding.y + titlebarVerticalOffset;
+    const float   menuH             = ImGui::GetFrameHeightWithSpacing();
+    const bool    overMenuOrRibbon  =
+        (mouse.x >= vp->Pos.x + logoOffset) &&
+        (mouse.y >= menuTopY) &&
+        (mouse.y <= menuTopY + menuH * 2.0f);
+//
+//#ifdef _WIN32
+//    if (dragClicked && !overMenuOrRibbon)
+//    {
+//        ReleaseCapture();
+//        SendMessage(glfwGetWin32Window(m_window), WM_NCLBUTTONDOWN, HTCAPTION, 0);
+//    }
+//#endif
+
+
+
+    if (ImGui::IsMouseClicked(ImGuiMouseButton_Left))
+    {
+        ImVec2 mouse = ImGui::GetMousePos();
+
+        bool inTitleBar =
+            mouse.y >= vp->Pos.y &&
+            mouse.y <= vp->Pos.y + titlebarHeight;
+
+        if (inTitleBar && !overMenuOrRibbon)
+        {
+            ReleaseCapture();
+            SendMessage(
+                glfwGetWin32Window(m_window),
+                WM_NCLBUTTONDOWN,
+                HTCAPTION,
+                0);
+        }
+    }
+}
+void ImGuiHost::beginFrame_RenderMenuAndRibbon(
+    const ImVec2& windowPadding,
+    float         titlebarVerticalOffset)
+{
+    const float logoOffset = 16.0f * 2.0f + 48.0f + windowPadding.x;
+    const float menubarOffset = 2.0f;
+
+    ImGui::SuspendLayout();
+    ImGui::SetItemAllowOverlap();
+
+    // Menubar row
+    ImGui::SetCursorPos(ImVec2(logoOffset, menubarOffset + titlebarVerticalOffset));
+    {
+        const ImRect menuRect = {
+            ImGui::GetCursorPos(),
+            { ImGui::GetContentRegionAvail().x + ImGui::GetCursorScreenPos().x,
+              ImGui::GetFrameHeightWithSpacing() }
+        };
+        ImGui::BeginGroup();
+        if (HostUI::BeginMenubar(menuRect))
+        {
+            // Host menus first (File, Views, Plugins etc.) via callback
+            if (m_menubarCallback)
+                m_menubarCallback();
+
+            // Then plugin-contributed menus via registry
+            m_registry.renderMenuBar();
+        }
+        HostUI::EndMenubar();
+        ImGui::EndGroup();
+    }
+
+    // Ribbon row
+    {
+        ImGui::SetCursorPos(ImVec2(
+            logoOffset,
+            6.0f + titlebarVerticalOffset + ImGui::GetFrameHeightWithSpacing()));
+
+        ImGui::BeginGroup();
+        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(6.0f, 4.0f));
+        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(6.0f, 4.0f));
+
+        // Host ribbon items via callback
+        if (m_ribbonbarCallback)
+            m_ribbonbarCallback();
+
+        // Plugin ribbon contributions via registry
+        m_registry.renderRibbonBar();
+
+        ImGui::PopStyleVar(2);
+        ImGui::EndGroup();
+    }
+
+    if (ImGui::IsItemHovered())
+        m_TitleBarHovered = false;
+
+    ImGui::ResumeLayout();
 }
 
-void ImGuiHost::setUiPluginEnabled(bool enabled)
+
+//void ImGuiHost::beginFrame_RenderMenuAndRibbon(
+//    const ImVec2& windowPadding,
+//    float         titlebarVerticalOffset)
+//{
+//    const float logoOffset = 16.0f * 2.0f + 48.0f + windowPadding.x;
+// 
+//    ImGui::SuspendLayout();
+//    ImGui::SetItemAllowOverlap();
+// 
+//    // Menubar row
+//    ImGui::SetCursorPos(ImVec2(logoOffset, 6.0f + titlebarVerticalOffset));
+//    {
+//        const ImRect menuRect = {
+//            ImGui::GetCursorPos(),
+//            { ImGui::GetContentRegionAvail().x + ImGui::GetCursorScreenPos().x,
+//              ImGui::GetFrameHeightWithSpacing() }
+//        };
+//        ImGui::BeginGroup();
+//        if (HostUI::BeginMenubar(menuRect))
+//        {
+//            // Host menus first (File, Views, Plugins etc.) via callback
+//            if (m_menubarCallback)
+//                m_menubarCallback();
+// 
+//            // Then plugin-contributed menus via registry
+//            m_registry.renderMenuBar();
+//        }
+//        HostUI::EndMenubar();
+//        ImGui::EndGroup();
+//    }
+// 
+//    // Ribbon row
+//    {
+//        ImGui::SetCursorPos(ImVec2(
+//            logoOffset,
+//            6.0f + titlebarVerticalOffset + ImGui::GetFrameHeightWithSpacing()));
+// 
+//        ImGui::BeginGroup();
+//        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(6.0f, 4.0f));
+//        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,  ImVec2(6.0f, 4.0f));
+// 
+//        // Host ribbon items via callback
+//        if (m_ribbonbarCallback)
+//            m_ribbonbarCallback();
+// 
+//        // Plugin ribbon contributions via registry
+//        m_registry.renderRibbonBar();
+// 
+//        ImGui::PopStyleVar(2);
+//        ImGui::EndGroup();
+//    }
+// 
+//    if (ImGui::IsItemHovered())
+//        m_TitleBarHovered = false;
+// 
+//    ImGui::ResumeLayout();
+//}
+// 
+//void ImGuiHost::beginFrame_RenderMenuAndRibbon(
+//    const ImVec2& windowPadding,
+//    float titlebarVerticalOffset)
+//{
+//    if (!m_menubarCallback)
+//        return;
+//
+//    const float logoOffset = 16.0f * 2.0f + 48.0f + windowPadding.x;
+//
+//    ImGui::SuspendLayout();
+//    ImGui::SetItemAllowOverlap();
+//
+//    // Menubar row
+//    ImGui::SetCursorPos(ImVec2(logoOffset, 6.0f + titlebarVerticalOffset));
+//    {
+//        const ImRect menuRect = {
+//            ImGui::GetCursorPos(),
+//            { ImGui::GetContentRegionAvail().x + ImGui::GetCursorScreenPos().x,
+//              ImGui::GetFrameHeightWithSpacing() }
+//        };
+//        ImGui::BeginGroup();
+//        if (HostUI::BeginMenubar(menuRect))
+//            m_menubarCallback();
+//        HostUI::EndMenubar();
+//        ImGui::EndGroup();
+//    }
+//
+//    // Ribbon row
+//    if (m_ribbonbarCallback)
+//    {
+//        ImGui::SetCursorPos(ImVec2(
+//            logoOffset,
+//            6.0f + titlebarVerticalOffset + ImGui::GetFrameHeightWithSpacing()));
+//
+//        ImGui::BeginGroup();
+//        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(6.0f, 4.0f));
+//        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,  ImVec2(6.0f, 4.0f));
+//        m_ribbonbarCallback();
+//        ImGui::PopStyleVar(2);
+//        ImGui::EndGroup();
+//    }
+//
+//    if (ImGui::IsItemHovered())
+//        m_TitleBarHovered = false;
+//
+//    ImGui::ResumeLayout();
+//}
+
+void ImGuiHost::beginFrame_RenderWindowTitle(
+    const ImVec2& windowPadding,
+    float titlebarVerticalOffset)
 {
-    m_uiPluginEnabled = enabled;
+    const ImVec2 saved  = ImGui::GetCursorPos();
+    const ImVec2 tSize  = ImGui::CalcTextSize(m_windowTitle.c_str());
+    ImGui::SetCursorPos(ImVec2(
+        ImGui::GetWindowWidth() * 0.5f - tSize.x * 0.5f,
+        2.0f + windowPadding.y + 10.0f));
+    ImGui::TextUnformatted(m_windowTitle.c_str());
+    ImGui::SetCursorPos(saved);
 }
 
-void ImGuiHost::requestHotReloadUiPlugin()
+void ImGuiHost::beginFrame_RenderWindowButtons()
 {
-    m_uiPluginHotReloadRequested = false; // auto-clear pending after reload trigger
+    const ImU32 colN = UI::Colors::ColorWithMultipliedValue(UI::Colors::Theme::text, 0.9f);
+    const ImU32 colH = UI::Colors::ColorWithMultipliedValue(UI::Colors::Theme::text, 1.2f);
+    const ImU32 colP = UI::Colors::Theme::textDarker;
 
+    const float iconW = (m_iconSize.x > 0.0f) ? m_iconSize.x : 16.0f;
+    const float iconH = (m_iconSize.y > 0.0f) ? m_iconSize.y : 16.0f;
+    constexpr float k_gap          = 8.0f;
+    constexpr float k_rightPadding = 16.0f;
+
+    ImGui::SetCursorPosY(ImGui::GetFrameHeightWithSpacing() / 2);
+
+    auto layout = HostUI::BeginHorizontal();
+    HostUI::Spring(layout, k_rightPadding + iconW * 3.0f + k_gap * 2.0f);
+    HostUI::ShiftCursorY(8.0f);
+
+    ImGui::BeginGroup();
+
+    // Minimize
+    if (ImGui::InvisibleButton("Minimize", ImVec2(iconW, iconH)))
+        if (m_window) glfwIconifyWindow(m_window);
+    HostUI::DrawButtonImage(m_iconMinimize, colN, colH, colP);
+
+    ImGui::SameLine(0.0f, k_gap);
+
+    // Maximize / Restore
+    const bool isMax = IsMaximized();
+    if (ImGui::InvisibleButton("Maximize", ImVec2(iconW, iconH)))
+        isMax ? glfwRestoreWindow(m_window) : glfwMaximizeWindow(m_window);
+    HostUI::DrawButtonImage(isMax ? m_iconRestore : m_iconMaximize, colN, colH, colP);
+
+    ImGui::SameLine(0.0f, k_gap);
+
+    // Close
+    if (ImGui::InvisibleButton("Close", ImVec2(iconW, iconH)))
+        glfwSetWindowShouldClose(m_window, GLFW_TRUE);
+    HostUI::DrawButtonImage(
+        m_iconClose,
+        UI::Colors::Theme::text,
+        UI::Colors::ColorWithMultipliedValue(UI::Colors::Theme::text, 1.4f),
+        colP);
+
+    ImGui::EndGroup();
 }
 
+void ImGuiHost::beginFrame_RenderDockSpace()
+{
+    const float k_titlebarHeight = 96.0f;
+
+    ImGuiViewport* vp = ImGui::GetMainViewport();
+
+    ImGui::SetNextWindowPos(ImVec2(vp->Pos.x, vp->Pos.y + k_titlebarHeight));
+    ImGui::SetNextWindowSize(ImVec2(vp->Size.x, vp->Size.y - k_titlebarHeight));
+    ImGui::SetNextWindowViewport(vp->ID);
+
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding,   0.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 2.0f);
+
+    const bool isMax = IsMaximized();
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,
+        isMax ? ImVec2(10.0f, 10.0f) : ImVec2(10.0f, 10.0f));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 3.0f);
+    ImGui::PushStyleColor(ImGuiCol_MenuBarBg, ImVec4(0, 0, 0, 0));
+
+    constexpr ImGuiWindowFlags k_flags =
+        ImGuiWindowFlags_NoDocking          |
+        ImGuiWindowFlags_NoTitleBar         |
+        ImGuiWindowFlags_MenuBar            |
+        ImGuiWindowFlags_NoCollapse         |
+        ImGuiWindowFlags_NoResize           |
+        ImGuiWindowFlags_NoMove             |
+        ImGuiWindowFlags_NoBringToFrontOnFocus |
+        ImGuiWindowFlags_NoNavFocus;
+
+    ImGui::Begin("DockSpaceWindow", nullptr, k_flags);
+    ImGui::PopStyleColor(); // MenuBarBg
+    ImGui::PopStyleVar(4);
+
+    ImGui::DockSpace(
+        ImGui::GetID("MainDockspace"),
+        ImVec2(0.0f, 0.0f),
+        ImGuiDockNodeFlags_PassthruCentralNode);
+    ImGui::End();
+}
 } // namespace adapters

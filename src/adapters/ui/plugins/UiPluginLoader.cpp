@@ -1,5 +1,6 @@
 
 #include "adapters/ui/plugins/UiPluginLoader.h"
+#include "domain/dataContext.h"
 
 #ifdef _WIN32
   #include <windows.h>
@@ -59,10 +60,24 @@ bool UiPluginLoader::shadowCopyToUnique(const std::string& sourceDllPath, std::s
         fs::create_directories(loadedDir);
 
 #ifdef _WIN32
-        fs::path dst = loadedDir / (src.stem().string() + "_" + nowMillis() + "_" + std::to_string(::GetCurrentProcessId()) + src.extension().string());
+        // Clean up old shadow copies for this process before making a new one
+        std::error_code ec;
+        const std::string pidSuffix = "_" + std::to_string(::GetCurrentProcessId());
+        for (auto& entry : fs::directory_iterator(loadedDir, ec))
+        {
+            const std::string fname = entry.path().filename().string();
+            if (fname.find(src.stem().string()) != std::string::npos &&
+                fname.find(pidSuffix) != std::string::npos)
+            {
+                fs::remove(entry.path(), ec); // ignore errors — file may still be loaded
+            }
+        }
 
         for (int i = 0; i < 50; ++i)
         {
+            // Generate a new unique dst name each retry so partial files don't block us
+            fs::path dst = loadedDir / (src.stem().string() + "_" + nowMillis() + pidSuffix + src.extension().string());
+
             HANDLE h = CreateFileA(
                 src.string().c_str(),
                 GENERIC_READ,
@@ -78,10 +93,15 @@ bool UiPluginLoader::shadowCopyToUnique(const std::string& sourceDllPath, std::s
                 if (CopyFileA(src.string().c_str(), dst.string().c_str(), FALSE))
                 {
                     outLoadedPath = dst.string();
-                    return true;
+                    printf("[UiPluginLoader]  ::shadowCopyToUnique done\n");
+                     return true;
                 }
+                // CopyFileA failed — delete partial dst before retry
+                fs::remove(dst, ec);
             }
-            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            
+            printf("[UiPluginLoader]  ::shadowCopyToUnique RETRY sleeping for 1000 milliseconds\n");
+            std::this_thread::sleep_for(std::chrono::milliseconds(1000));
         }
         return false;
 #else
@@ -97,23 +117,22 @@ bool UiPluginLoader::shadowCopyToUnique(const std::string& sourceDllPath, std::s
     }
 }
 
-bool UiPluginLoader::load(UiHostServices& svc)
+bool UiPluginLoader::load(UiHostServices& svc, domain::DataContext& dataContext, const fs::path& filename)
 {
+
+
     m_lastSvc = &svc;
+	m_lastDataContext = &dataContext;
 
     m_lastError.clear();
     clearManifest();
 
+    printf("[UiPluginLoader]  ::load calling clearManifest done\n");
+
     if (m_module)
         return true;
-
-    fs::path pluginsDir = getExeDir() / "plugins";
-#ifdef _WIN32
-    fs::path src = pluginsDir / "pistachio_ui.dll";
-#else
-    fs::path src = pluginsDir / "libpistachio_ui.so";
-#endif
-    m_sourcePath = src.string();
+ 
+    m_sourcePath = filename.string();
 
     std::string loaded;
     if (!shadowCopyToUnique(m_sourcePath, loaded))
@@ -122,14 +141,17 @@ bool UiPluginLoader::load(UiHostServices& svc)
         return false;
     }
     m_loadedPath = loaded;
+    printf("[UiPluginLoader]  shadowCopyToUnique done\n");
 
 #ifdef _WIN32
+    printf("[UiPluginLoader]  call LoadLibraryA\n");
     HMODULE lib = LoadLibraryA(m_loadedPath.c_str());
     if (!lib)
     {
         m_lastError = "LoadLibrary failed: " + m_loadedPath;
         return false;
     }
+
 
     auto createFn  = (decltype(&pistachio_create_ui_module))GetProcAddress(lib, "pistachio_create_ui_module");
     auto destroyFn = (decltype(&pistachio_destroy_ui_module))GetProcAddress(lib, "pistachio_destroy_ui_module");
@@ -142,6 +164,7 @@ bool UiPluginLoader::load(UiHostServices& svc)
         return false;
     }
 
+
     if (manFn)
     {
         const UiPluginManifestV1* m = manFn();
@@ -153,6 +176,7 @@ bool UiPluginLoader::load(UiHostServices& svc)
             if (m->feature_group) m_manifestFeatureGroup = m->feature_group;
         }
     }
+    printf("[UiPluginLoader]  found  createFn,destroyFn, manFn .\n");
 
     IUiModule* mod = createFn();
     if (!mod)
@@ -161,11 +185,14 @@ bool UiPluginLoader::load(UiHostServices& svc)
         m_lastError = "Create module returned null";
         return false;
     }
+    printf("[UiPluginLoader]  Create module done.\n");
 
     m_lib = (void*)lib;
     m_module = mod;
+    printf("[UiPluginLoader]  call module onload.\n");
+    m_module->onLoad(svc,dataContext);
+    printf("[UiPluginLoader]  call module onload done\n");
 
-    m_module->onLoad(svc);
     return true;
 #else
     m_lastError = "Non-Windows loader not implemented.";
@@ -173,43 +200,52 @@ bool UiPluginLoader::load(UiHostServices& svc)
 #endif
 }
 
-void UiPluginLoader::unload(UiHostServices& svc)
+void UiPluginLoader::unload(UiHostServices& svc, domain::DataContext& dataContext)
 {
     (void)svc;
     unload();
 }
-
+ 
 void UiPluginLoader::unload()
 {
     if (!m_module || !m_lib)
+    {
+        printf("[HotReload] unload: skipped (module=%p lib=%p)\n", m_module, m_lib);
         return;
+    }
 
 #ifdef _WIN32
     auto lib = (HMODULE)m_lib;
     auto destroyFn = (decltype(&pistachio_destroy_ui_module))GetProcAddress(lib, "pistachio_destroy_ui_module");
 
+    printf("[HotReload] unload: calling onUnload (module=%p)\n", (void*)m_module);
     if (m_lastSvc)
-        m_module->onUnload(*m_lastSvc);
+        m_module->onUnload(*m_lastSvc,*m_lastDataContext);
+    else
+        printf("[HotReload] unload: WARNING - m_lastSvc is null, onUnload skipped!\n");
 
+    printf("[HotReload] unload: calling destroyFn\n");
     if (destroyFn)
         destroyFn(m_module);
 
     m_module = nullptr;
 
+    printf("[HotReload] unload: FreeLibrary\n");
     FreeLibrary(lib);
     m_lib = nullptr;
-
+    printf("[HotReload] unload: done\n");
     clearManifest();
 #endif
 }
 
-bool UiPluginLoader::reload(UiHostServices& svc)
+bool UiPluginLoader::reload(UiHostServices& svc, domain::DataContext& dataContext, const fs::path& filename)
 {
     (void)svc;
-    return reload();
+    return reload(filename);
 }
 
-bool UiPluginLoader::reload()
+ 
+bool UiPluginLoader::reload(const fs::path& filename)
 {
     if (!m_lastSvc)
     {
@@ -217,10 +253,9 @@ bool UiPluginLoader::reload()
         return false;
     }
     unload();
-    return load(*m_lastSvc);
+    return load(*m_lastSvc,*m_lastDataContext, filename);
 }
-
-void UiPluginLoader::render(UiHostServices& svc)
+void UiPluginLoader::render(UiHostServices& svc, domain::DataContext& dataContext)
 {
     (void)svc;
     render();
@@ -229,5 +264,5 @@ void UiPluginLoader::render(UiHostServices& svc)
 void UiPluginLoader::render()
 {
     if (m_module && m_lastSvc)
-        m_module->render(*m_lastSvc);
+        m_module->render(*m_lastSvc,*m_lastDataContext);
 }

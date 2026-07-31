@@ -4,6 +4,8 @@ project(Pistachio VERSION 1.0.0 LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+
+
 # -------------------------
 # Output directories (multi-config safe)
 # -------------------------
@@ -64,6 +66,7 @@ message(STATUS "OpenCASCADE binaries: ${OpenCASCADE_BINARY_DIR}")
 # Packages
 # -------------------------
 find_package(OpenGL REQUIRED)
+find_package(Threads REQUIRED)
 
 
 ## GLAD (OpenGL loader)
@@ -122,12 +125,37 @@ set(IMGUI_DIR    "${EXTERNAL_DIR}/imgui-fork")
 set(GLM_DIR      "${EXTERNAL_DIR}/glm")
 set(STB_DIR      "${EXTERNAL_DIR}/stb")
 set(NLOHMANN_JSON_DIR "${EXTERNAL_DIR}/nlohmann_json")
+set(CLIPPER2_DIR "${EXTERNAL_DIR}/Clipper2")
 
 set(IMGUI_CUSTOM_DIR "${CMAKE_CURRENT_SOURCE_DIR}/ImGui")
 
 # ---- GLFW from submodule ----
 add_subdirectory("${GLFW_DIR}")
 
+# ---- Clipper2 (polygon clipping/offsetting) from submodule ----
+# Repo: https://github.com/AngusJohnson/Clipper2.git
+# The actual CMake project for the C++ library lives under CPP/, and
+# produces a "Clipper2" target (plus "Clipper2Z" if CLIPPER2_USINGZ is ON).
+# We don't need its tests/examples/benchmarks, so they're disabled below.
+if(EXISTS "${CLIPPER2_DIR}/CPP/CMakeLists.txt")
+    set(CLIPPER2_TESTS OFF CACHE BOOL "" FORCE)
+    set(CLIPPER2_EXAMPLES OFF CACHE BOOL "" FORCE)
+    set(CLIPPER2_UTILS OFF CACHE BOOL "" FORCE)
+    add_subdirectory("${CLIPPER2_DIR}/CPP" "${CMAKE_BINARY_DIR}/Clipper2")
+    target_compile_options(Clipper2 PRIVATE /EHsc)
+
+
+else()
+    message(FATAL_ERROR
+        "Clipper2 not found under: ${CLIPPER2_DIR}
+"
+        "Add it as a submodule, e.g.:
+"
+        "  git submodule add https://github.com/AngusJohnson/Clipper2.git external/Clipper2
+")
+endif()
+ 
+ 
 # ---- nlohmann-json (header-only) ----
 add_library(nlohmann_json INTERFACE)
 target_include_directories(nlohmann_json INTERFACE
@@ -205,21 +233,32 @@ file(GLOB_RECURSE SOLVER_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/src/adapters/solvers/*.cpp"
 )
 
+# CONFIGURE_DEPENDS makes CMake re-glob whenever you build, so new domain
+# files get picked up without needing to re-run cmake configure manually.
+# (Re-running configure is still the more "correct" CMake workflow if you
+# ever see stale results, but this covers the common case.)
+file(GLOB_RECURSE DOMAIN_SOURCES CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/domain/*.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/domain/*.h"
+)
+
 add_library(pistachio_core SHARED
     # Domain
-    src/domain/Model.cpp
-    src/domain/Geometry.cpp
-    src/domain/SketchEntities.cpp
-    src/domain/SketchConstraints.cpp
+    ${DOMAIN_SOURCES}
 
     # Core
     src/core/Application.cpp
     src/core/ConfigStore.cpp
     src/core/rendering/SketchRenderBuilder.cpp
+    src/core/TaskRunner.cpp
+
 
     # Adapters
     src/adapters/rendering/OcctRenderer.cpp
     src/adapters/loaders/StepFileLoader.cpp
+    src/adapters/loaders/StlMeshLoader.cpp
+     src/adapters/loaders/StlLoaderAdapter.cpp
+
     src/adapters/exporters/ObjExporter.cpp
     src/adapters/exporters/StlExporter.cpp
 
@@ -228,11 +267,15 @@ add_library(pistachio_core SHARED
     src/adapters/persistence/SketchDocumentJson.cpp
     src/adapters/persistence/JsonSketchDocumentAdapter.cpp
 
+    # Slicers
+    src/adapters/slicers/planarSlicer.cpp
+
     ${SOLVER_SOURCES}
 )
 
 target_include_directories(pistachio_core PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/ports
     ${GLM_DIR}
     ${STB_DIR}
     "${NLOHMANN_JSON_DIR}/single_include"
@@ -245,6 +288,7 @@ target_link_directories(pistachio_core PUBLIC
 target_link_libraries(pistachio_core PUBLIC
     imgui
     nlohmann_json
+    Threads::Threads
 
     # OpenCASCADE libs
     TKernel
@@ -280,15 +324,13 @@ endif()
 add_library(pistachio_ui SHARED
     src/adapters/ui/ImGuiAdapter.cpp
     src/adapters/ui/UI.cpp
-
-    # Defines UI::Colors::Theme::* (used by ImGuiHost drawing code)
     src/adapters/ui/ThemeColors.cpp
-
     src/adapters/ui/plugins/PistachioUiModule.cpp
 )
 
 target_include_directories(pistachio_ui PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/ports
     "${IMGUI_DIR}"
     "${IMGUI_DIR}/backends"
     "${IMGUI_CUSTOM_DIR}"
@@ -301,8 +343,10 @@ target_link_libraries(pistachio_ui PRIVATE
     imgui
     OpenGL::GL
     nlohmann_json
-    glad
-    walnut
+    # glad and walnut come transitively through imgui/pistachio_core.
+    # Linking them here again would produce a second static copy in the DLL
+    # with separate global state (GLAD function tables, stb_image globals)
+    # which causes heap corruption when the DLL is hot-reloaded.
 )
 
 
@@ -325,6 +369,7 @@ add_executable(${PROJECT_NAME}
     src/adapters/ui/ImGuiHost.cpp
     src/adapters/ui/ThemeColors.cpp
     src/adapters/ui/plugins/UiPluginLoader.cpp
+    src/adapters/ui/plugins/UiPluginRegistry.cpp
 
     # --- OpenGL 3D viewport (offscreen FBO -> ImGui::Image) ---
     src/adapters/rendering/GLLoader.cpp
@@ -335,7 +380,11 @@ add_executable(${PROJECT_NAME}
 
 target_include_directories(${PROJECT_NAME} PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/ports
     ${GLM_DIR}
+    "${IMGUI_DIR}"
+    "${IMGUI_DIR}/backends"
+    "${IMGUI_CUSTOM_DIR}"
 )
 
 target_link_libraries(${PROJECT_NAME} PRIVATE
@@ -351,4 +400,120 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
 
 if(WIN32)
     target_link_libraries(${PROJECT_NAME} PRIVATE opengl32)
+endif()
+
+# -------------------------
+# pistachio_config plugin
+# -------------------------
+add_library(pistachio_config SHARED
+    src/adapters/ui/plugins/PistachioConfigPlugin.cpp
+)
+
+target_include_directories(pistachio_config PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/ports
+    "${IMGUI_DIR}"
+    "${IMGUI_DIR}/backends"
+    "${IMGUI_CUSTOM_DIR}"
+    ${GLM_DIR}
+    ${STB_DIR}
+)
+
+target_link_libraries(pistachio_config PRIVATE
+    pistachio_core
+    imgui
+    nlohmann_json
+)
+
+foreach(cfg Debug Release RelWithDebInfo MinSizeRel)
+    string(TOUPPER "${cfg}" CFGU)
+    set_target_properties(pistachio_config PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY_${CFGU} "${CMAKE_BINARY_DIR}/bin/${cfg}/plugins"
+        LIBRARY_OUTPUT_DIRECTORY_${CFGU} "${CMAKE_BINARY_DIR}/bin/${cfg}/plugins"
+        ARCHIVE_OUTPUT_DIRECTORY_${CFGU} "${CMAKE_BINARY_DIR}/lib/${cfg}"
+    )
+endforeach()
+
+# -------------------------
+# pistachio_slicer_core plugin
+# -------------------------
+add_library(pistachio_slicer_core SHARED
+    src/adapters/ui/plugins/SlicerCorePlugin/core/SlicerCorePlugin.cpp
+    src/adapters/ui/plugins/SlicerCorePlugin/core/FolderScanner.cpp
+    src/adapters/ui/plugins/SlicerCorePlugin/core/StlPreviewRenderer.cpp
+    src/adapters/ui/plugins/SlicerCorePlugin/domain/Project.cpp
+    src/adapters/ui/plugins/SlicerCorePlugin/core/BuildPLateRenderer.cpp
+    src/adapters/ui/plugins/SlicerCorePlugin/domain/BoundaryBox.h
+    src/adapters/ui/plugins/SlicerCorePlugin/domain/BoundaryBox.cpp
+ 
+    src/adapters/ui/plugins/SlicerCorePlugin/core/ModelInstanceFactory.cpp
+    src/adapters/ui/plugins/SlicerCorePlugin/core/SelectionManager.cpp
+    src/adapters/ui/plugins/SlicerCorePlugin/core/NavigationManager.cpp
+
+
+)
+
+target_include_directories(pistachio_slicer_core PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/ports
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/adapters/ui/plugins/SlicerCorePlugin
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/adapters/ui/plugins/SlicerCorePlugin/core
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/adapters/ui/plugins/SlicerCorePlugin/domain
+    "${IMGUI_DIR}"
+    "${IMGUI_DIR}/backends"
+    "${IMGUI_CUSTOM_DIR}"
+    ${GLM_DIR}
+    ${STB_DIR}
+    "${CLIPPER2_DIR}/CPP/Clipper2Lib/include"
+ )
+
+target_link_libraries(pistachio_slicer_core PRIVATE
+    pistachio_core
+    imgui
+    nlohmann_json
+    Clipper2
+    freetype          
+)
+
+foreach(cfg Debug Release RelWithDebInfo MinSizeRel)
+    string(TOUPPER "${cfg}" CFGU)
+    set_target_properties(pistachio_slicer_core PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY_${CFGU} "${CMAKE_BINARY_DIR}/bin/${cfg}/plugins"
+        LIBRARY_OUTPUT_DIRECTORY_${CFGU} "${CMAKE_BINARY_DIR}/bin/${cfg}/plugins"
+        ARCHIVE_OUTPUT_DIRECTORY_${CFGU} "${CMAKE_BINARY_DIR}/lib/${cfg}"
+    )
+endforeach()
+
+# -------------------------
+# pistachio_ui_stub (minimal hot-reload test plugin)
+# -------------------------
+add_library(pistachio_ui_stub SHARED
+    src/adapters/ui/plugins/StubUiModule.cpp
+)
+
+target_include_directories(pistachio_ui_stub PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+
+target_link_libraries(pistachio_ui_stub PRIVATE
+    pistachio_core
+    imgui
+)
+
+foreach(cfg Debug Release RelWithDebInfo MinSizeRel)
+    string(TOUPPER "${cfg}" CFGU)
+    set_target_properties(pistachio_ui_stub PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY_${CFGU} "${CMAKE_BINARY_DIR}/bin/${cfg}/plugins"
+        LIBRARY_OUTPUT_DIRECTORY_${CFGU} "${CMAKE_BINARY_DIR}/bin/${cfg}/plugins"
+        ARCHIVE_OUTPUT_DIRECTORY_${CFGU} "${CMAKE_BINARY_DIR}/lib/${cfg}"
+    )
+endforeach()
+
+# -------------------------
+# Switch between real and stub UI plugin
+# cmake -DUSE_STUB_UI=ON to test hot-reload with the stub
+# -------------------------
+option(USE_STUB_UI "Use stub UI plugin for hot-reload testing" OFF)
+if(USE_STUB_UI)
+    target_compile_definitions(${PROJECT_NAME} PRIVATE USE_STUB_UI=1)
 endif()

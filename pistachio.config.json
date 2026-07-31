@@ -1,4 +1,14 @@
 {
+  "filament.Settings.0.generalSettings": {
+    "colour": "#FF6600FF",
+    "name": "ABS",
+    "temp": 230
+  },
+  "filament.Settings.1.generalSettings": {
+    "colour": "#FF6600FF",
+    "name": "PLA",
+    "temp": 230
+  },
   "pistachio.Render": {
     "msaa.samples": 4
   },
@@ -8,13 +18,45 @@
   },
   "pistachio.UI": {
     "config.showAdvanced": true,
-    "config.windowOpen": true,
-    "theme": "Pistachio",
-    "views.fileOperations": false,
-    "views.modelInfo": false,
-    "views.sketch3dViewport": false,
-    "views.sketchEditor": false,
-    "views.status": false,
-    "views.viewport3d": false
+    "config.windowOpen": false,
+    "theme": "DARK",
+    "views.fileOperations": true,
+    "views.modelInfo": true,
+    "views.sketch3dViewport": true,
+    "views.sketchEditor": true,
+    "views.slicerOperations": true,
+    "views.status": true,
+    "views.viewport3d": true
+  },
+  "pistachio.UI.theme.selections.0": {
+    "name": "DARK"
+  },
+  "pistachio.UI.theme.selections.1": {
+    "name": "WHITE"
+  },
+  "slicer.Settings": {
+    "bed.size.X": "250",
+    "bed.size.Y": "250",
+    "bed.temp": "250",
+    "slicer.firstLayerHeight": 0.2,
+    "slicer.layerHeight": 0.2
+  },
+  "slicer.toolheads.0.generalSettings": {
+    "filament": "ABS",
+    "hotEndFanSpeed": 250,
+    "hotEndFanSpeedLayers": "0,1,2,3",
+    "hotEndFanSpeedLayersSpeed": 80,
+    "hotEndMaxTemp": 250,
+    "nozzle.size": 0.2,
+    "toolHead.ExtrusionMaxSpeed": 250
+  },
+  "slicer.toolheads.1.generalSettings": {
+    "filament": "ABS",
+    "hotEndFanSpeed": 250,
+    "hotEndFanSpeedLayers": "0,1,2,3",
+    "hotEndFanSpeedLayersSpeed": 80,
+    "hotEndMaxTemp": 250,
+    "nozzle.size": 0.2,
+    "toolHead.ExtrusionMaxSpeed": 250
   }
 }

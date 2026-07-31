@@ -1,7 +1,13 @@
 
 #pragma once
 #include "adapters/ui/plugins/UiModuleApi.h"
+#include "domain/DataContext.h"
+
 #include <string>
+
+#include <filesystem>
+
+namespace fs = std::filesystem;
 
 class UiPluginLoader
 {
@@ -10,14 +16,14 @@ public:
     ~UiPluginLoader();
 
     // Preferred API (explicit services)
-    bool load(UiHostServices& svc);
-    void unload(UiHostServices& svc);
-    bool reload(UiHostServices& svc);
-    void render(UiHostServices& svc);
+    bool load(UiHostServices& svc,domain::DataContext& dataContext, const fs::path& filename);
+    void unload(UiHostServices& svc, domain::DataContext& dataContext );
+    bool reload(UiHostServices& svc, domain::DataContext& dataContext, const fs::path& filename);
+    void render(UiHostServices& svc, domain::DataContext& dataContext);
 
     // Backwards-compatible helpers (use last bound services from load())
     void unload();      // calls unload(*m_lastSvc) if available
-    bool reload();      // calls reload(*m_lastSvc) if available
+    bool reload(const fs::path& filename);      // calls reload(*m_lastSvc) if available
     void render();      // calls render(*m_lastSvc) if available
 
     bool isLoaded() const { return m_module != nullptr; }
@@ -41,6 +47,7 @@ private:
     IUiModule* m_module = nullptr;
 
     UiHostServices* m_lastSvc = nullptr; // non-owning, valid for app lifetime
+    domain::DataContext* m_lastDataContext = nullptr;
 
     std::string m_sourcePath;
     std::string m_loadedPath;

@@ -5,15 +5,21 @@
 #include <thread>
 #include <atomic>
 #include <mutex>
+#include "domain/DataContext.h"
 #include "ports/IUIPort.h"
 #include "ports/IFileLoaderPort.h"
+#include "ports/IMeshFileLoaderPort.h"
 #include "ports/IExporterPort.h"
 #include "ports/IRendererPort.h"
 #include "ports/ISketchResolverPort.h"
 #include "ports/IConfigPort.h"
+#include "ports/ISlicerPort.h"
+#include "core/TaskRunner.h"
 
 // Host-owned config store
+
 #include "core/ConfigStore.h"
+
 #include "domain/Model.h"
 #include "domain/SketchModel.h"
 
@@ -30,22 +36,33 @@ namespace core {
         Application& operator=(Application&&) = delete;
 
         void setResolverAdapter(std::unique_ptr<ports::ISketchResolverPort> resolver);
+        void setSlicerAdapter(std::unique_ptr<ports::ISlicerPort> slicer);
+
         void setUIAdapter(std::unique_ptr<ports::IUIPort> uiAdapter);
         void setRenderer(std::unique_ptr<ports::IRendererPort> renderer);
         void addFileLoader(std::unique_ptr<ports::IFileLoaderPort> loader);
         void addExporter(std::unique_ptr<ports::IExporterPort> exporter);
+        //void registerToolheadSchema(int index);
 
         bool initialize();
         void run();
         void shutdown();
 
         void setupToolbarMenus();
+        void dropToolbarMenus();
+
         void setRibbonbarCallback(const std::function<void()>& ribbonbarCallback);
         bool loadFile(const std::string& filepath);
         bool loadFileAsync(const std::string& filepath);
         bool exportFile(const std::string& filepath, const std::string& format);
+
+
+		domain::DataContext* getDataContext() { 
+              return &m_dataContext; }
+
         std::shared_ptr<domain::Model> getCurrentModel() const;
         ports::IRendererPort* getRenderer() const;
+        ports::ISlicerPort* getSlicer() ;
 
         // Host-owned configuration registry (persists across UI hot-reloads)
         ports::IConfigPort* getConfig() { return &m_config; }
@@ -58,13 +75,20 @@ namespace core {
         bool isLoading() const;
         float getLoadingProgress() const;
 
+        std::unique_ptr<TaskRunner> taskRunner = std::make_unique<TaskRunner>();
+
     private:
+
+		domain::DataContext m_dataContext ; // non-owning, valid for app lifetime
+
         std::unique_ptr<ports::IUIPort> m_uiAdapter;
         std::unique_ptr<ports::IRendererPort> m_renderer;
         std::vector<std::unique_ptr<ports::IFileLoaderPort>> m_loaders;
         std::vector<std::unique_ptr<ports::IExporterPort>> m_exporters;
         std::shared_ptr<domain::Model> m_currentModel;
         std::unique_ptr<ports::ISketchResolverPort> m_resolverAdapter;
+        std::unique_ptr<ports::ISlicerPort> m_slicerAdapter;
+
 
         core::ConfigStore m_config;
         std::string m_configPath = "pistachio.config.json";
@@ -75,13 +99,20 @@ namespace core {
         mutable std::mutex m_statusMutex;
         std::thread m_loadingThread;
 
-        void updateStatus(const std::string& message);
+
         void loadFileThreaded(const std::string& filepath);
+        void meshLoadFileThreaded(const std::string& filepath);
+
+        void initializeConfig();
+        void initializeConfigToolhead(int index);
+        void initializeConfigFilament(int index,std::string name);
         
         ports::IFileLoaderPort* findLoaderForFile(const std::string& filepath);
         ports::IExporterPort* findExporterForFormat(const std::string& format);
 
     public:
+        void updateStatus(const std::string& message);
+
         bool loadSketchDocument(const std::string& filepath);
         bool saveSketchDocument(const std::string& filepath);
         // Creates an in-memory document with a single sketch and a few entities.

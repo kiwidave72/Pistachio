@@ -10,11 +10,16 @@
 
 #include "adapters/ui/IGuiHost.h"
 
+#include "core/TaskRunner.h"
+#include <thread>
+#include <chrono>
+
 // NOTE: ImGuiHost should prefer to depend on ImGui/GLFW only.
 // Some legacy code still uses Walnut::Image for the app header icon.
 #include "../../ImGui/Image.h"
 
 #include "adapters/ui/SketchTooling.h"
+#include "adapters/ui/ContributionRegistry.h"
 
 struct GLFWwindow;
 
@@ -39,6 +44,8 @@ public:
     void setUiPluginEnabled(bool enabled) override;
     void requestHotReloadUiPlugin() override;
 
+    adapters::ContributionRegistry& contributionRegistry() { return m_registry; }
+
     // IGuiHost
     void setWindowControlIcons(
         ImTextureID minimize,
@@ -48,15 +55,35 @@ public:
         ImVec2 size
     ) override;
 
+    bool m_initialized = false;
+
+    
+
     // Diagnostics
     // When enabled, the host prints ImGui/GLFW/OpenGL information to stdout.
     // Useful when the UI is not visible and you need a text-only breadcrumb trail.
     void setStdoutDiagnostics(bool enabled) { m_diagStdout = enabled; }
 
     GLFWwindow* window() const { return m_window; }
-
+    
+   
 
 private:
+ 
+    // beginFrame helpers — each responsible for one logical section
+    adapters::ContributionRegistry m_registry;
+
+    void beginFrame_PollAndNewFrame();
+    void beginFrame_RenderTitlebar();
+    void beginFrame_RenderLogo(ImDrawList* fg, const ImVec2& windowPadding, float titlebarVerticalOffset);
+    void beginFrame_HandleDragZone(const ImVec2& windowPadding, float titlebarVerticalOffset, float titlebarHeight);
+    void beginFrame_RenderMenuAndRibbon(const ImVec2& windowPadding, float titlebarVerticalOffset);
+    void beginFrame_RenderWindowTitle(const ImVec2& windowPadding, float titlebarVerticalOffset);
+    void beginFrame_RenderWindowButtons();
+    void beginFrame_RenderDockSpace();
+
+    std::string m_windowTitle = "Pistachio";
+
     void diagPrintInitState();
     void diagPrintFrameState(const char* stage);
     void diagCheckAndRestoreGlfwContext(const char* stage);
@@ -64,10 +91,13 @@ private:
 
     bool IsMaximized() const;
 
+    
+
     GLFWwindow* m_window = nullptr;
-    bool m_initialized = false;
+   
     std::function<void()> m_menubarCallback;
     std::function<void()> m_ribbonbarCallback;
+
     bool m_TitleBarHovered = false;
 
     bool IsTitleBarHovered() const { return m_TitleBarHovered; }
@@ -79,7 +109,11 @@ private:
 
     std::shared_ptr<Walnut::Image> m_AppHeaderIcon;
 
-    // Window chrome icons (owned by adapter/plugin; host stores GPU handles only)
+    unsigned int m_glTexMinimize = 0;
+    unsigned int m_glTexMaximize = 0;
+    unsigned int m_glTexRestore = 0;
+    unsigned int m_glTexClose = 0;
+
     ImTextureID m_iconMinimize = nullptr;
     ImTextureID m_iconMaximize = nullptr;
     ImTextureID m_iconRestore  = nullptr;
@@ -87,8 +121,6 @@ private:
     ImVec2      m_iconSize     = ImVec2(16.0f, 16.0f);
    
 
-private:
-    // Host-level UI plugin control (stubbed)
     bool m_uiPluginEnabled = true;
     mutable bool m_uiPluginHotReloadRequested = false;
 

@@ -14,3 +14,9 @@
 [submodule "external/glad"]
 	path = external/glad
 	url = https://github.com/Dav1dde/glad
+[submodule "external/Clipper2"]
+	path = external/Clipper2
+	url = https://github.com/AngusJohnson/Clipper2.git
+[submodule "external/freetype"]
+	path = external/freetype
+	url = https://github.com/freetype/freetype.git

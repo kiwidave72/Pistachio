@@ -1,3 +1,4 @@
+#pragma once
 #define WIN32_LEAN_AND_MEAN
 #include <Windows.h>
 
@@ -12,10 +13,11 @@
 #include "adapters/ui/ImGuiAdapter.h"
 #include "adapters/rendering/GlSketch3DViewRenderer.h"
 #include "core/Application.h"
-
+#include "domain/DataContext.h"
 #include <imgui.h>
 #include <imgui_internal.h>
 
+#include <future>
 #include <cstring>
 #include <algorithm>
 #include <cmath>
@@ -166,53 +168,80 @@ namespace adapters {
             return;
 
         ImGuiIO& io = ImGui::GetIO();
-
+ 
         ImFontConfig cfg;
         cfg.FontDataOwnedByAtlas = false;
 
-        // Default font
-        if (!io.FontDefault)
-        {
-            m_bodyFont = io.FontDefault = io.Fonts->AddFontFromMemoryTTF(
-                (void*)g_RobotoRegular,
-                sizeof(g_RobotoRegular),
-                17.0f,
-                &cfg
-            );
-        }
+       /* m_bodyFont = io.Fonts->AddFontFromMemoryTTF(
+        (void*)g_RobotoRegular, sizeof(g_RobotoRegular), 8.0f, &cfg);
+        io.FontDefault = m_bodyFont;*/
 
-        // Small UI font
-        if (!m_smallFont)
-        {
-            m_smallFont = io.Fonts->AddFontFromMemoryTTF(
-                (void*)g_RobotoRegular,
-                sizeof(g_RobotoRegular),
-                14.0f,
-                &cfg
-            );
-        }
+        //m_bodyFont = ImGui::GetIO().Fonts->AddFontDefault();
+       
+        
+        /*m_smallFont = m_bodyFont;
+        m_groupFont = m_bodyFont;
+        m_titleFont = m_bodyFont;*/
 
-        // Group header font (UE-style section header)
-        if (!m_groupFont)
-        {
-            m_groupFont = io.Fonts->AddFontFromMemoryTTF(
-                (void*)g_RobotoRegular,
-                sizeof(g_RobotoRegular),
-                19.0f,
-                &cfg
-            );
-        }
+        //// Always register — atlas was cleared before onLoad was called
+        //m_bodyFont = io.Fonts->AddFontFromMemoryTTF(
+        //    (void*)g_RobotoRegular, sizeof(g_RobotoRegular), 17.0f, &cfg);
+        //io.FontDefault = m_bodyFont;
 
-        // Title font (UE-style page title)
-        if (!m_titleFont)
-        {
-            m_titleFont = io.Fonts->AddFontFromMemoryTTF(
-                (void*)g_RobotoRegular,
-                sizeof(g_RobotoRegular),
-                24.0f,
-                &cfg
-            );
-        }
+        //m_smallFont = io.Fonts->AddFontFromMemoryTTF(
+        //    (void*)g_RobotoRegular, sizeof(g_RobotoRegular), 14.0f, &cfg);
+
+        //m_groupFont = io.Fonts->AddFontFromMemoryTTF(
+        //    (void*)g_RobotoRegular, sizeof(g_RobotoRegular), 19.0f, &cfg);
+
+        //m_titleFont = io.Fonts->AddFontFromMemoryTTF(
+        //    (void*)g_RobotoRegular, sizeof(g_RobotoRegular), 24.0f, &cfg);
+
+
+
+        //// Default font
+        //if (!io.FontDefault)
+        //{
+        //    m_bodyFont = io.FontDefault = io.Fonts->AddFontFromMemoryTTF(
+        //        (void*)g_RobotoRegular,
+        //        sizeof(g_RobotoRegular),
+        //        17.0f,
+        //        &cfg
+        //    );
+        //}
+
+        //// Small UI font
+        //if (!m_smallFont)
+        //{
+        //    m_smallFont = io.Fonts->AddFontFromMemoryTTF(
+        //        (void*)g_RobotoRegular,
+        //        sizeof(g_RobotoRegular),
+        //        14.0f,
+        //        &cfg
+        //    );
+        //}
+
+        //// Group header font (UE-style section header)
+        //if (!m_groupFont)
+        //{
+        //    m_groupFont = io.Fonts->AddFontFromMemoryTTF(
+        //        (void*)g_RobotoRegular,
+        //        sizeof(g_RobotoRegular),
+        //        19.0f,
+        //        &cfg
+        //    );
+        //}
+
+        //// Title font (UE-style page title)
+        //if (!m_titleFont)
+        //{
+        //    m_titleFont = io.Fonts->AddFontFromMemoryTTF(
+        //        (void*)g_RobotoRegular,
+        //        sizeof(g_RobotoRegular),
+        //        24.0f,
+        //        &cfg
+        //    );
+        //}
 
 
 
@@ -294,13 +323,16 @@ namespace adapters {
             };
 
         m_viewFileOperations = readBool("pistachio.UI", "views.fileOperations", m_viewFileOperations);
+        m_viewSlicerOperations = readBool("pistachio.UI", "views.slicerOperations", m_viewSlicerOperations);
+
         m_viewStatus = readBool("pistachio.UI", "views.status", m_viewStatus);
         m_viewModelInfo = readBool("pistachio.UI", "views.modelInfo", m_viewModelInfo);
         m_view3DViewport = readBool("pistachio.UI", "views.viewport3d", m_view3DViewport);
         m_viewSketch3DViewport = readBool("pistachio.UI", "views.sketch3dViewport", m_viewSketch3DViewport);
         m_viewSketchEditor = readBool("pistachio.UI", "views.sketchEditor", m_viewSketchEditor);
 
-        renderMainMenu();
+        renderFileOperations();
+        renderSlicerOperations();
         renderStatusBar();
         renderModelInfo();
         render3DView();
@@ -1218,7 +1250,54 @@ namespace adapters {
         m_MenubarCallback = cb;
     }
 
-    void ImGuiAdapter::renderMainMenu()
+    void ImGuiAdapter::renderSlicerOperations()
+    {
+        if (!m_viewSlicerOperations)
+            return;
+
+        bool wasOpen = m_viewSlicerOperations;
+        ImGui::Begin("Slicer Operations", &m_viewSlicerOperations);
+
+        static char filePath[512] = {};
+        ImGui::InputTextWithHint("##file", "STEP file path...", filePath, sizeof(filePath));
+
+        if (ImGui::Button("Load STL/Step"))
+        {
+            if (m_app && filePath[0])
+                m_app->loadFile(filePath);
+        }
+
+        float loadingProgress = 0.0f;
+
+        if (ImGui::Button("Slice")) {
+
+
+            auto progressCallback = [this](const std::string& message, float progress) {
+                
+                m_app->updateStatus(message);
+                };
+
+            auto model = m_app->getCurrentModel();
+
+            m_app->getSlicer()->sliceModel(model, "", progressCallback);
+        }
+         
+
+       
+
+        //Candidate Triangles
+        //Plane Intersections
+        //Segments
+
+
+        ImGui::End();
+
+        // Persist close/open state
+        if (m_config && wasOpen != m_viewSlicerOperations)
+            m_config->set("pistachio.UI", "views.slicerOperations", m_viewSlicerOperations);
+    }
+
+    void ImGuiAdapter::renderFileOperations()
     {
         if (!m_viewFileOperations)
             return;
@@ -1234,7 +1313,7 @@ namespace adapters {
             if (m_app && filePath[0])
                 m_app->loadFile(filePath);
         }
-
+        
         ImGui::End();
 
         // Persist close/open state
@@ -1396,6 +1475,9 @@ namespace adapters {
     }
     void ImGuiAdapter::renderRibbonBar()
     {
+
+        printf("[ImGuiAdapter] calling renderRibbonBar\n");
+
         // Called from host via RibbonBar callback. No Begin/End here.
         if (!m_app) return;
         auto doc = m_app->getSketchDocument();

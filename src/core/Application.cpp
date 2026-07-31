@@ -1,3 +1,4 @@
+
 #include "core/Application.h"
 #include <algorithm>
 #include <variant>
@@ -6,7 +7,6 @@
 #include <sstream>
 #include <imgui.h>
 #include "imgui_internal.h"
-
 #include <cmath>
 #include <ctime>
 
@@ -15,33 +15,22 @@ namespace core {
     Application::Application()
         : m_statusMessage("Ready"),
         m_isLoading(false),
-        m_loadingProgress(0.0f) {
+        m_loadingProgress(0.0f){
 
-        // Register a few host-level settings.
-        // These persist even if the UI plugin hot-reloads.
-        using ports::SettingInfo;
-        using ports::SettingType;
+        
+          
+      
 
-        m_config.registerSetting(SettingInfo(
-            "pistachio.UI", "theme", "Theme", "UI theme name", "UI", SettingType::String, "Pistachio", false
-        ));
-
-        m_config.registerSetting(SettingInfo(
-            "pistachio.Sketch", "grid.spacing", "Grid spacing", "Grid spacing in sketch units", "Sketch", SettingType::Float, 10.0, false
-        ));
-        m_config.registerSetting(SettingInfo(
-            "pistachio.Sketch", "snap.enabled", "Snap", "Enable snapping in the sketch canvas", "Sketch", SettingType::Bool, true, false
-        ));
-
-        m_config.registerSetting(SettingInfo(
-            "pistachio.Render", "msaa.samples", "MSAA samples", "Multisample AA samples (restart may be required)", "Rendering", SettingType::Int, 4, true
-        ));
     }
 
+   
     Application::~Application() {
         if (m_loadingThread.joinable()) {
             m_loadingThread.join();
         }
+    }
+    void Application::setSlicerAdapter(std::unique_ptr<ports::ISlicerPort> slicer) {
+        m_slicerAdapter = std::move(slicer);
     }
 
     void Application::setResolverAdapter(std::unique_ptr<ports::ISketchResolverPort> resolver) {
@@ -59,20 +48,30 @@ namespace core {
     void Application::addFileLoader(std::unique_ptr<ports::IFileLoaderPort> loader) {
         m_loaders.push_back(std::move(loader));
     }
-
+ 
     void Application::addExporter(std::unique_ptr<ports::IExporterPort> exporter) {
         m_exporters.push_back(std::move(exporter));
     }
 
+     
+
     bool Application::initialize() {
         std::cout << "\n=== APPLICATION INITIALIZATION ===" << std::endl;
 
-        // Load persisted config (values only). Settings metadata is registered
-        // by the host and by plugins at runtime.
-        (void)m_config.loadFromFile(m_configPath);
+        initializeConfig();
+       
+        // ------------------------------------------------------------
+        // 1) Slicer  MAY NEED TO MOVE
+        // ------------------------------------------------------------
+
+        if (m_slicerAdapter && !m_slicerAdapter->initialize(m_config)) {
+            m_statusMessage = "Error: Failed to initialize slicer";
+            std::cout << "[X] Slicer initialization failed" << std::endl;
+            return false;
+        }
 
         // ------------------------------------------------------------
-        // 1) Renderer FIRST (creates window + GL context)
+        // 2) Renderer (creates window + GL context)
         // ------------------------------------------------------------
         if (m_renderer && !m_renderer->initialize()) {
             m_statusMessage = "Error: Failed to initialize renderer";
@@ -89,7 +88,7 @@ namespace core {
         }
 
         // ------------------------------------------------------------
-        // 2) UI adapter AFTER window/context exists
+        // 3) UI adapter AFTER window/context exists
         // ------------------------------------------------------------
         if (!m_uiAdapter) {
             m_statusMessage = "Error: No UI adapter set";
@@ -177,7 +176,19 @@ namespace core {
     void Application::run() {
         if (!m_uiAdapter) return;
 
+
+        //// Trigger hot reload 3 seconds after startup for testing
+        //std::thread([this]() {
+        //    std::this_thread::sleep_for(std::chrono::seconds(5));
+        //    printf("[Application] auto-triggering hot reload\n");
+        //     m_uiAdapter->requestHotReloadUiPlugin();
+        //    }).detach();
+
+      
+
         std::cout << "Starting main loop...\n" << std::endl;
+
+
 
         while (!m_uiAdapter->shouldClose()) {
             m_uiAdapter->beginFrame();
@@ -187,6 +198,8 @@ namespace core {
 
             m_uiAdapter->endFrame();
         }
+
+
     }
 
     void Application::shutdown() {
@@ -215,8 +228,19 @@ namespace core {
 
     void Application::setRibbonbarCallback(const std::function<void()>& ribbonbarCallback)
     {
-        if (m_uiAdapter)
-            m_uiAdapter->setRibbonbarCallback(ribbonbarCallback);
+        if (m_uiAdapter) {
+
+            printf("[application] setRibbonbarCallback: calling m_uiAdapter.setRibbonbarCallback.\n");
+            printf("[application] setRibbonbarCallback: m_uiAdapter=%p\n", (void*)m_uiAdapter.get());
+
+           
+            m_uiAdapter-> setRibbonbarCallback(ribbonbarCallback);
+            printf("[application] setRibbonbarCallback: calling m_uiAdapter.setRibbonbarCallback.Done.\n");
+        }
+        else {
+            printf("[application] setRibbonbarCallback: FAILED .\n");
+
+        }
     }
 
     void Application::saveConfigNow()
@@ -244,6 +268,8 @@ namespace core {
         // Start loading in background thread
         m_loadingThread = std::thread(&Application::loadFileThreaded, this, filepath);
 
+         
+
         return true;
     }
 
@@ -252,11 +278,13 @@ namespace core {
         m_loadingProgress = 0.0f;
 
         auto loader = findLoaderForFile(filepath);
+
         if (!loader) {
             updateStatus("Error: No loader found for file: " + filepath);
             m_isLoading = false;
             return;
         }
+             
 
         try {
             updateStatus("Loading file...");
@@ -291,6 +319,7 @@ namespace core {
         m_loadingProgress = 100.0f;
         m_isLoading = false;
     }
+    
 
     bool Application::exportFile(const std::string& filepath, const std::string& format) {
         if (!m_currentModel || m_currentModel->isEmpty()) {
@@ -324,7 +353,9 @@ namespace core {
     ports::IRendererPort* Application::getRenderer() const {
         return m_renderer.get();
     }
-
+    ports::ISlicerPort* Application::getSlicer()  {
+        return m_slicerAdapter.get();
+    }
     std::string Application::getStatus() const {
         std::lock_guard<std::mutex> lock(m_statusMutex);
         return m_statusMessage;
@@ -355,89 +386,93 @@ namespace core {
         }
         return nullptr;
     }
+    void Application::dropToolbarMenus() {
+        m_uiAdapter->setMenubarCallback([]() {});
 
+    }
     void Application::setupToolbarMenus() {
-        m_uiAdapter->setMenubarCallback([this]()
-            {
+        //m_uiAdapter->setMenubarCallback([this]()
+        //    {
 
-                if (ImGui::BeginMenu("File"))
-                {
-                    if (ImGui::MenuItem("Open")) {}
-                    ImGui::Separator();
-                    if (ImGui::MenuItem("Save", "Ctrl+S")) {
-                        // Save to the current file (test.pistachio.json for now)
-                        if (saveSketchDocument("test.pistachio.json")) {
-                            updateStatus("Sketch saved successfully");
-                        }
-                    }
-                    if (ImGui::MenuItem("Save as ...")) {
-                        // TODO: Show file dialog to choose save location
-                        // For now, save to a timestamped file
-                        auto now = std::time(nullptr);
-                        char filename[256];
-                        std::strftime(filename, sizeof(filename), "sketch_%Y%m%d_%H%M%S.pistachio.json", std::localtime(&now));
-                        if (saveSketchDocument(filename)) {
-                            updateStatus(std::string("Sketch saved as: ") + filename);
-                        }
-                    }
-                    ImGui::Separator();
-                    if (ImGui::MenuItem("Import Sketch")) {}
-                    ImGui::Separator();
-                    if (ImGui::MenuItem("Exit"))
-                    {
-                        this->shutdown();
-                    }
-                    ImGui::EndMenu();
-                }
-                if (ImGui::BeginMenu("Sketch"))
-                {
-                    ImGui::EndMenu();
-                }
-                if (ImGui::BeginMenu("Options"))
-                {
-                    ImGui::EndMenu();
-                }
-                if (ImGui::BeginMenu("Tools"))
-                {
-                    // NOTE: you probably want tools here
-                    ImGui::EndMenu();
-                }
-                if (ImGui::BeginMenu("Views"))
-                {
-                    auto getBool = [&](const char* ns, const char* key, bool defVal) {
-                        nlohmann::json v = m_config.get(ns, key);
-                        return v.is_boolean() ? v.get<bool>() : defVal;
-                        };
+                //if (ImGui::BeginMenu("File"))
+                //{
+                //    if (ImGui::MenuItem("Open")) {}
+                //    ImGui::Separator();
+                //    if (ImGui::MenuItem("Save", "Ctrl+S")) {
+                //        // Save to the current file (test.pistachio.json for now)
+                //        if (saveSketchDocument("test.pistachio.json")) {
+                //            updateStatus("Sketch saved successfully");
+                //        }
+                //    }
+                //    if (ImGui::MenuItem("Save as ...")) {
+                //        // TODO: Show file dialog to choose save location
+                //        // For now, save to a timestamped file
+                //        auto now = std::time(nullptr);
+                //        char filename[256];
+                //        std::strftime(filename, sizeof(filename), "sketch_%Y%m%d_%H%M%S.pistachio.json", std::localtime(&now));
+                //        if (saveSketchDocument(filename)) {
+                //            updateStatus(std::string("Sketch saved as: ") + filename);
+                //        }
+                //    }
+                //    ImGui::Separator();
+                //    if (ImGui::MenuItem("Import Sketch")) {}
+                //    ImGui::Separator();
+                //    if (ImGui::MenuItem("Exit"))
+                //    {
+                //        this->shutdown();
+                //    }
+                //    ImGui::EndMenu();
+                //}
+                //if (ImGui::BeginMenu("Sketch"))
+                //{
+                //    ImGui::EndMenu();
+                //}
+                //if (ImGui::BeginMenu("Options"))
+                //{
+                //    ImGui::EndMenu();
+                //}
+                //if (ImGui::BeginMenu("Tools"))
+                //{
+                //    // NOTE: you probably want tools here
+                //    ImGui::EndMenu();
+                //}
+                //if (ImGui::BeginMenu("Views"))
+                //{
+                //    auto getBool = [&](const char* ns, const char* key, bool defVal) {
+                //        nlohmann::json v = m_config.get(ns, key);
+                //        return v.is_boolean() ? v.get<bool>() : defVal;
+                //        };
 
-                    auto toggle = [&](const char* key, const char* label) {
-                        bool open = getBool("pistachio.UI", key, true);
-                        if (ImGui::MenuItem(label, nullptr, open))
-                            m_config.set("pistachio.UI", key, !open);
-                        };
+                //    auto toggle = [&](const char* key, const char* label) {
+                //        bool open = getBool("pistachio.UI", key, true);
+                //        if (ImGui::MenuItem(label, nullptr, open))
+                //            m_config.set("pistachio.UI", key, !open);
+                //        };
 
-                    toggle("views.fileOperations", "File Operations");
-                    toggle("views.status", "Status");
-                    toggle("views.modelInfo", "Model Info");
-                    toggle("views.viewport3d", "3D Viewport");
-                    toggle("views.sketchEditor", "Sketch Editor");
+                //    toggle("views.fileOperations", "File Operations");
+                //    toggle("views.slicerOperations", "Slicer Operations");
+                //    toggle("views.status", "Status");
+                //    toggle("views.modelInfo", "Model Info");
+                //    toggle("views.viewport3d", "3D Viewport");
+                //    toggle("views.sketchEditor", "Sketch Editor");
 
-                    ImGui::Separator();
-                    if (ImGui::MenuItem("Settings"))
-                        m_config.set("pistachio.UI", "config.windowOpen", true);
+                //    ImGui::Separator();
+                //    if (ImGui::MenuItem("Settings"))
+                //        m_config.set("pistachio.UI", "config.windowOpen", true);
 
-                        ImGui::EndMenu();
-                    }
+                //        ImGui::EndMenu();
+                //}
 
-                    if (ImGui::BeginMenu("Help"))
-                    {
-                        if (ImGui::MenuItem("About"))
-                        {
-                            //exampleLayer->ShowAboutModal();
-                        }
-                        ImGui::EndMenu();
-                    }
+                //if (ImGui::BeginMenu("Help"))
+                //{
+                //    if (ImGui::MenuItem("About"))
+                //    {
+                //        //exampleLayer->ShowAboutModal();
+                //    }
+                //    ImGui::EndMenu();
+                //}
 
-                    if (ImGui::BeginMenu("Plugins"))
+                /*    if (ImGui::BeginMenu("Plugins"))
                     {
                         auto st = m_uiAdapter->getUiPluginStatus();
                         bool enabled = st.enabled;
@@ -457,10 +492,10 @@ namespace core {
                         if (!st.lastError.empty())
                             ImGui::TextColored(ImVec4(1,0.4f,0.4f,1), "Error: %s", st.lastError.c_str());
                         ImGui::EndMenu();
-                    }
+                    }*/
 
 
-            });
+          //  });
     }
 
     bool Application::runSolver() {
@@ -580,6 +615,170 @@ namespace core {
     std::shared_ptr<domain::sketch::Document> Application::getSketchDocument() const
     {
         return m_sketchDoc;
+    }
+
+    void Application::initializeConfig() {
+        // Register a few host-level settings.
+        // These persist even if the UI plugin hot-reloads.
+        using ports::SettingInfo;
+        using ports::SettingType;
+        using ports::NamespaceInfo;
+
+        m_config.registerNamespace(NamespaceInfo("pistachio.UI.theme.selections", "pistachio", "", "", 0));
+       
+        m_config.registerSetting(SettingInfo(
+            "pistachio.UI.theme.selections.0", "name", "name", "UI theme name", "UI", SettingType::String, "DARK", "", false
+        ));
+        m_config.registerSetting(SettingInfo(
+            "pistachio.UI.theme.selections.1", "name", "name", "UI theme name", "UI", SettingType::String, "WHITE", "", false
+        ));
+
+        m_config.registerSetting(SettingInfo(
+            "pistachio.UI", "theme", "Theme", "UI theme name", "UI", SettingType::Enum, "DARK", "pistachio.UI.theme.selections", false
+        ));
+
+
+
+
+
+      
+
+        m_config.registerSetting(SettingInfo(
+            "pistachio.Sketch", "grid.spacing", "Grid spacing", "Grid spacing in sketch units", "Sketch", SettingType::Float, 10.0, "", false
+        ));
+        m_config.registerSetting(SettingInfo(
+            "pistachio.Sketch", "snap.enabled", "Snap", "Enable snapping in the sketch canvas", "Sketch", SettingType::Bool, true, "", false
+        ));
+
+        m_config.registerSetting(SettingInfo(
+            "pistachio.Render", "msaa.samples", "MSAA samples", "Multisample AA samples (restart may be required)", "Rendering", SettingType::Int, 4,"", true
+        ));
+
+        /* m_config.registerSetting(SettingInfo(
+             "plugin.Render", "plugin.msaa.samples", "MSAA samples", "Multisample AA samples (restart may be required)", "Render", SettingType::Int, 4, true
+         ));*/
+
+
+
+
+
+        m_config.registerNamespace(NamespaceInfo("slicer.Settings", "slicer", "Slicer Settings", "", 0));
+
+        m_config.registerSetting(SettingInfo(
+            "slicer.Settings", "bed.size.X", "Bed Size X", "Printable Bed Size in X", "Printable Bed Size", SettingType::Int, "250","", false
+        ));
+        m_config.registerSetting(SettingInfo(
+            "slicer.Settings", "bed.size.Y", "Bed Size Y", "Printable Bed Size in Y", "Printable Bed Size", SettingType::Int, "250", "",false
+        ));
+
+        m_config.registerSetting(SettingInfo(
+            "slicer.Settings", "bed.temp", "Bed Temp C", "Bed Temp in C", "", SettingType::Int, "250", "",false
+        ));
+
+
+        m_config.registerSetting(SettingInfo(
+            "slicer.Settings", "slicer.firstLayerHeight", "First Layer Height", "", SettingType::Float, 0.2, "",false
+        ));
+        m_config.registerSetting(SettingInfo(
+            "slicer.Settings", "slicer.layerHeight", "Layer Height", "", SettingType::Float, 0.2, "", false
+        ));
+        
+        initializeConfigFilament(0,"ABS");
+        initializeConfigFilament(1, "PLA");
+
+        initializeConfigToolhead(0);
+        initializeConfigToolhead(1);
+
+
+        
+        std::vector<ports::SettingInfo> allSettings = m_config.listSettings();
+
+        std::cout << "=== CONFIGURATION INITIALIZATION ===" << std::endl;
+
+        std::cout << "=== Settings ===" << std::endl;
+
+        for (const auto& s : allSettings)
+        {
+            std::cout << s.ns << "->" << s.key << std::endl;
+        }
+        
+        std::cout << "=== Namespaces ===" << std::endl;
+        std::vector<ports::NamespaceInfo> allNamespaces = m_config.listNamespaces();
+        for (const auto& s : allNamespaces)
+        {
+            std::cout << s.ns << "->" << s.parentNs << "->" << s.displayName << std::endl;
+        }
+
+        std::cout << "=== CONFIGURATION END ===" << std::endl;
+
+        // Load persisted config (values only). Settings metadata is registered
+        // by the host and by plugins at runtime.
+        (void)m_config.loadFromFile(m_configPath);
+        std::cout << "=== CONFIGURATION FILE LOADED ===" << std::endl;
+    }
+
+    void Application::initializeConfigFilament(int index,std::string name )  {
+        using ports::SettingInfo;
+        using ports::SettingType;
+        using ports::NamespaceInfo;
+         
+       
+
+        std::string ns = "filament.Settings." + std::to_string(index);
+         
+        m_config.registerNamespace(NamespaceInfo(ns , "filament.Settings", "Filament " + std::to_string(index), "", 0));
+        m_config.registerNamespace(NamespaceInfo(ns +".generalSettings", ns, "General Settings"));
+
+        m_config.registerSetting(SettingInfo(
+            ns + ".generalSettings", "name", "Filament Name", "Generic ABS,PLA,ect", "", SettingType::String, name, "", false
+        ));
+
+        m_config.registerSetting(SettingInfo(
+            ns + ".generalSettings", "colour", "Filament Colour", "", "", SettingType::Colour,"#FF6600FF", "", false
+        ));
+
+        m_config.registerSetting(SettingInfo(
+            ns + ".generalSettings", "temp", "Filament Temp", "", "", SettingType::Int, 230, "",false
+        ));
+
+       
+    }
+    void Application::initializeConfigToolhead(int index) {
+        
+        using ports::SettingInfo;
+        using ports::SettingType;
+        using ports::NamespaceInfo;
+
+        std::string ns = "slicer.toolheads." + std::to_string(index);
+
+        m_config.registerNamespace(NamespaceInfo(ns, "slicer.toolheads", "Toolhead " + std::to_string(index), "toolicon", 0));
+        m_config.registerNamespace(NamespaceInfo(ns + ".generalSettings", ns, "General Settings"));
+
+        m_config.registerSetting(SettingInfo(
+            ns +".generalSettings", "nozzle.size", "Nozzle Size", "Nozzle Size(0.2cm, 0.4cm, 0.5cm) - Description", "Tool Head "+ std::to_string(index) +" Nozzle", SettingType::Float, 0.2, "",false
+        ));
+        m_config.registerSetting(SettingInfo(
+            ns+".generalSettings", "hotEndMaxTemp", "HotEnd Max Temp C", "HotEnd Max Temp C - Description", "Tool Head " + std::to_string(index) + " HotEnd", SettingType::Int, 250, "", false
+        ));
+        m_config.registerSetting(SettingInfo(
+            ns + ".generalSettings", "hotEndFanSpeed", "HotEnd Fan Speed", "HotEnd Fan Speed - Description", "Tool Head " + std::to_string(index) + " HotEnd", SettingType::Int, 250, "", false
+        ));
+        m_config.registerSetting(SettingInfo(
+            ns + ".generalSettings", "hotEndFanSpeedLayers", "HotEnd Fan Speed Override Layers", "HotEnd Fan Speed for layers - Description", "Tool Head " + std::to_string(index) + " HotEnd Fan Speed Overrides", SettingType::String, "0,1,2,3", "", true
+        ));
+        m_config.registerSetting(SettingInfo(
+            ns + ".generalSettings", "hotEndFanSpeedLayersSpeed", "HotEnd Fan Speed Override", "HotEnd Fan Speed for layers - Description", "Tool Head " + std::to_string(index) + " HotEnd Fan Speed Overrides", SettingType::Int, 80, "", true
+        ));
+
+        m_config.registerSetting(SettingInfo(
+            ns + ".generalSettings", "toolHead.ExtrusionMaxSpeed", "Extrusion Max Speed", "Extrusion Max Speed in mm3 sec - Description", "Tool Head " + std::to_string(index) + " Flow", SettingType::Int, 250, "", true
+        ));
+
+        m_config.registerSetting(SettingInfo(
+            ns + ".generalSettings", "filament", "Filament", "Printing Filament",  SettingType::Enum, "ABS", "filament.Settings", false
+        ));
+
+       
     }
 
 } // namespace core
