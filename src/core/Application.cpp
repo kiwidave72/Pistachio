@@ -38,6 +38,9 @@ namespace core {
 
         m_eventBus = std::make_unique<adapters::EventBus>();
         m_services.registerService<ports::IEventBus>(m_eventBus.get());
+
+        m_modelCache = std::make_unique<domain::v1::ModelCache>();
+        m_services.registerService<domain::v1::ModelCache>(m_modelCache.get());
     }
 
     void Application::setSlicerAdapter(std::unique_ptr<ports::ISlicerPort> slicer) {

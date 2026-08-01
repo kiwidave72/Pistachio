@@ -73,7 +73,9 @@ namespace
         {
             if (!m_host.initialize())
                 return false;
-
+            m_svc.application = m_app;
+            
+            
             m_svc.app = m_app;
             m_svc.window = m_host.window();
             m_svc.guiHost = static_cast<IGuiHost*>(&m_host);

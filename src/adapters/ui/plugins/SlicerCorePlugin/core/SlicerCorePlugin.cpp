@@ -585,7 +585,8 @@ public:
     {
         printf("[SlicerCore] onLoad\n");
         
-        m_modelCache = &dataContext.m_workspace->modelCache;
+        m_modelCache = svc.application->services().resolve<domain::v1::ModelCache>();
+
 		m_workspace = dataContext.m_workspace;
 
         

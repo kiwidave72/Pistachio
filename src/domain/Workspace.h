@@ -18,8 +18,6 @@ namespace domain::v1 {
 
         std::vector<domain::v1::Project*> projects;
         std::vector<domain::v1::Repository*> repositories;
-        ModelCache modelCache;
-
 
     };
 

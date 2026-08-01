@@ -90,6 +90,8 @@ namespace core {
     private:
 
 		domain::DataContext m_dataContext ; // non-owning, valid for app lifetime
+        
+        std::unique_ptr<domain::v1::ModelCache> m_modelCache;
 
         std::unique_ptr<ports::IUIPort> m_uiAdapter;
         std::unique_ptr<ports::IRendererPort> m_renderer;
