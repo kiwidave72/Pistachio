@@ -92,8 +92,7 @@ else()
 "
         "Add GLAD as a submodule (or folder) under external/glad and generate GLAD files for OpenGL 3.3 core.
 ")
-endif()
-
+endif()         
 # -------------------------
 # Walnut (Image helper)
 # -------------------------
@@ -484,6 +483,33 @@ foreach(cfg Debug Release RelWithDebInfo MinSizeRel)
     set_target_properties(pistachio_slicer_core PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY_${CFGU} "${CMAKE_BINARY_DIR}/bin/${cfg}/plugins"
         LIBRARY_OUTPUT_DIRECTORY_${CFGU} "${CMAKE_BINARY_DIR}/bin/${cfg}/plugins"
+        ARCHIVE_OUTPUT_DIRECTORY_${CFGU} "${CMAKE_BINARY_DIR}/lib/${cfg}"
+    )
+endforeach()
+
+# -------------------------
+# pistachio_service_stub (minimal IServiceModule test plugin)
+# -------------------------
+add_library(pistachio_service_stub SHARED
+    src/adapters/plugins/StubServiceModule.cpp
+)
+
+target_include_directories(pistachio_service_stub PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+
+target_link_libraries(pistachio_service_stub PRIVATE
+    pistachio_core
+)
+
+# NOTE: output directory is "services", not "plugins" — this is what
+# ServiceModuleRegistry::getServicesDir() scans. Every other plugin
+# target in this file outputs to bin/<cfg>/plugins; this one must not.
+foreach(cfg Debug Release RelWithDebInfo MinSizeRel)
+    string(TOUPPER "${cfg}" CFGU)
+    set_target_properties(pistachio_service_stub PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY_${CFGU} "${CMAKE_BINARY_DIR}/bin/${cfg}/services"
+        LIBRARY_OUTPUT_DIRECTORY_${CFGU} "${CMAKE_BINARY_DIR}/bin/${cfg}/services"
         ARCHIVE_OUTPUT_DIRECTORY_${CFGU} "${CMAKE_BINARY_DIR}/lib/${cfg}"
     )
 endforeach()
