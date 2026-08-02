@@ -398,23 +398,42 @@ namespace adapters {
         {
             // Visibility condition
             if (item.isVisible && !item.isVisible()) return;
-
             const bool enabled = !item.isEnabled || item.isEnabled();
-
             switch (item.type)
             {
             case ports::RibbonItem::Type::Button:
+            {
                 if (!enabled) ImGui::BeginDisabled();
-                
-                ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(24.0f, 8.0f));
 
-                if (ImGui::Button(item.label.c_str()) && item.onClick)
+                const bool iconOnly = !item.icon.empty();
+
+                // Icon-only buttons want tight, roughly-square padding.
+                // Text buttons keep your original wider padding.
+                ImVec2 padding = iconOnly ? ImVec2(8.0f, 8.0f) : ImVec2(24.0f, 8.0f);
+                ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, padding);
+
+                bool clicked = false;
+                if (iconOnly)
+                {
+                    std::string buttonId = item.icon + "##" + item.id;
+                    clicked = ImGui::Button(buttonId.c_str());
+
+                    if (ImGui::IsItemHovered() && !item.label.empty())
+                        ImGui::SetTooltip("%s", item.label.c_str());
+                }
+                else
+                {
+                    clicked = ImGui::Button(item.label.c_str());
+                }
+
+                if (clicked && item.onClick)
                     item.onClick();
+
                 ImGui::PopStyleVar();
                 if (!enabled) ImGui::EndDisabled();
                 ImGui::SameLine();
                 break;
-
+            }
             case ports::RibbonItem::Type::Toggle:
                 if (!enabled) ImGui::BeginDisabled();
                 if (item.togglePtr)
@@ -422,19 +441,16 @@ namespace adapters {
                 if (!enabled) ImGui::EndDisabled();
                 ImGui::SameLine();
                 break;
-
             case ports::RibbonItem::Type::Separator:
                 ImGui::SeparatorEx(ImGuiSeparatorFlags_Vertical);
                 ImGui::SameLine();
                 break;
-
             case ports::RibbonItem::Type::Custom:
                 if (item.renderFn) item.renderFn();
                 ImGui::SameLine();
                 break;
             }
         }
-
        
         std::vector<std::unique_ptr<ports::MenuContribution>>   m_menus;
         std::vector<std::unique_ptr<ports::RibbonContribution>> m_ribbons;

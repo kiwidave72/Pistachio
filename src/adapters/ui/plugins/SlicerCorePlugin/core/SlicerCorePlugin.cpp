@@ -1,4 +1,6 @@
 #include "adapters/ui/plugins/UiModuleApi.h"
+#include "adapters/ui/IconsFontAwesomeRegular.h"
+
 #include "core/Application.h"
 #include "ports/IConfigPort.h"
 #include "adapters/ui/ContributionRegistry.h"
@@ -698,17 +700,17 @@ public:
 
             // add ribbon items
             m_ribbonContrib = m_registry->contributeRibbon(k_pluginId, "Slicer", 300);
-            m_ribbonContrib->addButton( "slice_now", "Slice", 10, [this]() { m_sliceRequested = true; });
+            m_ribbonContrib->addButton( "slice_now", "Slice","", 10, [this]() { m_sliceRequested = true; });
             m_ribbonContrib->addToggle( "slicer_panel", "Panel", 90, &m_panelOpen);
             m_ribbonContrib->addSeparator(20);
-            m_ribbonContrib->addButton("refresh_view", "Refresh", 20, [this, project]() {
+            m_ribbonContrib->addButton("refresh_view", "Refresh", "", 20, [this, project]() {
                 this->m_buildPlateRenderer->updateViewModel(project->buildPlates);  });
-            m_ribbonContrib->addButton("arrange_build_plate", "Arrange", 20, [this, buildPlate]() {
+            m_ribbonContrib->addButton("arrange_build_plate", "Arrange", "",20, [this, buildPlate]() {
                 this->m_slicerService->arrangeBuildPlate(buildPlate); });
             m_ribbonContrib->addSeparator(30);
 
             // Load Workspace
-            m_ribbonContrib->addButton("load_workspace", "Load", 30, [this]() {
+            m_ribbonContrib->addButton("load_workspace", "Load", ICON_FA_FOLDER_OPEN,  30, [this]() {
                 auto cmd = std::make_unique<SnapshotCommand>(
                     *m_workspaceStore, "Load Worspace",
                     [this]() {
@@ -719,7 +721,7 @@ public:
                 m_cmdHistory.Execute(std::move(cmd));
                 
                 });
-            m_ribbonContrib->addButton("saveWorkspace", "Save", 30,[this]() {
+            m_ribbonContrib->addButton("saveWorkspace", "Save", ICON_FA_FILE, 30,[this]() {
                     auto* project = m_navigation->resolveOrDefaultProject(*m_workspaceStore);
                     auto* buildPlate = m_navigation->resolveOrDefaultBuildPlate(project);
                     
@@ -731,18 +733,18 @@ public:
 
             // undo / redo
             auto undoRedoContrib =  m_registry->contributeRibbon(k_pluginId, "UndoRedo", 400);
-            undoRedoContrib->addButton("undo", "Undo", 40, [this]() { m_cmdHistory.Undo(); });
-            undoRedoContrib->addButton("redo", "Redo", 40, [this]() { m_cmdHistory.Redo(); });
+            undoRedoContrib->addButton("undo", "Undo","", 40, [this]() { m_cmdHistory.Undo(); });
+            undoRedoContrib->addButton("redo", "Redo","", 40, [this]() { m_cmdHistory.Redo(); });
 
             // Single / Multi
             auto sceneLayoutContrib = m_registry->contributeRibbon(k_pluginId, "UndoRedo", 400);
-            sceneLayoutContrib->addButton("changeToSingle", "Single", 40, [this]() {  m_buildPlateRenderer->getSceneLayout().selectPlate(0); });
-            sceneLayoutContrib->addButton("changeToMulti", "Multi", 40, [this]() { m_buildPlateRenderer->getSceneLayout().selectPlate(-1); });
+            sceneLayoutContrib->addButton("changeToSingle", "Single","", 40, [this]() {  m_buildPlateRenderer->getSceneLayout().selectPlate(0); });
+            sceneLayoutContrib->addButton("changeToMulti", "Multi", "",40, [this]() { m_buildPlateRenderer->getSceneLayout().selectPlate(-1); });
   
 
             auto partContrib = m_registry->contributeRibbon(k_pluginId, "Part", 400);
             // delete Part
-            partContrib->addButton("deletePart", "Delete", 40, [this]() {
+            partContrib->addButton("deletePart", "Delete","", 40, [this]() {
                 auto selectedIds = m_navigation->selection().getSelectedIds();
                 if (selectedIds.empty()) return;
 
@@ -772,7 +774,7 @@ public:
 
 
             auto plateContrib = m_registry->contributeRibbon(k_pluginId, "Plate", 400);
-            plateContrib->addButton("addPlate", "Add", 60, [this]() {  
+            plateContrib->addButton("addPlate", "Add","", 60, [this]() {
                 
                 // Add plate
                 auto addCmd = std::make_unique<SnapshotCommand>(

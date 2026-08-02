@@ -54,7 +54,7 @@ public:
             m_menuContrib->addToggle("config_window_open", "SettingsChanged", 900, &m_configWindowOpen);
 
             m_ribbonContrib = m_registry->contributeRibbon("pistachio.config", "Config", 900);
-            m_ribbonContrib->addButton("open_settings", "Settings", 10,
+            m_ribbonContrib->addButton("open_settings", "Settings","", 10,
                 [this]() { 
                     m_configWindowOpen = !m_configWindowOpen;
                     m_config->set("pistachio.UI", "config.windowOpen", !m_config->get("pistachio.UI", "config.windowOpen"));

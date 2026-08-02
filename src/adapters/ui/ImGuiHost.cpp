@@ -1,5 +1,7 @@
 ﻿#include "ImGuiHost.h"
 
+#include "IconsFontAwesomeRegular.h"
+
 #include "../ImGui/ImGuiTheme.h"
 #include "../ImGui/Image.h"
 
@@ -490,6 +492,19 @@ namespace adapters {
         
 
         io.FontDefault = io.Fonts->AddFontFromMemoryTTF((void*)g_RobotoRegular, sizeof(g_RobotoRegular), 14.0f, &fontConfig);
+
+        static const ImWchar iconRanges[] = { ICON_MIN_FA, ICON_MAX_FA, 0 };
+
+        ImFontConfig iconConfig;
+        iconConfig.MergeMode = true;          // merge into previous font instead of replacing it
+        iconConfig.PixelSnapH = true;
+        iconConfig.GlyphMinAdvanceX = 16.0f;  // keep icons monospaced-ish so they don't jitter
+
+
+        io.Fonts->AddFontFromFileTTF(
+            "assets/fonts/fa-regular-400.ttf", 16.0f, &iconConfig, iconRanges);
+    
+        io.Fonts->Build();
 
         // CRITICAL FIX: Initialize ImGui KeyMap for keyboard navigation
         // This must be done BEFORE we install callbacks

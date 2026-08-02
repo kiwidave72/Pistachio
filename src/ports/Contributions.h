@@ -74,6 +74,7 @@ namespace ports {
 
         std::string  id;
         std::string  label;
+        std::string  icon;
         int          priority = 0;
         Type         type = Type::Button;
 
@@ -103,7 +104,10 @@ namespace ports {
 
         // Add a button
         RibbonContribution& addButton(
-            std::string id, std::string label, int priority,
+            std::string id,
+            std::string label,
+            std::string icon,  
+            int priority,
             ActionFn onClick,
             ConditionFn isVisible = nullptr,
             ConditionFn isEnabled = nullptr)
@@ -112,6 +116,7 @@ namespace ports {
             RibbonItem item;
             item.id = std::move(id);
             item.label = std::move(label);
+            item.icon = std::move(icon);
             item.priority = priority;
             item.type = RibbonItem::Type::Button;
             item.onClick = std::move(onClick);

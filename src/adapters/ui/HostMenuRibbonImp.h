@@ -32,6 +32,7 @@ struct RibbonItem
     Type                  type = Type::Button;
     std::string           id;
     std::string           label;
+	std::string           icon;  
     bool* togglePtr = nullptr;
     std::function<void()> onClick;
     std::function<void()> renderFn;
@@ -43,7 +44,7 @@ struct RibbonGroupImpl : IRibbonGroup
     std::string              label;
     std::vector<RibbonItem>  items;
 
-    void addButton(const char* id, const char* lbl,
+	void addButton(const char* id, const char* lbl,  
         std::function<void()> onClick) override
     {
         RibbonItem item;
@@ -86,12 +87,32 @@ struct RibbonGroupImpl : IRibbonGroup
         {
             switch (item.type)
             {
-            case RibbonItem::Type::Button:
-                if (ImGui::Button(item.label.c_str()) && item.onClick)
-                    item.onClick();
-                ImGui::SameLine();
-                break;
+                case RibbonItem::Type::Button:
+                {
+                    bool clicked = false;
 
+                    if (!item.icon.empty())
+                    {
+                        // Icon-only button. Use ##id suffix so the label text (used for
+                        // ImGui's internal ID) doesn't show up visibly next to the icon.
+                        std::string buttonId = item.icon + "##" + item.id;
+                        clicked = ImGui::Button(buttonId.c_str());
+
+                        if (ImGui::IsItemHovered() && !item.label.empty())
+                            ImGui::SetTooltip("%s", item.label.c_str());
+                    }
+                    else
+                    {
+                        // No icon — fall back to a normal text button
+                        clicked = ImGui::Button(item.label.c_str());
+                    }
+
+                    if (clicked && item.onClick)
+                        item.onClick();
+
+                    ImGui::SameLine();
+                    break;
+                }
             case RibbonItem::Type::Toggle:
                 if (item.togglePtr)
                 {
