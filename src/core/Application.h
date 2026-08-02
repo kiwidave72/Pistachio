@@ -26,7 +26,7 @@
 #include "domain/SketchModel.h"
 
 namespace adapters { class EventBus; }
-
+namespace domain::v1 { class WorkspaceStore; }
 
 namespace core {
 
@@ -86,6 +86,8 @@ namespace core {
         ServiceRegistry& services() override { return m_services; }
         void registerCoreServices();
 
+        std::unique_ptr<adapters::EventBus> m_eventBus;
+        std::unique_ptr<domain::v1::WorkspaceStore> m_workspaceStore;
 
     private:
 
@@ -107,7 +109,7 @@ namespace core {
 
 
         ServiceRegistry m_services;
-        std::unique_ptr<adapters::EventBus> m_eventBus;
+       
 
         std::string m_statusMessage;
         std::atomic<bool> m_isLoading;

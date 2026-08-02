@@ -78,10 +78,10 @@ void SceneController::changeToSingleBuildPlateView(slicer::BuildPlateRenderer* b
 class SnapshotCommand final : public ICommand
 {
 public:
-    SnapshotCommand(domain::v1::Workspace* workspace,
+    SnapshotCommand(domain::v1::WorkspaceStore& store,
         std::string name,
         std::function<void()> action)
-        : m_workspace(workspace)
+        : m_store(store)
         , m_name(std::move(name))
         , m_action(std::move(action))
     {
@@ -93,27 +93,24 @@ public:
     {
         if (!m_hasRun)
         {
-            // First execution: snapshot before, run the real action, snapshot after
-            m_before = nlohmann::json(*m_workspace);
-            m_action();
-            m_after = nlohmann::json(*m_workspace);
+            m_store.read([&](const domain::v1::Workspace& ws) { m_before = nlohmann::json(ws); });
+            m_action();   // zero-arg — action already captured store/whatever it needs
+            m_store.read([&](const domain::v1::Workspace& ws) { m_after = nlohmann::json(ws); });
             m_hasRun = true;
         }
         else
         {
-            // This is a redo — restore the captured "after" state rather than
-            // re-running m_action(), which could mint new GUIDs / be non-idempotent
-            m_after.get_to(*m_workspace);
+            m_store.commit([this](domain::v1::Workspace& ws) { m_after.get_to(ws); });
         }
     }
 
     void Undo() override
     {
-        m_before.get_to(*m_workspace);
+        m_store.commit([this](domain::v1::Workspace& ws) { m_before.get_to(ws); });
     }
 
 private:
-    domain::v1::Workspace* m_workspace;
+    domain::v1::WorkspaceStore& m_store;
     std::string m_name;
     std::function<void()> m_action;
     nlohmann::json m_before;
@@ -147,8 +144,8 @@ class IWorkspaceService
 public:
     virtual  ~IWorkspaceService() = default;
 
-    virtual  bool loadWorkspace(domain::v1::Workspace& workspace,std::string path, std::string fileName) =0;
-    virtual  void saveWorkspace(domain::v1::Workspace& workspace,std::string path, std::string fileName) =0;
+    virtual  bool loadWorkspace( std::string path, std::string fileName) =0;
+    virtual  void saveWorkspace( std::string path, std::string fileName) =0;
 
 
 };
@@ -158,87 +155,92 @@ private:
     domain::DataContext& m_dataContext;
     ModelCache& m_cache;
     TaskRunner* m_taskRunner;
-
+    domain::v1::WorkspaceStore* m_workspaceStore;
 public:
-    WorkspaceService(domain::DataContext& dataContext, ModelCache& cache, TaskRunner* taskRunner);
+    WorkspaceService(domain::DataContext& dataContext, domain::v1::WorkspaceStore& workspaceStore, ModelCache& cache, TaskRunner* taskRunner);
     ~WorkspaceService();
-    bool loadWorkspace(domain::v1::Workspace& workspace,std::string path, std::string fileName) override;
-    void saveWorkspace(domain::v1::Workspace& workspace,std::string path, std::string fileName) override;
+    bool loadWorkspace(std::string path, std::string fileName) override;
+    void saveWorkspace(std::string path, std::string fileName) override;
     
 
 
 };
 
-WorkspaceService::WorkspaceService(domain::DataContext& dataContext, ModelCache& cache, TaskRunner* taskRunner) : m_dataContext(dataContext), m_cache(cache)
+WorkspaceService::WorkspaceService(domain::DataContext& dataContext, domain::v1::WorkspaceStore& workspaceStore, ModelCache& cache, TaskRunner* taskRunner)
+    : m_dataContext(dataContext), m_cache(cache)
+{
+    m_workspaceStore = &workspaceStore;
+}
+WorkspaceService::~WorkspaceService()
 {
 }
-WorkspaceService::~WorkspaceService() {
-}
 
-bool WorkspaceService::loadWorkspace(domain::v1::Workspace& workspace,std::string path, std::string fileName) {
+bool WorkspaceService::loadWorkspace(std::string path, std::string fileName) {
     std::ifstream file(path + "\\" + fileName);
-    
+
     if (!file) return false;
 
     std::string tok;
-     
 
-    nlohmann::json j;
-    file >> j;
 
-    j.get_to(workspace);
-
-    FolderScanner scanner = FolderScanner();
-
-    for each(domain::v1::Project* project in workspace.projects)
-    {
-        for each(domain::v1::BuildPlate* buildPlate in project->buildPlates )
+    m_workspaceStore->commit([&](domain::v1::Workspace& ws)
         {
-            
-            std::string path = "C:\\github\\Pistachio-config\\Assets\\STL\\buildplate.stl";
+            nlohmann::json j;
+            file >> j;
 
-            StlLoaderAdapter loader = StlLoaderAdapter(m_cache);
-            loader.load(path);
+            j.get_to(ws);
 
-            std::shared_ptr<domain::v1::Model> buildPlateModel = std::make_shared<domain::v1::Model>();
+            FolderScanner scanner = FolderScanner();
 
-            buildPlateModel->mesh = loader.getMesh();
-            buildPlateModel->Id = scanner.scanFile(path).file.fileHash.c_str(); 
- 
-            buildPlate->buildPlateModel = buildPlateModel;
-
-            ModelInstanceFactory factory;
-
-            for each(auto& instance in buildPlate->modelInstances)
+            for each(domain::v1::Project * project in ws.projects)
             {
-                auto asset = m_cache.assets.find(instance->modelHash);
+                for each(domain::v1::BuildPlate * buildPlate in project->buildPlates)
+                {
 
-                StlLoaderAdapter loader = StlLoaderAdapter(m_cache );
-                loader.load(asset->second->fileLocation);
+                    std::string path = "C:\\github\\Pistachio-config\\Assets\\STL\\buildplate.stl";
+
+                    StlLoaderAdapter loader = StlLoaderAdapter(m_cache);
+                    loader.load(path);
+
+                    std::shared_ptr<domain::v1::Model> buildPlateModel = std::make_shared<domain::v1::Model>();
+
+                    buildPlateModel->mesh = loader.getMesh();
+                    buildPlateModel->Id = scanner.scanFile(path).file.fileHash.c_str();
+
+                    buildPlate->buildPlateModel = buildPlateModel;
+
+                    ModelInstanceFactory factory;
+
+                    for each(auto& instance in buildPlate->modelInstances)
+                    {
+                        auto asset = m_cache.assets.find(instance->modelHash);
+
+                        StlLoaderAdapter loader = StlLoaderAdapter(m_cache);
+                        loader.load(asset->second->fileLocation);
 
 
-                std::shared_ptr<domain::v1::Model> m = std::make_shared<domain::v1::Model>();
-                m->mesh = loader.getMesh();
-                m->Id = instance->modelHash;
-                m->fileName = asset->second->fileName ;
-                m->fileLocation = asset->second->fileLocation;
-                m->label = path.c_str();
-                m->name = asset->second->name;
-                 m_cache.models[instance->modelHash] = m;
+                        std::shared_ptr<domain::v1::Model> m = std::make_shared<domain::v1::Model>();
+                        m->mesh = loader.getMesh();
+                        m->Id = instance->modelHash;
+                        m->fileName = asset->second->fileName;
+                        m->fileLocation = asset->second->fileLocation;
+                        m->label = path.c_str();
+                        m->name = asset->second->name;
+                        m_cache.models[instance->modelHash] = m;
 
+                    }
+
+
+
+                }
             }
+        });
 
-           
 
-        }
-
-    }
-
- 
     return true;
 
 }
-void WorkspaceService::saveWorkspace(domain::v1::Workspace& workspace,std::string path, std::string fileName) {
+void WorkspaceService::saveWorkspace( std::string path, std::string fileName) {
 
 }
 
@@ -258,22 +260,25 @@ private:
     domain::DataContext& m_dataContext;
     ModelCache& m_cache;
     TaskRunner* m_taskRunner;
+    domain::v1::WorkspaceStore* m_workspaceStore;
 
 public:
-    SlicerService(domain::DataContext& dataContext, ModelCache& cache, TaskRunner* taskRunner);
+    SlicerService(domain::DataContext& dataContext, domain::v1::WorkspaceStore& workspaceStore, ModelCache& cache, TaskRunner* taskRunner);
     ~SlicerService();
 
     void loadWorkspace();
     void addModel(domain::v1::BuildPlate* selectedBuildPlate, const void* data, size_t size);
     void arrangeBuildPlate(domain::v1::BuildPlate* selectedBuildPlate);
 
-    bool saveWorkspaceToFile(const std::string& filePath, domain::v1::Workspace* workspace);
+    bool saveWorkspaceToFile(const std::string& filePath);
 
 };
 
-SlicerService::SlicerService(domain::DataContext& dataContext, ModelCache& cache, TaskRunner* taskRunner) : m_dataContext(dataContext), m_cache(cache)
+SlicerService::SlicerService(domain::DataContext& dataContext, domain::v1::WorkspaceStore& workspaceStore ,ModelCache& cache, TaskRunner* taskRunner) 
+    : m_dataContext(dataContext), m_cache(cache)
 {
-    
+    m_workspaceStore = &workspaceStore;
+
 }
 SlicerService::~SlicerService() {
 
@@ -435,7 +440,7 @@ void SlicerService::arrangeBuildPlate(domain::v1::BuildPlate* selectedBuildPlate
     std::cout << "[ARRANGE] Done in " << totalMs << " ms | placed=" << placedCount << " failed=" << failedCount
         << " | totalPositionsTested=" << totalPositionsTested << "\n";
 }
-bool SlicerService::saveWorkspaceToFile(const std::string& filePath, domain::v1::Workspace* workspace) {
+bool SlicerService::saveWorkspaceToFile(const std::string& filePath) {
     try {
         std::ofstream file(filePath);
         if (!file.is_open()) {
@@ -444,8 +449,11 @@ bool SlicerService::saveWorkspaceToFile(const std::string& filePath, domain::v1:
         }
 
         // Implicitly converts context to json, then pretty-prints with 4-space indentation
-        nlohmann::json j = *workspace;
-        file << j.dump(4);
+        m_workspaceStore->read([&](const domain::v1::Workspace& ws)
+        {
+            nlohmann::json j = ws;
+            file << j.dump(4);
+        });
 
         return true;
     }
@@ -565,8 +573,10 @@ void SlicerService::loadWorkspace() {
     project->buildPlates.push_back(buildPlate);
 
 
-    m_dataContext.m_workspace->projects.push_back(project);
- 
+    //m_dataContext.m_workspace->projects.push_back(project);
+    m_workspaceStore->commit([&](domain::v1::Workspace& ws) {
+        ws.projects.push_back(project);
+        });
  
 }
 
@@ -586,16 +596,13 @@ public:
         printf("[SlicerCore] onLoad\n");
         
         m_modelCache = svc.application->services().resolve<domain::v1::ModelCache>();
-
-		m_workspace = dataContext.m_workspace;
-
-        
+        m_workspaceStore = svc.application->services().resolve<domain::v1::WorkspaceStore>();
+		//m_workspace = dataContext.m_workspace;
         /* refactor the load adapters to use the cache and OCCT from the plug-in
         adapters::StepFileLoader step;
         std::shared_ptr<domain::Model> mode = step.load("C:\\github\\StepFileExtraction\\Debug\\Node_1\\Node_1_3\\Node_1_3_1\\Node_1_3_1_1.step");
         m_app->loadFile("C:\\github\\StepFileExtraction\\Debug\\Node_1\\Node_1_3\\Node_1_3_1\\Node_1_3_1_1.step");
         */
-        
 
         m_app = reinterpret_cast<core::Application*>(svc.app);
         m_config = reinterpret_cast<ports::IConfigPort*>(svc.config);
@@ -603,9 +610,11 @@ public:
         m_guiHost = reinterpret_cast<adapters::ImGuiHost*>(svc.guiHost);
         taskRunner = reinterpret_cast<TaskRunner*>(svc.taskRunner);
          
-
-
-        m_project = std::make_unique<domain::v1::Project>(); //might want to wrap this up and move to application.
+        m_workspaceService = new WorkspaceService(dataContext,*m_workspaceStore, *m_modelCache, taskRunner);
+        m_slicerService = new SlicerService(dataContext,*m_workspaceStore, *m_modelCache, taskRunner);
+ 
+        std::unique_ptr<domain::v1::Project> tempproject = std::make_unique<domain::v1::Project>(); //might want to wrap this up and move to application.
+        
         FolderScanner  scanner;
         ScanOptions    opts;
         opts.recursive = true;
@@ -613,12 +622,12 @@ public:
         opts.maxDepth = 10;
         ScanResult result = scanner.scan("E:/github/Voron-2/STLs", opts);
 
-        if (result.success)
+        if (tempproject && result.success)
         {
             printf("Scanned: %s — %d files, %d folders\n",
                 result.rootPath.c_str(), result.totalFiles, result.totalFolders);
 
-            m_project->fromScanResult(result, *m_modelCache);
+            tempproject->fromScanResult(result, *m_modelCache);
 
             m_projectLoaded = true;
 
@@ -627,31 +636,32 @@ public:
         {
             printf("[SlicerCore] scan failed: %s\n", result.errorMessage.c_str());
         }
-       
+         
+        if (m_workspaceStore)
+        {
+            bool needsLoad = false;
+            m_workspaceStore->read([&](const domain::v1::Workspace& ws)
+                { needsLoad = ws.projects.empty(); });
 
-
-
-        m_workspaceService = new WorkspaceService(dataContext, *m_modelCache, taskRunner);
-        m_slicerService = new SlicerService(dataContext, *m_modelCache, taskRunner);
-        
-		// load the initial workspace if there are no projects.
-        // This is a temporary solution until we have a proper workspace management system.
-        if (dataContext.m_workspace->projects.empty()) {
-            m_slicerService->loadWorkspace();
+            if (needsLoad)
+                m_workspaceService->loadWorkspace("c:\\temp\\", "workspace.json");
         }
 
-        
+
         // need a better way to set these.
-        m_navigation =new NavigationManager();
-         m_navigation->setProject(m_workspace->projects[0]->Id);
-		 m_navigation->setBuildPlate(m_workspace->projects[0]->buildPlates[0]->Id);
+        m_navigation = new NavigationManager();
+        //m_navigation->setProject(m_workspace->projects[0]->Id);
+        //m_navigation->setBuildPlate(m_workspace->projects[0]->buildPlates[0]->Id);
+
+        auto* project = m_navigation->resolveOrDefaultProject(*m_workspaceStore);
+        auto* buildPlate = m_navigation->resolveOrDefaultBuildPlate(project);
 
 
         m_preview = slicer::StlPreviewRenderer(); 
 
         m_cmdHistory.OnHistoryChanged = [this]()
             {
-                auto* project = m_navigation->resolveProject(m_workspace);
+                auto* project = m_navigation->resolveProject(*m_workspaceStore);
                 auto* buildPlate = m_navigation->resolveBuildPlate(project);
 
                 if (!buildPlate)
@@ -660,8 +670,9 @@ public:
                 m_buildPlateRenderer->updateViewModel(project ? project->buildPlates : std::vector<domain::v1::BuildPlate*>{});
             };
 
-        auto* project = m_navigation->resolveProject(m_workspace);
-        auto* buildPlate = m_navigation->resolveBuildPlate(project);
+       
+        
+        
         if (buildPlate)
             m_slicerService->arrangeBuildPlate(buildPlate);
 
@@ -670,7 +681,7 @@ public:
         //printf("[SlicerCore] about to call initialize, project=%p, buildPlates.size()=%zu\n",
         //    (void*)m_selectedProject, m_selectedProject ? m_selectedProject->buildPlates.size() : 0);
 
-        m_buildPlateRenderer->initialize(m_workspace , project, *m_modelCache,*m_navigation);
+        m_buildPlateRenderer->initialize(*m_workspaceStore, project, *m_modelCache,*m_navigation);
         printf("[SlicerCore] initialize() returned\n");
 
         if (m_registry)
@@ -699,21 +710,21 @@ public:
             // Load Workspace
             m_ribbonContrib->addButton("load_workspace", "Load", 30, [this]() {
                 auto cmd = std::make_unique<SnapshotCommand>(
-                    m_workspace, "Load Workspace",
+                    *m_workspaceStore, "Load Worspace",
                     [this]() {
-                        m_workspaceService->loadWorkspace(*m_workspace, "c:\\temp\\", "workspace.json");
-                        auto* project = m_navigation->resolveOrDefaultProject(m_workspace);
+                        m_workspaceService->loadWorkspace("c:\\temp\\", "workspace.json");
+                        auto* project = m_navigation->resolveOrDefaultProject(*m_workspaceStore);
                         m_buildPlateRenderer->updateViewModel(project->buildPlates);
                     });
                 m_cmdHistory.Execute(std::move(cmd));
                 
                 });
             m_ribbonContrib->addButton("saveWorkspace", "Save", 30,[this]() {
-                    auto* project = m_navigation->resolveOrDefaultProject(m_workspace);
+                    auto* project = m_navigation->resolveOrDefaultProject(*m_workspaceStore);
                     auto* buildPlate = m_navigation->resolveOrDefaultBuildPlate(project);
                     
                     const std::string fileName = "c:\\temp\\workspace.json";
-                    m_slicerService->saveWorkspaceToFile(fileName,m_workspace);
+                    m_slicerService->saveWorkspaceToFile(fileName);
                     m_buildPlateRenderer->updateViewModel(project->buildPlates);
             });
             m_ribbonContrib->addSeparator(40);
@@ -731,37 +742,32 @@ public:
 
             auto partContrib = m_registry->contributeRibbon(k_pluginId, "Part", 400);
             // delete Part
-            partContrib->addButton("deletePart", "Delete", 40, [this]() {  
-                   auto* project = m_navigation->resolveProject(m_workspace);
-                   if (!project) return;
-                   auto* buildPlate = m_navigation->resolveOrDefaultBuildPlate(project);
+            partContrib->addButton("deletePart", "Delete", 40, [this]() {
+                auto selectedIds = m_navigation->selection().getSelectedIds();
+                if (selectedIds.empty()) return;
 
-                   auto selectedIds = m_navigation->selection().getSelectedIds();
-                   if (selectedIds.empty()) return;
-                   auto cmd = std::make_unique<SnapshotCommand>(
-                       m_workspace, "Delete Instances",
-                       [this, selectedIds, buildPlate, project]() {
-                           //auto* buildPlate = m_selectedBuildPlate;   // or resolve via NavigationManager if that's live
-                           if (!buildPlate) return;
+                auto cmd = std::make_unique<SnapshotCommand>(
+                    *m_workspaceStore, "Delete Instances",
+                    [this, selectedIds]() {
+                        auto* project = m_navigation->resolveProject(*m_workspaceStore);
+                        if (!project) return;
+                        auto* buildPlate = m_navigation->resolveOrDefaultBuildPlate(project);
+                        if (!buildPlate) return;
 
-                           auto& instances = buildPlate->modelInstances;
-                           instances.erase(
-                               std::remove_if(instances.begin(), instances.end(),
-                                   [&](const std::unique_ptr<ModelInstance>& inst) {
-                                       return selectedIds.count(inst->id) > 0;
-                                   }),
-                               instances.end());
+                        m_workspaceStore->commit([&](domain::v1::Workspace&) {
+                            auto& instances = buildPlate->modelInstances;
+                            instances.erase(
+                                std::remove_if(instances.begin(), instances.end(),
+                                    [&](const std::unique_ptr<ModelInstance>& inst) {
+                                        return selectedIds.count(inst->id) > 0;
+                                    }),
+                                instances.end());
+                            });
 
-                           //m_buildPlateRenderer->getSelectionManager().clear();
-                           m_navigation->selection().clear();
-
-                           m_buildPlateRenderer->updateViewModel(project->buildPlates);
-                       });
-
-                   m_cmdHistory.Execute(std::move(cmd));
-
-
-
+                        m_navigation->selection().clear();
+                        m_buildPlateRenderer->updateViewModel(project->buildPlates);
+                    });
+                m_cmdHistory.Execute(std::move(cmd));
                 });
 
 
@@ -770,9 +776,9 @@ public:
                 
                 // Add plate
                 auto addCmd = std::make_unique<SnapshotCommand>(
-                    m_workspace, "Add Build Plate",
+                    *m_workspaceStore, "Add Build Plate",
                     [this]() {
-                        auto* project = m_navigation->resolveProject(m_workspace);
+                        auto* project = m_navigation->resolveProject(*m_workspaceStore);
                         if (!project) return;
 
                         auto* plate = new domain::v1::BuildPlate();
@@ -810,17 +816,17 @@ public:
                 {
 
                     auto cmd = std::make_unique<SnapshotCommand>(
-                        m_workspace, "Drop Models",
+                        *m_workspaceStore, "Drop Models",
                         [this, data, size]() {
 
-                            auto* project = m_navigation->resolveOrDefaultProject(m_workspace);
+                            auto* project = m_navigation->resolveOrDefaultProject(*m_workspaceStore);
                             auto* buildPlate = m_navigation->resolveOrDefaultBuildPlate(project);
                             
                             m_slicerService->addModel(buildPlate , data, size);
                             m_slicerService->arrangeBuildPlate(buildPlate);
 
                              const std::string fileName = "c:\\temp\\workspace.json";
-                             m_slicerService->saveWorkspaceToFile(fileName,m_workspace );
+                             m_slicerService->saveWorkspaceToFile(fileName);
                              m_buildPlateRenderer->updateViewModel(project->buildPlates);
                          
                         });
@@ -939,10 +945,12 @@ private:
     ports::RibbonContribution* m_ribbonContrib = nullptr;
     ports::DragDropContribution* m_dragDropContrib = nullptr;
 
-    std::unique_ptr<domain::v1::Project> m_project;
+    //std::unique_ptr<domain::v1::Project> m_project;
 
      
     domain::v1::Workspace* m_workspace;
+    domain::v1::WorkspaceStore* m_workspaceStore = nullptr;
+
     NavigationManager* m_navigation;
 
     TaskRunner* taskRunner;
@@ -1121,18 +1129,25 @@ private:
     // -----------------------------------------------------------------------
     void renderTree()
     {
-        if (!m_project)
+        if (!m_workspaceStore)
+        {
+            ImGui::TextDisabled("No workspace store available.");
+            return;
+        }
+
+        domain::v1::Project* project = m_navigation->resolveOrDefaultProject(*m_workspaceStore);
+
+        if (!project)
         {
             ImGui::TextDisabled("No project loaded.");
             return;
         }
-
         ImGuiTreeNodeFlags rootFlags =
             ImGuiTreeNodeFlags_DefaultOpen |
             ImGuiTreeNodeFlags_SpanAvailWidth;
 
-        const std::string& projName = m_project->name.empty()
-            ? "Project" : m_project->name;
+        const std::string& projName = project->name.empty()
+            ? "Project" : project->name;
 
         bool rootOpen = ImGui::TreeNodeEx("##proj_root", rootFlags);
         ImGui::SameLine();
@@ -1145,14 +1160,14 @@ private:
             ImGui::SameLine();
             ImGui::TextUnformatted("Build Plates");
 
-            for (auto& plate : m_project->buildPlates)
+            for (auto& plate : project->buildPlates)
             {
                 renderBuildPlates(plate);
             }
             ImGui::TreePop();
 
 
-            for (auto& folder : m_project->projectFolders)
+            for (auto& folder : project->projectFolders)
                 renderFolder(folder);
 
 

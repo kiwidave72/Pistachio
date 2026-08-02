@@ -66,3 +66,40 @@ domain::v1::BuildPlate* NavigationManager::resolveOrDefaultBuildPlate(domain::v1
     }
     return nullptr;
 }
+
+domain::v1::Project* NavigationManager::resolveProject(const domain::v1::WorkspaceStore& store) const
+{
+    domain::v1::Project* result = nullptr;
+    store.read([&](const domain::v1::Workspace& ws)
+        {
+            for (auto* p : ws.projects)
+            {
+                if (p && p->Id == m_currentProjectId)
+                {
+                    result = p;
+                    return;
+                }
+            }
+        });
+    return result;
+}
+
+domain::v1::Project* NavigationManager::resolveOrDefaultProject(domain::v1::WorkspaceStore& store)
+{
+    domain::v1::Project* found = resolveProject(store);
+    if (found) return found;
+
+    domain::v1::Project* firstProject = nullptr;
+    store.read([&](const domain::v1::Workspace& ws)
+        {
+            if (!ws.projects.empty())
+                firstProject = ws.projects[0];
+        });
+
+    if (firstProject)
+    {
+        setProject(firstProject->Id);   // goes through setProject, so setBuildPlate("")/selection-clear side effects stay consistent
+        return firstProject;
+    }
+    return nullptr;
+}

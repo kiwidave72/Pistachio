@@ -1,7 +1,7 @@
 
 #include "core/Application.h"
 #include "adapters/eventbus/EventBus.h"
-
+#include "domain/WorkspaceStore.h"
 #include <algorithm>
 #include <variant>
 #include "adapters/persistence/JsonSketchDocumentAdapter.h"
@@ -18,14 +18,7 @@ namespace core {
         : m_statusMessage("Ready"),
         m_isLoading(false),
         m_loadingProgress(0.0f){
-
-        
-          
-      
-
     }
-
-   
     Application::~Application() {
         if (m_loadingThread.joinable()) {
             m_loadingThread.join();
@@ -41,6 +34,10 @@ namespace core {
 
         m_modelCache = std::make_unique<domain::v1::ModelCache>();
         m_services.registerService<domain::v1::ModelCache>(m_modelCache.get());
+
+        m_workspaceStore = std::make_unique<domain::v1::WorkspaceStore>(m_eventBus.get());
+        m_services.registerService<domain::v1::WorkspaceStore>(m_workspaceStore.get());
+
     }
 
     void Application::setSlicerAdapter(std::unique_ptr<ports::ISlicerPort> slicer) {

@@ -343,65 +343,57 @@ GLuint LoadTexture(const std::string& filename)
 // Add this class before SlicerCorePlugin
  
  
-    TreeViewRenderer::TreeViewRenderer(NavigationManager* navigation, ModelCache* cache)
-        : m_navigation(navigation), m_cache(cache) {
+    TreeViewRenderer::TreeViewRenderer(NavigationManager* navigation, domain::v1::WorkspaceStore* workspaceStore, ModelCache* cache)
+        : m_navigation(navigation),  m_cache(cache) {
+        
+        m_workspaceStore = workspaceStore;
+
     }
     TreeViewRenderer::~TreeViewRenderer()
     {
     }
 
-    void TreeViewRenderer::render(domain::v1::Workspace* workspace) {
+    void TreeViewRenderer::render() {
+        m_workspaceStore->read([&](const domain::v1::Workspace& ws)
+            {
+                if (ws.projects.empty()) {   // fixed: was !ws.projects.empty()
+                    float availWidth = ImGui::GetContentRegionAvail().x;
+                    float availHeight = ImGui::GetContentRegionAvail().y;
+                    const char* message = "No projects loaded.";
+                    float textWidth = ImGui::CalcTextSize(message).x;
+                    float textHeight = ImGui::GetTextLineHeight();
+                    ImGui::SetCursorPosX((availWidth - textWidth) * 0.5f);
+                    ImGui::SetCursorPosY((availHeight - textHeight) * 0.5f);
+                    ImGui::TextDisabled("%s", message);
+                    return;
+                }
 
-             if (!workspace || workspace->projects.empty()) {
-                // Center the "No projects loaded" message
-                float availWidth = ImGui::GetContentRegionAvail().x;
-                float availHeight = ImGui::GetContentRegionAvail().y;
-                const char* message = "No projects loaded.";
-                float textWidth = ImGui::CalcTextSize(message).x;
-                float textHeight = ImGui::GetTextLineHeight();
+                const auto& selectedIds = m_navigation->selection().getSelectedIds();
+                ImGuiTreeNodeFlags baseFlags = ImGuiTreeNodeFlags_OpenOnArrow |
+                    ImGuiTreeNodeFlags_OpenOnDoubleClick |
+                    ImGuiTreeNodeFlags_SpanAvailWidth;
 
-                ImGui::SetCursorPosX((availWidth - textWidth) * 0.5f);
-                ImGui::SetCursorPosY((availHeight - textHeight) * 0.5f);
-                ImGui::TextDisabled("%s", message);
-                return;
-            }
-
-            // Get current selection
-            const auto& selectedIds = m_navigation->selection().getSelectedIds();
-
-            ImGuiTreeNodeFlags baseFlags = ImGuiTreeNodeFlags_OpenOnArrow |
-                ImGuiTreeNodeFlags_OpenOnDoubleClick |
-                ImGuiTreeNodeFlags_SpanAvailWidth;
-
-            // Render each project
-            for (auto* project : workspace->projects) {
-                if (!project) continue;
-
-                std::string projectLabel = project->name.empty() ? "Project" : project->name;
-
-                ImGuiTreeNodeFlags projectFlags = baseFlags | ImGuiTreeNodeFlags_DefaultOpen;
-
-                bool projectOpen = ImGui::TreeNodeEx(project->Id.c_str(), projectFlags, "%s", projectLabel.c_str());
-
-                if (projectOpen) {
-                    // Build Plates folder node
-                    std::string platesLabel = "Build Plates (" + std::to_string(project->buildPlates.size()) + ")";
-                    bool platesOpen = ImGui::TreeNodeEx((project->Id + "_plates").c_str(),
-                        baseFlags | ImGuiTreeNodeFlags_DefaultOpen,
-                        "%s", platesLabel.c_str());
-
-                    if (platesOpen) {
-                        // Render each build plate
-                        for (auto* buildPlate : project->buildPlates) {
-                            if (!buildPlate) continue;
-                            renderBuildPlateNode(buildPlate, selectedIds, baseFlags);
+                for (auto* project : ws.projects) {
+                    if (!project) continue;
+                    std::string projectLabel = project->name.empty() ? "Project" : project->name;
+                    ImGuiTreeNodeFlags projectFlags = baseFlags | ImGuiTreeNodeFlags_DefaultOpen;
+                    bool projectOpen = ImGui::TreeNodeEx(project->Id.c_str(), projectFlags, "%s", projectLabel.c_str());
+                    if (projectOpen) {
+                        std::string platesLabel = "Build Plates (" + std::to_string(project->buildPlates.size()) + ")";
+                        bool platesOpen = ImGui::TreeNodeEx((project->Id + "_plates").c_str(),
+                            baseFlags | ImGuiTreeNodeFlags_DefaultOpen,
+                            "%s", platesLabel.c_str());
+                        if (platesOpen) {
+                            for (auto* buildPlate : project->buildPlates) {
+                                if (!buildPlate) continue;
+                                renderBuildPlateNode(buildPlate, selectedIds, baseFlags);
+                            }
+                            ImGui::TreePop();
                         }
                         ImGui::TreePop();
                     }
-
-                    ImGui::TreePop();
                 }
-         }
+            });
     }
 
  
@@ -1137,15 +1129,15 @@ GLuint LoadTexture(const std::string& filename)
     }
 
     // -----------------------------------------------------------------------
-    void BuildPlateRenderer::initialize(domain::v1::Workspace* workspace, domain::v1::Project* project, ModelCache& cache, NavigationManager& navigationManager)
+    void BuildPlateRenderer::initialize(domain::v1::WorkspaceStore& workspaceStore, domain::v1::Project* project, ModelCache& cache, NavigationManager& navigationManager)
     {
         //printf("[BuildPlateRenderer] initialize() START\n");
         m_modelCache = &cache;
         m_navigation = &navigationManager;
-        m_workspace = workspace;
+        m_workspaceStore = &workspaceStore;
 
         //m_selectionManager = m_navigation->selection();
-        m_treeViewRenderer = std::make_unique<TreeViewRenderer>(m_navigation, m_modelCache);
+        m_treeViewRenderer = std::make_unique<TreeViewRenderer>(m_navigation, m_workspaceStore , m_modelCache);
 
         ensureGl();
         //printf("[BuildPlateRenderer] after ensureGl()\n");
@@ -1263,7 +1255,7 @@ GLuint LoadTexture(const std::string& filename)
             m_registry->renderDragDropTargets("ASSET_PATHS");
             renderCameraGizmo();
 
-           
+
             ImGuiWindowFlags flags = 
                 ImGuiWindowFlags_NoDocking |
                 ImGuiWindowFlags_NoCollapse |
@@ -1327,7 +1319,7 @@ GLuint LoadTexture(const std::string& filename)
 
             // Render tree content
             if (m_treeViewRenderer) {
-                m_treeViewRenderer->render(m_workspace);
+                m_treeViewRenderer->render();
             }
             else {
                 // Center "No projects loaded" text
@@ -1346,6 +1338,7 @@ GLuint LoadTexture(const std::string& filename)
            
             ImGui::End(); // End slicer window
             ImGui::PopStyleColor();
+            
 
             DrawViewportToolbar(m_singleIcon,m_multiIcon,true);
                 ;

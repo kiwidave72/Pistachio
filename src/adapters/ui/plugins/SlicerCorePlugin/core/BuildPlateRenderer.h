@@ -89,10 +89,10 @@ namespace slicer {
     // Add this class before SlicerCorePlugin
     class TreeViewRenderer {
     public:
-        TreeViewRenderer(NavigationManager* navigation, ModelCache* cache);
+        TreeViewRenderer(NavigationManager* navigation, domain::v1::WorkspaceStore* workspaceStore, ModelCache* cache);
         ~TreeViewRenderer();
 
-        void render(domain::v1::Workspace* workspace);
+        void render();
  
         void renderBuildPlateNode(domain::v1::BuildPlate* buildPlate,
             const std::unordered_set<std::string>& selectedIds,
@@ -105,6 +105,7 @@ namespace slicer {
 
     private:
         NavigationManager* m_navigation;
+        domain::v1::WorkspaceStore* m_workspaceStore;
         ModelCache* m_cache;
     };
 
@@ -268,7 +269,7 @@ namespace slicer {
 
         ~BuildPlateRenderer();
 
-        void initialize(domain::v1::Workspace* workspace, domain::v1::Project* project,ModelCache& cache, NavigationManager& navigationManager);
+        void initialize(domain::v1::WorkspaceStore& workspaceStore, domain::v1::Project* project,ModelCache& cache, NavigationManager& navigationManager);
         
  
         void updateViewModel(std::vector<domain::v1::BuildPlate*> buildPlates);
@@ -308,7 +309,9 @@ namespace slicer {
         bool m_treeHovered = false;
         BoundingBoxRenderer m_boundingBoxRenderer;
         GLuint m_lineShader = 0;
-        domain::v1::Workspace* m_workspace;
+         
+        domain::v1::WorkspaceStore* m_workspaceStore;
+
         // header, private section
         float m_fpsAccumTime = 0.0f;
         int   m_fpsFrameCount = 0;

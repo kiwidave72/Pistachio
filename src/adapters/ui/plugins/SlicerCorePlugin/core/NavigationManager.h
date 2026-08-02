@@ -2,6 +2,7 @@
 #include <string>
 #include "SelectionManager.h"  
 #include "domain/dataContext.h"
+#include "domain/WorkspaceStore.h"
 
 class NavigationManager
 {
@@ -17,6 +18,10 @@ public:
     // are allowed to exist, and only ever transiently
     domain::v1::Project* resolveProject(domain::v1::Workspace* workspace) const;
     domain::v1::Project*  resolveOrDefaultProject(domain::v1::Workspace* workspace);
+
+    domain::v1::Project* resolveProject(const domain::v1::WorkspaceStore& store) const;
+    domain::v1::Project* resolveOrDefaultProject(domain::v1::WorkspaceStore& store);
+
     domain::v1::BuildPlate* resolveBuildPlate(domain::v1::Project* project) const;
     domain::v1::BuildPlate* resolveOrDefaultBuildPlate(domain::v1::Project* project);
 
