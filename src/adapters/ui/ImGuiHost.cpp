@@ -945,7 +945,7 @@ void ImGuiHost::beginFrame_RenderTitlebar()
 
     ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
+    //ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
 
     constexpr ImGuiWindowFlags k_flags =
         ImGuiWindowFlags_NoTitleBar   |
@@ -968,13 +968,12 @@ void ImGuiHost::beginFrame_RenderTitlebar()
                 tMin.y + k_titlebarHeight
             };
             ImGui::GetBackgroundDrawList()->AddRectFilled(tMin, tMax, UI::Colors::Theme::titlebar);
+            //ImGui::GetBackgroundDrawList()->AddRectFilled(tMin, tMax, UI::Colors::ColorWithMultipliedValue(IM_COL32(255, 0, 0, 255),0));
         }
 
-        beginFrame_RenderLogo(
-            ImGui::GetForegroundDrawList(), windowPadding, titlebarVerticalOffset);
+        beginFrame_RenderLogo(ImGui::GetForegroundDrawList(), windowPadding, titlebarVerticalOffset);
 
-        beginFrame_HandleDragZone(
-            windowPadding, titlebarVerticalOffset, k_titlebarHeight);
+        beginFrame_HandleDragZone(windowPadding, titlebarVerticalOffset, k_titlebarHeight);
 
         beginFrame_RenderMenuAndRibbon(windowPadding, titlebarVerticalOffset);
 
@@ -983,7 +982,7 @@ void ImGuiHost::beginFrame_RenderTitlebar()
         beginFrame_RenderWindowButtons();
     }
     ImGui::End();
-    ImGui::PopStyleVar(3);
+    ImGui::PopStyleVar(2);
 }
 
 void ImGuiHost::beginFrame_RenderLogo(
@@ -1078,54 +1077,67 @@ void ImGuiHost::beginFrame_RenderMenuAndRibbon(
     const ImVec2& windowPadding,
     float         titlebarVerticalOffset)
 {
-    const float logoOffset = 16.0f * 2.0f + 48.0f + windowPadding.x;
-    const float menubarOffset = 2.0f;
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(14.0f, 6.0f));
 
+    const float logoOffset = 16.0f * 2.0f + 48.0f + windowPadding.x;
+    const float menubarOffset = 3.0f;
     ImGui::SuspendLayout();
+    
     ImGui::SetItemAllowOverlap();
 
-    // Menubar row
-    ImGui::SetCursorPos(ImVec2(logoOffset, menubarOffset + titlebarVerticalOffset));
+    titlebarVerticalOffset = titlebarVerticalOffset + menubarOffset;
+    ImGui::SetCursorPos(ImVec2(logoOffset, titlebarVerticalOffset));
     {
         const ImRect menuRect = {
             ImGui::GetCursorPos(),
             { ImGui::GetContentRegionAvail().x + ImGui::GetCursorScreenPos().x,
-              ImGui::GetFrameHeightWithSpacing() }
+              ImGui::GetFrameHeightWithSpacing() }    
         };
         ImGui::BeginGroup();
+
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(14.0f, 10.0f));
+        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(6.0f, 8.0f));
+        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(6.0f, 8.0f));
+
         if (HostUI::BeginMenubar(menuRect))
         {
-            // Host menus first (File, Views, Plugins etc.) via callback
-            if (m_menubarCallback)
-                m_menubarCallback();
-
-            // Then plugin-contributed menus via registry
             m_registry.renderMenuBar();
         }
         HostUI::EndMenubar();
+        ImGui::PopStyleVar(3);
         ImGui::EndGroup();
     }
 
+    ImGui::PopStyleVar();
+
+    //ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(1.0f, 0.3f, 0.3f, 1.0f)); // red border, this button only
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 2.0f);
+
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(14.0f, 6.0f));
     // Ribbon row
     {
+        titlebarVerticalOffset = titlebarVerticalOffset + 12.0f + ImGui::GetFrameHeightWithSpacing();
         ImGui::SetCursorPos(ImVec2(
-            logoOffset,
-            6.0f + titlebarVerticalOffset + ImGui::GetFrameHeightWithSpacing()));
+            logoOffset, titlebarVerticalOffset ));
 
         ImGui::BeginGroup();
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(14.0f, 10.0f));
         ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(6.0f, 4.0f));
         ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(6.0f, 4.0f));
 
         // Host ribbon items via callback
-        if (m_ribbonbarCallback)
-            m_ribbonbarCallback();
+        //if (m_ribbonbarCallback)
+        //    m_ribbonbarCallback();
 
         // Plugin ribbon contributions via registry
         m_registry.renderRibbonBar();
 
-        ImGui::PopStyleVar(2);
+        ImGui::PopStyleVar(3);
         ImGui::EndGroup();
     }
+    ImGui::PopStyleVar();
+    ImGui::PopStyleVar();
+    //ImGui::PopStyleColor();
 
     if (ImGui::IsItemHovered())
         m_TitleBarHovered = false;
