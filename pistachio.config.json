@@ -38,25 +38,39 @@
     "bed.size.X": "250",
     "bed.size.Y": "250",
     "bed.temp": "250",
+    "slicer.bottomLayerCount": 4,
     "slicer.firstLayerHeight": 0.2,
-    "slicer.layerHeight": 0.2
+    "slicer.infill": "rectilinear",
+    "slicer.infill.activePlugin": "rectilinear",
+    "slicer.layerHeight": 0.2,
+    "slicer.maxSpeed": 100.0,
+    "slicer.topLayerCount": 4,
+    "slicer.wallCount": 2
   },
   "slicer.toolheads.0.generalSettings": {
+    "extrusionWidth.percent": 112.0,
     "filament": "ABS",
     "hotEndFanSpeed": 250,
     "hotEndFanSpeedLayers": "0,1,2,3",
     "hotEndFanSpeedLayersSpeed": 80,
     "hotEndMaxTemp": 250,
     "nozzle.size": 0.2,
+    "speeds.infill.percent": 100.0,
+    "speeds.perimeter.percent": 60.0,
+    "speeds.travel.percent": 100.0,
     "toolHead.ExtrusionMaxSpeed": 250
   },
   "slicer.toolheads.1.generalSettings": {
+    "extrusionWidth.percent": 112.0,
     "filament": "ABS",
     "hotEndFanSpeed": 250,
     "hotEndFanSpeedLayers": "0,1,2,3",
     "hotEndFanSpeedLayersSpeed": 80,
     "hotEndMaxTemp": 250,
     "nozzle.size": 0.2,
+    "speeds.infill.percent": 100.0,
+    "speeds.perimeter.percent": 60.0,
+    "speeds.travel.percent": 100.0,
     "toolHead.ExtrusionMaxSpeed": 250
   }
 }

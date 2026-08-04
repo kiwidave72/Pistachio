@@ -488,6 +488,33 @@ foreach(cfg Debug Release RelWithDebInfo MinSizeRel)
     )
 endforeach()
 
+
+# -------------------------
+# pistachio_kinetica (ToolpathEnginePlugin — IServiceModule)
+# -------------------------
+add_library(pistachio_kinetica SHARED
+    src/adapters/plugins/ToolpathEnginePlugin/ToolpathEnginePlugin.cpp
+)
+
+target_include_directories(pistachio_kinetica PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+
+target_link_libraries(pistachio_kinetica PRIVATE
+    pistachio_core
+)
+
+# Output directory is "services", not "plugins" — this is what
+# ServiceModuleRegistry::getServicesDir() scans.
+foreach(cfg Debug Release RelWithDebInfo MinSizeRel)
+    string(TOUPPER "${cfg}" CFGU)
+    set_target_properties(pistachio_kinetica PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY_${CFGU} "${CMAKE_BINARY_DIR}/bin/${cfg}/services"
+        LIBRARY_OUTPUT_DIRECTORY_${CFGU} "${CMAKE_BINARY_DIR}/bin/${cfg}/services"
+        ARCHIVE_OUTPUT_DIRECTORY_${CFGU} "${CMAKE_BINARY_DIR}/lib/${cfg}"
+    )
+endforeach()
+
 # -------------------------
 # pistachio_ui_stub (minimal hot-reload test plugin)
 # -------------------------

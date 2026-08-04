@@ -699,6 +699,23 @@ namespace core {
             "slicer.Settings", "slicer.layerHeight", "Layer Height", "", SettingType::Float, 0.2, "", false
         ));
         
+
+        m_config.registerSetting(SettingInfo(
+            "slicer.Settings", "slicer.wallCount", "Wall Count", "Number of perimeter loops", "Walls", SettingType::Int, 2, "", false
+        ));
+        m_config.registerSetting(SettingInfo(
+            "slicer.Settings", "slicer.topLayerCount", "Top Layers", "Solid layers before top surface", "Walls", SettingType::Int, 4, "", false
+        ));
+        m_config.registerSetting(SettingInfo(
+            "slicer.Settings", "slicer.bottomLayerCount", "Bottom Layers", "Solid layers before infill begins", "Walls", SettingType::Int, 4, "", false
+        ));
+        m_config.registerSetting(SettingInfo(
+            "slicer.Settings", "slicer.maxSpeed", "Max Speed", "Global speed ceiling (mm/s) — may be overridden by printer/kinematics profile later", "Speed", SettingType::Float, 100.0, "", false
+        ));
+        m_config.registerSetting(SettingInfo(
+            "slicer.Settings", "slicer.infill", "Infill", "Which registered infill strategy is currently in use", "Infill", SettingType::String, "rectilinear", "", false
+        ));
+
         initializeConfigFilament(0,"ABS");
         initializeConfigFilament(1, "PLA");
 
@@ -790,6 +807,20 @@ namespace core {
             ns + ".generalSettings", "toolHead.ExtrusionMaxSpeed", "Extrusion Max Speed", "Extrusion Max Speed in mm3 sec - Description", "Tool Head " + std::to_string(index) + " Flow", SettingType::Int, 250, "", true
         ));
 
+
+        m_config.registerSetting(SettingInfo(
+            ns + ".generalSettings", "extrusionWidth.percent", "Extrusion Width", "% of nozzle diameter (100% = nozzle.size) - Description", "Tool Head " + std::to_string(index) + " Extrusion", SettingType::Float, 112.0, "", false
+        ));
+        m_config.registerSetting(SettingInfo(
+            ns + ".generalSettings", "speeds.perimeter.percent", "Perimeter Speed", "% of slicer.maxSpeed - Description", "Tool Head " + std::to_string(index) + " Speed", SettingType::Float, 60.0, "", true
+        ));
+        m_config.registerSetting(SettingInfo(
+            ns + ".generalSettings", "speeds.infill.percent", "Infill Speed", "% of slicer.maxSpeed - Description", "Tool Head " + std::to_string(index) + " Speed", SettingType::Float, 100.0, "", true
+        ));
+        m_config.registerSetting(SettingInfo(
+            ns + ".generalSettings", "speeds.travel.percent", "Travel Speed", "% of slicer.maxSpeed - Description", "Tool Head " + std::to_string(index) + " Speed", SettingType::Float, 100.0, "", true
+        ));
+        
         m_config.registerSetting(SettingInfo(
             ns + ".generalSettings", "filament", "Filament", "Printing Filament",  SettingType::Enum, "ABS", "filament.Settings", false
         ));
