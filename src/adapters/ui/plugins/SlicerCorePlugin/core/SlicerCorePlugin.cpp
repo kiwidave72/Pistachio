@@ -1,5 +1,6 @@
 #include "adapters/ui/plugins/UiModuleApi.h"
 #include "adapters/ui/IconsFontAwesomeRegular.h"
+#include "ports/ITaskProgressReporter.h"
 
 #include "core/Application.h"
 #include "ports/IConfigPort.h"
@@ -599,7 +600,10 @@ public:
         
         m_modelCache = svc.application->services().resolve<domain::v1::ModelCache>();
         m_workspaceStore = svc.application->services().resolve<domain::v1::WorkspaceStore>();
-		//m_workspace = dataContext.m_workspace;
+		
+        m_taskreporter = svc.application->services().resolve<ports::ITaskProgressReporter>();
+
+        //m_workspace = dataContext.m_workspace;
         /* refactor the load adapters to use the cache and OCCT from the plug-in
         adapters::StepFileLoader step;
         std::shared_ptr<domain::Model> mode = step.load("C:\\github\\StepFileExtraction\\Debug\\Node_1\\Node_1_3\\Node_1_3_1\\Node_1_3_1_1.step");
@@ -610,45 +614,66 @@ public:
         m_config = reinterpret_cast<ports::IConfigPort*>(svc.config);
         m_registry = reinterpret_cast<adapters::ContributionRegistry*>(svc.registry);
         m_guiHost = reinterpret_cast<adapters::ImGuiHost*>(svc.guiHost);
-        taskRunner = reinterpret_cast<TaskRunner*>(svc.taskRunner);
-         
+        //taskRunner = reinterpret_cast<TaskRunner*>(svc.taskRunner);
+        taskRunner = svc.application->services().resolve<TaskRunner>();
+
         m_workspaceService = new WorkspaceService(dataContext,*m_workspaceStore, *m_modelCache, taskRunner);
         m_slicerService = new SlicerService(dataContext,*m_workspaceStore, *m_modelCache, taskRunner);
- 
-        std::unique_ptr<domain::v1::Project> tempproject = std::make_unique<domain::v1::Project>(); //might want to wrap this up and move to application.
-        
-        FolderScanner  scanner;
-        ScanOptions    opts;
-        opts.recursive = true;
-        opts.includeHidden = false;
-        opts.maxDepth = 10;
-        ScanResult result = scanner.scan("E:/github/Voron-2/STLs", opts);
+       
+        m_slicerService->loadWorkspace();
 
-        if (tempproject && result.success)
-        {
-            printf("Scanned: %s — %d files, %d folders\n",
-                result.rootPath.c_str(), result.totalFiles, result.totalFolders);
+        taskRunner->group("Startup Load")
+            .sequential()
+            .stopOnFailure(true)
+            .step("Scanning asset library", [this](std::shared_ptr<TaskProgress> progress) 
+            {
+                progress->setMessage("Scanning E:/github/Voron-2/STLs");
 
-            tempproject->fromScanResult(result, *m_modelCache);
+                auto tempproject = std::make_shared<domain::v1::Project>();
+                FolderScanner scanner;
+                ScanOptions opts;
+                opts.recursive = true;
+                opts.includeHidden = false;
+                opts.maxDepth = 10;
 
-            m_projectLoaded = true;
+                ScanResult result = scanner.scan("E:/github/Voron-2/STLs", opts);
+                if (!result.success)
+                {
+                    printf("[SlicerCore] scan failed: %s\n", result.errorMessage.c_str());
+                    progress->failed = true;
+                    return;
+                }
 
-        }
-        else
-        {
-            printf("[SlicerCore] scan failed: %s\n", result.errorMessage.c_str());
-        }
-         
-        if (m_workspaceStore)
-        {
-            bool needsLoad = false;
-            m_workspaceStore->read([&](const domain::v1::Workspace& ws)
-                { needsLoad = ws.projects.empty(); });
+                printf("Scanned: %s — %d files, %d folders\n",result.rootPath.c_str(), result.totalFiles, result.totalFolders);
 
-            if (needsLoad)
+                tempproject->fromScanResult(result, *m_modelCache);
+                m_scannedProject = tempproject;    
+                m_projectLoaded = true;
+
+
+            })
+            .step("Loading workspace", [this](std::shared_ptr<TaskProgress> progress)
+            {
+                
+                progress->setMessage("Loading workspace.json");
                 m_workspaceService->loadWorkspace("c:\\temp\\", "workspace.json");
-        }
+            })
+            .completed([this](bool success) 
+            {
+                printf("[SlicerCore] startup load %s\n", success ? "complete" : "FAILED");
+                if (success)
+                {
+                    // now update the UI.
+                    auto* project = m_navigation->resolveOrDefaultProject(*m_workspaceStore);
+                    auto* buildPlate = m_navigation->resolveOrDefaultBuildPlate(project);
 
+
+                    m_slicerService->arrangeBuildPlate(buildPlate);
+
+                    m_buildPlateRenderer->updateViewModel(project->buildPlates);
+                }
+            })
+            .submit();
 
         // need a better way to set these.
         m_navigation = new NavigationManager();
@@ -671,9 +696,6 @@ public:
 
                 m_buildPlateRenderer->updateViewModel(project ? project->buildPlates : std::vector<domain::v1::BuildPlate*>{});
             };
-
-       
-        
         
         if (buildPlate)
             m_slicerService->arrangeBuildPlate(buildPlate);
@@ -912,7 +934,10 @@ public:
             //    .submit();
 
         }
-        taskRunner->renderUI();
+        //taskRunner-> renderUI();
+       
+        if (m_taskreporter) m_taskreporter->display();
+
         auto afterTaskRunner = std::chrono::high_resolution_clock::now();
 
         //renderSlicerPanel();
@@ -957,6 +982,7 @@ private:
 
     TaskRunner* taskRunner;
     ModelCache* m_modelCache; // the 3d mesh of the stls that have been loaded
+	ports::ITaskProgressReporter* m_taskreporter = nullptr;
 
     int   m_selectedAssetId = -1;
     
@@ -968,6 +994,7 @@ private:
 
     bool m_filesLoaded = false;
     bool m_projectLoaded = false;
+    std::shared_ptr<domain::v1::Project> m_scannedProject;
 
     float m_treeHeight = 800.0f;
     float m_previewHeight = 180.0f;

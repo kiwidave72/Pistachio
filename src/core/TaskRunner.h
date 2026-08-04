@@ -10,9 +10,6 @@
 #include <memory>
 #include <optional>
 
-// Include imgui.h before calling renderUI().
-struct ImVec4;
-
 // ================================================================
 //  TaskProgress
 //  Written by a worker lambda, read by the UI thread.
@@ -238,6 +235,10 @@ private:
 
 // ================================================================
 //  TaskRunner
+//
+//  ImGui-free. Rendering/progress-display is not part of this class —
+//  see ports::ITaskProgressReporter and its concrete implementations
+//  (ConsoleTaskProgressReporter, ImGuiTaskProgressReporter).
 // ================================================================
 class TaskRunner
 {
@@ -267,13 +268,6 @@ public:
     // ---- Submit a fully-built group ---------------------------
     std::shared_ptr<TaskGroup> submitGroup(TaskGroup g);
 
-    // ---- Frame render -----------------------------------------
-    void renderUI(
-        const char* windowTitle = "Background Tasks",
-        bool* p_open = nullptr,
-        float       windowWidth = 460.f
-    );
-
     // ---- Lifecycle --------------------------------------------
     void pruneFinished(float retainSeconds = 5.f);
     bool anyRunning() const;
@@ -281,9 +275,9 @@ public:
 
     // Dispatches queued per-group onCompleted callbacks, then fires
     // onAllCompleted if the runner just transitioned from running to
-    // idle. Call this once per frame on the main thread (renderUI()
-    // already does this internally) -- or call it manually if you're
-    // not rendering the UI every frame.
+    // idle. Call this once per frame (any ITaskProgressReporter::
+    // display() implementation should call this internally) -- or call
+    // it manually if nothing is displaying progress this frame.
     void pumpCallbacks();
 
     // Fires once when every submitted group has finished and no new
@@ -291,18 +285,16 @@ public:
     // directly: runner.onAllCompleted = [](){ ... };
     std::function<void()> onAllCompleted;
 
-    // ---- Style ------------------------------------------------
-    struct Style
-    {
-        ImVec4* colorRunning = nullptr;
-        ImVec4* colorPending = nullptr;
-        ImVec4* colorDone = nullptr;
-        ImVec4* colorFailed = nullptr;
-        float   barHeight = 6.f;
-        float   subIndent = 16.f;
-        float   subBarHeight = 4.f;
-        bool    showDividers = true;
-    } style;
+    // Thread-safe snapshot of currently tracked groups, for any
+    // ITaskProgressReporter to read from. Returns shared_ptrs to the
+    // actual TaskGroup objects -- no data copied, just which groups
+    // currently exist.
+    std::vector<std::shared_ptr<TaskGroup>> snapshotGroups() const;
+
+    // Pure string formatting, no ImGui dependency -- shared by any
+    // reporter implementation that wants consistent duration text.
+    static std::string formatDuration(float seconds);
+    static std::string badgeText(bool running, bool done, bool failed, bool pending);
 
 private:
     // Internal entry tracks prune timer
@@ -325,29 +317,4 @@ private:
     void launchGroup(std::shared_ptr<TaskGroup> g);
     void launchSequential(std::shared_ptr<TaskGroup> g);
     void launchParallel(std::shared_ptr<TaskGroup> g);
-
-    void renderGroup(const TaskGroup& g, size_t idx,
-        const ImVec4& colRunning,
-        const ImVec4& colPending,
-        const ImVec4& colDone,
-        const ImVec4& colFailed);
-
-    void renderStep(const TaskStep& s, size_t stepIdx,
-        bool isLast,
-        const ImVec4& colRunning,
-        const ImVec4& colPending,
-        const ImVec4& colDone,
-        const ImVec4& colFailed);
-
-    void renderBar(float fraction, bool running, bool done, bool failed,
-        float barH,
-        const ImVec4& colRunning,
-        const ImVec4& colDone,
-        const ImVec4& colFailed);
-
-    static std::string formatDuration(float seconds);
-    static std::string badgeText(bool running, bool done, bool failed, bool pending);
-    static ImVec4      badgeColor(bool running, bool done, bool failed, bool pending,
-        const ImVec4& cr, const ImVec4& cd,
-        const ImVec4& cf, const ImVec4& cp);
 };

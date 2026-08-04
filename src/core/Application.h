@@ -18,6 +18,7 @@
 #include "core/IApplication.h"
 #include "core/ServiceRegistry.h"
 #include "ports/IEventBus.h"
+#include "ports/ITaskProgressReporter.h"
 // Host-owned config store
 
 #include "core/ConfigStore.h"
@@ -49,6 +50,8 @@ namespace core {
         void addFileLoader(std::unique_ptr<ports::IFileLoaderPort> loader);
         void addExporter(std::unique_ptr<ports::IExporterPort> exporter);
         //void registerToolheadSchema(int index);
+
+        void attachTaskProgressReporter(std::unique_ptr<ports::ITaskProgressReporter> reporter);
 
         bool initialize();
         void run();
@@ -94,6 +97,8 @@ namespace core {
 		domain::DataContext m_dataContext ; // non-owning, valid for app lifetime
         
         std::unique_ptr<domain::v1::ModelCache> m_modelCache;
+
+        std::unique_ptr<ports::ITaskProgressReporter> m_taskProgressReporter;
 
         std::unique_ptr<ports::IUIPort> m_uiAdapter;
         std::unique_ptr<ports::IRendererPort> m_renderer;

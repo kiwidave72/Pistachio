@@ -1409,7 +1409,7 @@ GLuint LoadTexture(const std::string& filename)
             m_fpsAccumTime = 0.0f;
             m_fpsFrameCount = 0;
         }
-
+         
 
         // --- Advance animation ---
         m_sceneLayout.update(dt);

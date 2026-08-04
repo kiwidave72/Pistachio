@@ -1,5 +1,5 @@
 ﻿
-
+#include "adapters/ui/TaskProgressReporterImGui.h"
 #include <iostream>
 #include <memory>
 #include <filesystem>
@@ -13,6 +13,7 @@
 #define NOMINMAX
 #include <windows.h>
 #endif
+
 
 #include "domain/DataContext.h"
 #include "adapters/ui/ImGuiHost.h"
@@ -88,8 +89,14 @@ namespace
             
             m_dataContext = m_app->getDataContext() ;
 
+
             if (m_app)
                 m_app->registerCoreServices();
+
+            if (m_app)
+                m_app->attachTaskProgressReporter(
+                    std::make_unique<adapters::ui::TaskProgressReporterImGui>(*m_app->taskRunner));
+
 
             int servicesLoaded = m_serviceRegistry.loadAll(*m_app);
             printf("[HotReload] initialize: %d service plugin(s) loaded\n", servicesLoaded);

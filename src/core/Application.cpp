@@ -39,6 +39,11 @@ namespace core {
         m_services.registerService<domain::v1::WorkspaceStore>(m_workspaceStore.get());
 
     }
+    void Application::attachTaskProgressReporter(std::unique_ptr<ports::ITaskProgressReporter> reporter)
+    {
+        m_taskProgressReporter = std::move(reporter);
+        m_services.registerService<ports::ITaskProgressReporter>(m_taskProgressReporter.get());
+    }
 
     void Application::setSlicerAdapter(std::unique_ptr<ports::ISlicerPort> slicer) {
         m_slicerAdapter = std::move(slicer);

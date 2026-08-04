@@ -7,7 +7,7 @@
 #include <regex>
 #include <sstream>
 #include <fstream>
-
+#include <mutex>
  
 
 #include <nlohmann/json.hpp>  
@@ -229,8 +229,8 @@ namespace domain::v1{
 
         // Models
         std::shared_ptr<Model> getModel(const std::string& hash) const;
-  
-   
+    private:
+        mutable std::mutex m_mutex;
 
     };
     // ModelCache.cpp

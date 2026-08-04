@@ -92,7 +92,8 @@ else()
 "
         "Add GLAD as a submodule (or folder) under external/glad and generate GLAD files for OpenGL 3.3 core.
 ")
-endif()         
+endif()
+
 # -------------------------
 # Walnut (Image helper)
 # -------------------------
@@ -251,13 +252,13 @@ add_library(pistachio_core SHARED
     src/core/rendering/SketchRenderBuilder.cpp
     src/core/TaskRunner.cpp
 
-
     # Adapters
     src/adapters/eventbus/EventBus.cpp
+    src/adapters/console/TaskProgressReporterConsole.cpp
     src/adapters/rendering/OcctRenderer.cpp
     src/adapters/loaders/StepFileLoader.cpp
     src/adapters/loaders/StlMeshLoader.cpp
-    src/adapters/loaders/StlLoaderAdapter.cpp
+     src/adapters/loaders/StlLoaderAdapter.cpp
 
     src/adapters/exporters/ObjExporter.cpp
     src/adapters/exporters/StlExporter.cpp
@@ -368,9 +369,9 @@ add_executable(${PROJECT_NAME}
     src/main.cpp
     src/adapters/ui/ImGuiHost.cpp
     src/adapters/ui/ThemeColors.cpp
+    src/adapters/ui/TaskProgressReporterImGui.cpp
     src/adapters/ui/plugins/UiPluginLoader.cpp
     src/adapters/ui/plugins/UiPluginRegistry.cpp
-
     src/adapters/plugins/ServiceModuleLoader.cpp
     src/adapters/plugins/ServiceModuleRegistry.cpp
 
@@ -488,6 +489,31 @@ foreach(cfg Debug Release RelWithDebInfo MinSizeRel)
 endforeach()
 
 # -------------------------
+# pistachio_ui_stub (minimal hot-reload test plugin)
+# -------------------------
+add_library(pistachio_ui_stub SHARED
+    src/adapters/ui/plugins/StubUiModule.cpp
+)
+
+target_include_directories(pistachio_ui_stub PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+
+target_link_libraries(pistachio_ui_stub PRIVATE
+    pistachio_core
+    imgui
+)
+
+foreach(cfg Debug Release RelWithDebInfo MinSizeRel)
+    string(TOUPPER "${cfg}" CFGU)
+    set_target_properties(pistachio_ui_stub PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY_${CFGU} "${CMAKE_BINARY_DIR}/bin/${cfg}/plugins"
+        LIBRARY_OUTPUT_DIRECTORY_${CFGU} "${CMAKE_BINARY_DIR}/bin/${cfg}/plugins"
+        ARCHIVE_OUTPUT_DIRECTORY_${CFGU} "${CMAKE_BINARY_DIR}/lib/${cfg}"
+    )
+endforeach()
+
+# -------------------------
 # pistachio_service_stub (minimal IServiceModule test plugin)
 # -------------------------
 add_library(pistachio_service_stub SHARED
@@ -510,31 +536,6 @@ foreach(cfg Debug Release RelWithDebInfo MinSizeRel)
     set_target_properties(pistachio_service_stub PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY_${CFGU} "${CMAKE_BINARY_DIR}/bin/${cfg}/services"
         LIBRARY_OUTPUT_DIRECTORY_${CFGU} "${CMAKE_BINARY_DIR}/bin/${cfg}/services"
-        ARCHIVE_OUTPUT_DIRECTORY_${CFGU} "${CMAKE_BINARY_DIR}/lib/${cfg}"
-    )
-endforeach()
-
-# -------------------------
-# pistachio_ui_stub (minimal hot-reload test plugin)
-# -------------------------
-add_library(pistachio_ui_stub SHARED
-    src/adapters/ui/plugins/StubUiModule.cpp
-)
-
-target_include_directories(pistachio_ui_stub PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/src
-)
-
-target_link_libraries(pistachio_ui_stub PRIVATE
-    pistachio_core
-    imgui
-)
-
-foreach(cfg Debug Release RelWithDebInfo MinSizeRel)
-    string(TOUPPER "${cfg}" CFGU)
-    set_target_properties(pistachio_ui_stub PROPERTIES
-        RUNTIME_OUTPUT_DIRECTORY_${CFGU} "${CMAKE_BINARY_DIR}/bin/${cfg}/plugins"
-        LIBRARY_OUTPUT_DIRECTORY_${CFGU} "${CMAKE_BINARY_DIR}/bin/${cfg}/plugins"
         ARCHIVE_OUTPUT_DIRECTORY_${CFGU} "${CMAKE_BINARY_DIR}/lib/${cfg}"
     )
 endforeach()

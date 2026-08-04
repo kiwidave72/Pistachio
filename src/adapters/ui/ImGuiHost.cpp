@@ -379,7 +379,7 @@ namespace adapters {
         glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE);
 #endif
 
-        GLFWwindow* w = glfwCreateWindow(1280, 800, "Pistachio - CAD Converter", nullptr, nullptr);
+        GLFWwindow* w = glfwCreateWindow(1200, 600, "Pistachio - CAD Converter", nullptr, nullptr);
         if (!w) {
             std::printf("[ImGuiHost][ERROR] glfwCreateWindow() failed\n");
             return nullptr;
