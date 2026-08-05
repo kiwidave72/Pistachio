@@ -621,11 +621,12 @@ public:
         m_slicerService = new SlicerService(dataContext,*m_workspaceStore, *m_modelCache, taskRunner);
        
         m_slicerService->loadWorkspace();
+        auto* eventBus = svc.application->services().resolve<ports::IEventBus>();
 
         taskRunner->group("Startup Load")
             .sequential()
             .stopOnFailure(true)
-            .step("Scanning asset library", [this](std::shared_ptr<TaskProgress> progress) 
+            .step("Scanning asset library", [this](std::shared_ptr<TaskProgress> progress)
             {
                 progress->setMessage("Scanning E:/github/Voron-2/STLs");
 
@@ -658,7 +659,7 @@ public:
                 progress->setMessage("Loading workspace.json");
                 m_workspaceService->loadWorkspace("c:\\temp\\", "workspace.json");
             })
-            .completed([this](bool success) 
+            .completed([this, eventBus](bool success)
             {
                 printf("[SlicerCore] startup load %s\n", success ? "complete" : "FAILED");
                 if (success)
@@ -671,6 +672,10 @@ public:
                     m_slicerService->arrangeBuildPlate(buildPlate);
 
                     m_buildPlateRenderer->updateViewModel(project->buildPlates);
+
+                   
+                    printf("[SlicerCore] publishing run.pipeline for plate %s\n", buildPlate->Id.c_str());
+                    eventBus->publish("run.pipeline", buildPlate->Id);
                 }
             })
             .submit();
