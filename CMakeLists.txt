@@ -496,6 +496,9 @@ add_library(pistachio_kinetica SHARED
     src/adapters/plugins/ToolpathEnginePlugin/ToolpathEnginePlugin.cpp
     src/adapters/plugins/ToolpathEnginePlugin/ImportPhase.cpp
     src/adapters/plugins/ToolpathEnginePlugin/ValidationPhase.cpp
+    src/adapters/plugins/ToolpathEnginePlugin/AccelerationPhase.cpp
+    src/adapters/plugins/ToolpathEnginePlugin/SlicingPhase.cpp
+
 )
 
 target_include_directories(pistachio_kinetica PRIVATE

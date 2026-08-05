@@ -11,6 +11,9 @@
 #include "ports/IEventBus.h"
 #include "adapters/plugins/ToolpathEnginePlugin/ImportPhase.h"
 #include "adapters/plugins/ToolpathEnginePlugin/ValidationPhase.h"
+#include "adapters/plugins/ToolpathEnginePlugin/AccelerationPhase.h"
+#include "adapters/plugins/ToolpathEnginePlugin/SlicingPhase.h"
+
 
 
 #include <cstdio>
@@ -118,6 +121,16 @@ private:
 
         printf("[ToolpathEngine] P1 complete: %d/%zu instances clean\n", cleanCount, validated.size());
 
+
+        kinetica::AccelerationPhase accelerationPhase(*m_config);
+        auto accelerated = accelerationPhase.run(std::move(validated));
+
+        printf("[ToolpathEngine] P2 complete: %zu instances accelerated\n", accelerated.size());
+
+        kinetica::SlicingPhase slicingPhase(*m_config);
+        auto sliced = slicingPhase.run(std::move(accelerated));
+
+        printf("[ToolpathEngine] P3 complete: %zu instances sliced\n", sliced.size());
     }
 
    
