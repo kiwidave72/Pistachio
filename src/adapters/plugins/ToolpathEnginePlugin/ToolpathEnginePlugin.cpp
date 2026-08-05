@@ -13,7 +13,7 @@
 #include "adapters/plugins/ToolpathEnginePlugin/ValidationPhase.h"
 #include "adapters/plugins/ToolpathEnginePlugin/AccelerationPhase.h"
 #include "adapters/plugins/ToolpathEnginePlugin/SlicingPhase.h"
-
+#include "adapters/plugins/ToolpathEnginePlugin/ExtractionPhase.h"
 
 
 #include <cstdio>
@@ -131,6 +131,12 @@ private:
         auto sliced = slicingPhase.run(std::move(accelerated));
 
         printf("[ToolpathEngine] P3 complete: %zu instances sliced\n", sliced.size());
+
+
+        kinetica::ExtractionPhase extractionPhase;
+        auto extracted = extractionPhase.run(std::move(sliced));
+
+        printf("[ToolpathEngine] P4 complete: %zu instances extracted\n", extracted.size());
     }
 
    
