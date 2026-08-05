@@ -681,14 +681,14 @@ namespace core {
         m_config.registerNamespace(NamespaceInfo("slicer.Settings", "slicer", "Slicer Settings", "", 0));
 
         m_config.registerSetting(SettingInfo(
-            "slicer.Settings", "bed.size.X", "Bed Size X", "Printable Bed Size in X", "Printable Bed Size", SettingType::Int, "250","", false
+            "slicer.Settings", "bed.size.X", "Bed Size X", "Printable Bed Size in X", "Printable Bed Size", SettingType::Int, 250,"", false
         ));
         m_config.registerSetting(SettingInfo(
-            "slicer.Settings", "bed.size.Y", "Bed Size Y", "Printable Bed Size in Y", "Printable Bed Size", SettingType::Int, "250", "",false
+            "slicer.Settings", "bed.size.Y", "Bed Size Y", "Printable Bed Size in Y", "Printable Bed Size", SettingType::Int, 250, "",false
         ));
 
         m_config.registerSetting(SettingInfo(
-            "slicer.Settings", "bed.temp", "Bed Temp C", "Bed Temp in C", "", SettingType::Int, "250", "",false
+            "slicer.Settings", "bed.temp", "Bed Temp C", "Bed Temp in C", "", SettingType::Int, 250, "",false
         ));
 
 

@@ -7,7 +7,9 @@
 #include "core/ServiceRegistry.h"
 #include "domain/ModelCache.h"
 #include "domain/WorkspaceStore.h"
-
+#include "ports/IConfigPort.h"
+#include "ports/IEventBus.h"
+#include "adapters/plugins/ToolpathEnginePlugin/ImportPhase.h"
 
 #include <cstdio>
 
@@ -41,13 +43,23 @@ public:
     {
         printf("[ToolpathEngine] onLoad\n");
 
-        auto* modelCache = app.services().resolve<domain::v1::ModelCache>();
-        auto* workspaceStore = app.services().resolve<domain::v1::WorkspaceStore>();
+        m_modelCache = app.services().resolve<domain::v1::ModelCache>();
+        m_workspaceStore = app.services().resolve<domain::v1::WorkspaceStore>();
+        m_config = app.services().resolve<ports::IConfigPort>();
+        m_eventBus = app.services().resolve<ports::IEventBus>();
 
-        printf("[ToolpathEngine] resolved ModelCache=%p WorkspaceStore=%p\n",
-            (void*)modelCache, (void*)workspaceStore);
+        printf("[ToolpathEngine] resolved ModelCache=%p WorkspaceStore=%p IConfigPort=%p IEventBus=%p\n",
+            (void*)m_modelCache, (void*)m_workspaceStore, (void*)m_config, (void*)m_eventBus);
 
-        // P0-P6 pipeline registration/setup goes here, once each phase exists.
+        if (m_eventBus && m_modelCache && m_workspaceStore && m_config)
+        {
+            // payload = buildPlateId. Fired by the UI (SlicerCorePlugin)
+            // whenever the user actually triggers a slice, not automatic.
+            m_eventBus->subscribe("run.pipeline", [this](const std::string& buildPlateId)
+            {
+                onRunPipeline(buildPlateId);
+            });
+        }
 
         printf("[ToolpathEngine] onLoad done\n");
     }
@@ -56,6 +68,49 @@ public:
     {
         printf("[ToolpathEngine] onUnload\n");
     }
+
+     
+
+private:
+    domain::v1::ModelCache* m_modelCache = nullptr;
+    domain::v1::WorkspaceStore* m_workspaceStore = nullptr;
+    ports::IConfigPort* m_config = nullptr;
+    ports::IEventBus* m_eventBus = nullptr;
+
+    void onRunPipeline(const std::string& buildPlateId)
+    {
+        domain::v1::BuildPlate* plate = nullptr;
+
+        m_workspaceStore->read([&](const domain::v1::Workspace& ws)
+        {
+            for (auto* project : ws.projects)
+            {
+                if (!project) continue;
+                for (auto* bp : project->buildPlates)
+                {
+                    if (bp && bp->Id == buildPlateId) { plate = bp; return; }
+                }
+            }
+        });
+
+        if (!plate)
+        {
+            printf("[ToolpathEngine] run.pipeline: no BuildPlate found for id '%s'\n", buildPlateId.c_str());
+            return;
+        }
+
+        printf("[ToolpathEngine] run.pipeline: running P0 against plate '%s' (%zu instances)\n",
+            buildPlateId.c_str(), plate->modelInstances.size());
+
+        kinetica::ImportPhase importPhase(*m_modelCache, *m_config);
+        auto geometry = importPhase.run(plate);
+
+        printf("[ToolpathEngine] P0 produced %zu UnifiedGeometry objects\n", geometry.size());
+
+        // P1-P6 continue here as each phase is built (Steps 6-11).
+    }
+
+   
 };
 
 // -----------------------------------------------------------------------

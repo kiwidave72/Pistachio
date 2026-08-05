@@ -6,6 +6,7 @@
 // We already depend on nlohmann::json across the codebase (SketchDocumentJson, etc.)
 #include <nlohmann/json.hpp>
 
+
 namespace ports {
 
 // A small, plugin-friendly settings registry.
@@ -15,6 +16,9 @@ namespace ports {
 // - Plugins can register typed settings (metadata + defaults)
 // - Values are stored as JSON so we can extend types without rewriting persistence
 // - UI can list/edit settings without knowing about each plugin
+
+
+
 
 enum class SettingType {
     Bool,
@@ -132,5 +136,11 @@ public:
     virtual std::vector<NamespaceInfo>     listChildNamespaces(const std::string& parentNs) const = 0;
     virtual ports::NamespaceInfo  getNamespace(const std::string& ns) const = 0;
 };
+
+template<typename T>
+T getConfig(const IConfigPort& config, const std::string& ns, const std::string& key)
+{
+    return config.get(ns, key).get<T>();
+}
 
 } // namespace ports
