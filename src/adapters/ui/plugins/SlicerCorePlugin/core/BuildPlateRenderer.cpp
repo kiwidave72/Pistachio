@@ -1276,7 +1276,8 @@ GLuint LoadTexture(const std::string& filename)
             }
             ImGui::SetNextWindowDockID(0, ImGuiCond_Always);  // Force no docking
             ImGui::SetNextWindowPos(ImVec2(windowPos.x + 50, windowPos.y + 25), ImGuiCond_Always);
-            ImGui::SetNextWindowSize(ImVec2(300, 500), ImGuiCond_FirstUseEver);
+            //ImGui::SetNextWindowSize(ImVec2(300, 500), ImGuiCond_FirstUseEver);
+            ImGui::SetNextWindowSize(ImVec2(300, 500), ImGuiCond_Always);
 
             if (!ImGui::Begin("##slicer_window", nullptr, flags))
             {

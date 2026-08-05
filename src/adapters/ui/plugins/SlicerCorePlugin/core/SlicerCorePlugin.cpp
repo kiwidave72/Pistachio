@@ -610,6 +610,10 @@ public:
         m_app->loadFile("C:\\github\\StepFileExtraction\\Debug\\Node_1\\Node_1_3\\Node_1_3_1\\Node_1_3_1_1.step");
         */
 
+       // FolderScanner scanner1;
+       //ScanFileResult hash = scanner1.scanFile ("E:\\github\\Voron-2\\STLs\\Test_Prints\\Voron_Design_Cube_v7.stl");
+
+
         m_app = reinterpret_cast<core::Application*>(svc.app);
         m_config = reinterpret_cast<ports::IConfigPort*>(svc.config);
         m_registry = reinterpret_cast<adapters::ContributionRegistry*>(svc.registry);
@@ -656,8 +660,8 @@ public:
             .step("Loading workspace", [this](std::shared_ptr<TaskProgress> progress)
             {
                 
-                progress->setMessage("Loading workspace.json");
-                m_workspaceService->loadWorkspace("c:\\temp\\", "workspace.json");
+              progress->setMessage("Loading workspace.json");
+              m_workspaceService->loadWorkspace("c:\\temp\\", "workspace.json");
             })
             .completed([this, eventBus](bool success)
             {

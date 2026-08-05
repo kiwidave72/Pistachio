@@ -10,15 +10,17 @@ namespace kinetica {
 
     namespace {
 
+        // Hardcoded for now, per explicit decision not to add a config
+        // setting yet. Move to slicer.maxGapRepairDistance later if this
+        // needs to become user-tunable.
+        constexpr float kRepairThreshold = 0.1f;
+
         std::vector<domain::v1::SegmentChain> chainSegments(
             const std::vector<domain::v1::SliceSegment>& segments)
         {
-            constexpr float kTolerance = 0.05f;   // small, honest — matches real floating-point drift, not a compromise value
-
             std::vector<domain::v1::SegmentChain> chains;
             if (segments.empty()) return chains;
 
-            // position key -> list of (segment index, which end: 0=start, 1=end)
             std::unordered_map<uint64_t, std::vector<std::pair<size_t, int>>> adjacency;
             for (size_t i = 0; i < segments.size(); ++i)
             {
@@ -42,21 +44,19 @@ namespace kinetica {
                     removeOne(segments[segIdx].start);
                     removeOne(segments[segIdx].end);
                 };
+
             auto popMatch = [&](const glm::vec3& point) -> std::pair<size_t, int>
                 {
-                    for (uint64_t key : neighborCellKeys(point, kTolerance))
+                    for (uint64_t key : neighborCellKeys(point))
                     {
                         auto it = adjacency.find(key);
                         if (it == adjacency.end()) continue;
-
                         for (auto& pr : it->second)
                         {
                             if (used[pr.first]) continue;
-
                             const glm::vec3& candidatePos = (pr.second == 0)
                                 ? segments[pr.first].start : segments[pr.first].end;
-
-                            if (positionsEqual(point, candidatePos, kTolerance))
+                            if (positionsEqual(point, candidatePos))
                                 return pr;
                         }
                     }
@@ -67,7 +67,7 @@ namespace kinetica {
                 {
                     used[segIdx] = true;
                     removeFromAdjacency(segIdx);
-                 };
+                };
 
             for (size_t startSeg = 0; startSeg < segments.size(); ++startSeg)
             {
@@ -81,7 +81,6 @@ namespace kinetica {
 
                 bool closed = false;
 
-                // Extend forward from the end
                 glm::vec3 current = points.back();
                 while (true)
                 {
@@ -92,17 +91,7 @@ namespace kinetica {
                     }
 
                     auto [nextSeg, whichEnd] = popMatch(current);
-                    //if (nextSeg == (size_t)-1) break;   // dead end, genuinely open on this side
-                    // In chainSegments(), replace the two "break; // dead end" comments with:
-
-                    // Forward extension dead end:
-                    if (nextSeg == (size_t)-1)
-                    {
-                        printf("[ExtractionPhase]   dead-end (forward) at (%.4f, %.4f, %.4f) — chain has %zu points so far\n",
-                            current.x, current.y, current.z, points.size());
-                        break;
-                    }
-
+                    if (nextSeg == (size_t)-1) break;
 
                     glm::vec3 next = (whichEnd == 0) ? segments[nextSeg].end : segments[nextSeg].start;
                     consume(nextSeg);
@@ -110,22 +99,13 @@ namespace kinetica {
                     current = next;
                 }
 
-                // If it didn't close, also extend BACKWARD from the original start —
-                // fixes the fragmentation bug: a segment landing mid-chain must be
-                // able to grow in both directions, not just forward.
                 if (!closed)
                 {
                     glm::vec3 currentBack = points.front();
                     while (true)
                     {
                         auto [prevSeg, whichEnd] = popMatch(currentBack);
-                        // Backward extension dead end (in the !closed block):
-                        if (prevSeg == (size_t)-1)
-                        {
-                            printf("[ExtractionPhase]   dead-end (backward) at (%.4f, %.4f, %.4f) — chain has %zu points so far\n",
-                                currentBack.x, currentBack.y, currentBack.z, points.size());
-                            break;
-                        }
+                        if (prevSeg == (size_t)-1) break;
 
                         glm::vec3 prev = (whichEnd == 0) ? segments[prevSeg].end : segments[prevSeg].start;
                         consume(prevSeg);
@@ -134,9 +114,29 @@ namespace kinetica {
                     }
                 }
 
+                bool wasRepaired = false;
+
+                // Repair: if the chain still isn't closed but its two loose
+                // ends are close, snap-bridge them rather than leave a gap.
+                // Standard technique — real slicers repair post-slice gaps
+                // rather than trying to prevent every gap via preprocessing.
+                if (!closed && points.size() >= 3)
+                {
+                    float gap = glm::length(points.front() - points.back());
+                    if (gap <= kRepairThreshold)
+                    {
+                        glm::vec3 midpoint = (points.front() + points.back()) * 0.5f;
+                        points.front() = midpoint;
+                        points.back() = midpoint;
+                        closed = true;
+                        wasRepaired = true;
+                    }
+                }
+
                 domain::v1::SegmentChain chain;
                 chain.points.assign(points.begin(), points.end());
                 chain.isClosed = closed;
+                chain.wasRepaired = wasRepaired;
                 chains.push_back(std::move(chain));
             }
 
@@ -156,7 +156,7 @@ namespace kinetica {
             extracted.modelInstanceId = sliced.sliceResult.modelInstanceId;
             extracted.report = sliced.report;
 
-            int closedChains = 0, openChains = 0;
+            int closedChains = 0, openChains = 0, repairedChains = 0;
 
             for (auto& layer : sliced.sliceResult.layers)
             {
@@ -166,18 +166,22 @@ namespace kinetica {
                 extractedLayer.chains = chainSegments(layer.segments);
 
                 for (auto& c : extractedLayer.chains)
+                {
                     (c.isClosed ? closedChains : openChains)++;
+                    if (c.wasRepaired) ++repairedChains;
+                }
 
                 extracted.layers.push_back(std::move(extractedLayer));
             }
 
-            printf("[ExtractionPhase] instance %s: %d closed chains, %d open chains\n",
-                extracted.modelInstanceId.c_str(), closedChains, openChains);
+            printf("[ExtractionPhase] instance %s: %d closed chains (%d repaired), %d open chains\n",
+                extracted.modelInstanceId.c_str(), closedChains, repairedChains, openChains);
 
             if (openChains > 0)
             {
-                printf("[ExtractionPhase] WARNING: instance %s has %d open (non-closed) chains\n",
-                    extracted.modelInstanceId.c_str(), openChains);
+                printf("[ExtractionPhase] WARNING: instance %s has %d chains that could not be closed "
+                    "even after repair (gap exceeded %.3f)\n",
+                    extracted.modelInstanceId.c_str(), openChains, kRepairThreshold);
             }
 
             result.push_back(std::move(extracted));

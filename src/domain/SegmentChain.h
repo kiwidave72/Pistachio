@@ -24,6 +24,7 @@ namespace domain::v1 {
     {
         std::vector<glm::vec3> points;   // ordered — points[i] connects to points[i+1]
         bool isClosed = false;
+        bool wasRepaired = false;
     };
 
     struct ExtractedLayer
