@@ -668,14 +668,9 @@ public:
                     auto* project = m_navigation->resolveOrDefaultProject(*m_workspaceStore);
                     auto* buildPlate = m_navigation->resolveOrDefaultBuildPlate(project);
 
-
                     m_slicerService->arrangeBuildPlate(buildPlate);
 
                     m_buildPlateRenderer->updateViewModel(project->buildPlates);
-
-                   
-                    printf("[SlicerCore] publishing run.pipeline for plate %s\n", buildPlate->Id.c_str());
-                    eventBus->publish("run.pipeline", buildPlate->Id);
                 }
             })
             .submit();
@@ -727,7 +722,16 @@ public:
 
             // add ribbon items
             m_ribbonContrib = m_registry->contributeRibbon(k_pluginId, "Slicer", 300);
-            m_ribbonContrib->addButton( "slice_now", "Slice","", 10, [this]() { m_sliceRequested = true; });
+            m_ribbonContrib->addButton( "slice_now", "Slice","", 10, [this, eventBus]() {
+
+                // now update the UI.
+                auto* project = m_navigation->resolveOrDefaultProject(*m_workspaceStore);
+                auto* buildPlate = m_navigation->resolveOrDefaultBuildPlate(project);
+
+                printf("[SlicerCore] publishing run.pipeline for plate %s\n", buildPlate->Id.c_str());
+                eventBus->publish("run.pipeline", buildPlate->Id);
+                 
+                });
             m_ribbonContrib->addToggle( "slicer_panel", "Panel", 90, &m_panelOpen);
             m_ribbonContrib->addSeparator(20);
             m_ribbonContrib->addButton("refresh_view", "Refresh", "", 20, [this, project]() {

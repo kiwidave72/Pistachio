@@ -18,7 +18,7 @@
   },
   "pistachio.UI": {
     "config.showAdvanced": true,
-    "config.windowOpen": false,
+    "config.windowOpen": true,
     "theme": "DARK",
     "views.fileOperations": true,
     "views.modelInfo": true,
@@ -35,9 +35,9 @@
     "name": "WHITE"
   },
   "slicer.Settings": {
-    "bed.size.X": "250",
-    "bed.size.Y": "250",
-    "bed.temp": "250",
+    "bed.size.X": 350,
+    "bed.size.Y": 350,
+    "bed.temp": 250,
     "slicer.bottomLayerCount": 4,
     "slicer.firstLayerHeight": 0.2,
     "slicer.infill": "rectilinear",

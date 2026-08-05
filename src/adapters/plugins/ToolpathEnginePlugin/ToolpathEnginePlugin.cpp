@@ -10,6 +10,8 @@
 #include "ports/IConfigPort.h"
 #include "ports/IEventBus.h"
 #include "adapters/plugins/ToolpathEnginePlugin/ImportPhase.h"
+#include "adapters/plugins/ToolpathEnginePlugin/ValidationPhase.h"
+
 
 #include <cstdio>
 
@@ -107,7 +109,15 @@ private:
 
         printf("[ToolpathEngine] P0 produced %zu UnifiedGeometry objects\n", geometry.size());
 
-        // P1-P6 continue here as each phase is built (Steps 6-11).
+        kinetica::ValidationPhase validationPhase;
+        auto validated = validationPhase.run(std::move(geometry));
+
+        int cleanCount = 0;
+        for (auto& v : validated)
+            if (v.report.isClean()) ++cleanCount;
+
+        printf("[ToolpathEngine] P1 complete: %d/%zu instances clean\n", cleanCount, validated.size());
+
     }
 
    
