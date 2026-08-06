@@ -14,6 +14,7 @@
 #include "adapters/plugins/ToolpathEnginePlugin/AccelerationPhase.h"
 #include "adapters/plugins/ToolpathEnginePlugin/SlicingPhase.h"
 #include "adapters/plugins/ToolpathEnginePlugin/ExtractionPhase.h"
+#include "adapters/plugins/ToolpathEnginePlugin/TopologyPhase.h"
 
 
 #include <cstdio>
@@ -137,6 +138,12 @@ private:
         auto extracted = extractionPhase.run(std::move(sliced));
 
         printf("[ToolpathEngine] P4 complete: %zu instances extracted\n", extracted.size());
+
+
+        kinetica::TopologyPhase topologyPhase;
+        auto topologized = topologyPhase.run(std::move(extracted));
+
+        printf("[ToolpathEngine] P5 complete: %zu instances topologized\n", topologized.size());
     }
 
    

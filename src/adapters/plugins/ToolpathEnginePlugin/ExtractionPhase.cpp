@@ -1,5 +1,6 @@
 #include "adapters/plugins/ToolpathEnginePlugin/ExtractionPhase.h"
 #include "adapters/plugins/ToolpathEnginePlugin/PositionKey.h"
+#include "adapters/plugins/ToolpathEnginePlugin/LayerBitmapDebug.h"
 
 #include <unordered_map>
 #include <deque>
@@ -30,6 +31,10 @@ namespace kinetica {
 
             std::vector<bool> used(segments.size(), false);
 
+            // Always removes using the segment's OWN stored coordinates —
+            // never a caller-supplied search point. This is what makes
+            // removal consistent with insertion regardless of which
+            // neighbor cell a search happened to find the match through.
             auto removeFromAdjacency = [&](size_t segIdx)
                 {
                     auto removeOne = [&](const glm::vec3& p)
@@ -45,6 +50,9 @@ namespace kinetica {
                     removeOne(segments[segIdx].end);
                 };
 
+            // Searches the point's own cell + all 26 neighbors, verifying
+            // each candidate with a real distance check — not grid-key
+            // equality alone (see PositionKey.h for why).
             auto popMatch = [&](const glm::vec3& point) -> std::pair<size_t, int>
                 {
                     for (uint64_t key : neighborCellKeys(point))
@@ -81,6 +89,7 @@ namespace kinetica {
 
                 bool closed = false;
 
+                // Extend forward from the end
                 glm::vec3 current = points.back();
                 while (true)
                 {
@@ -91,7 +100,12 @@ namespace kinetica {
                     }
 
                     auto [nextSeg, whichEnd] = popMatch(current);
-                    if (nextSeg == (size_t)-1) break;
+                    if (nextSeg == (size_t)-1)
+                    {
+                        printf("[ExtractionPhase]   dead-end (forward) at (%.4f, %.4f, %.4f) - chain has %zu points so far\n",
+                            current.x, current.y, current.z, points.size());
+                        break;
+                    }
 
                     glm::vec3 next = (whichEnd == 0) ? segments[nextSeg].end : segments[nextSeg].start;
                     consume(nextSeg);
@@ -99,13 +113,21 @@ namespace kinetica {
                     current = next;
                 }
 
+                // If it didn't close, extend BACKWARD from the original
+                // start too — a segment landing mid-chain must be able to
+                // grow in both directions, not just forward.
                 if (!closed)
                 {
                     glm::vec3 currentBack = points.front();
                     while (true)
                     {
                         auto [prevSeg, whichEnd] = popMatch(currentBack);
-                        if (prevSeg == (size_t)-1) break;
+                        if (prevSeg == (size_t)-1)
+                        {
+                            printf("[ExtractionPhase]   dead-end (backward) at (%.4f, %.4f, %.4f) - chain has %zu points so far\n",
+                                currentBack.x, currentBack.y, currentBack.z, points.size());
+                            break;
+                        }
 
                         glm::vec3 prev = (whichEnd == 0) ? segments[prevSeg].end : segments[prevSeg].start;
                         consume(prevSeg);
@@ -131,6 +153,14 @@ namespace kinetica {
                         closed = true;
                         wasRepaired = true;
                     }
+                }
+
+                // A 2-point "loop" isn't a valid polygon — a single segment
+                // whose own start/end happened to fall within matching
+                // tolerance of each other, not a real connected boundary.
+                if (closed && points.size() < 3)
+                {
+                    closed = false;
                 }
 
                 domain::v1::SegmentChain chain;
@@ -165,10 +195,59 @@ namespace kinetica {
                 extractedLayer.z = layer.z;
                 extractedLayer.chains = chainSegments(layer.segments);
 
+                int layerOpenCount = 0;
                 for (auto& c : extractedLayer.chains)
                 {
                     (c.isClosed ? closedChains : openChains)++;
                     if (c.wasRepaired) ++repairedChains;
+                    if (!c.isClosed) ++layerOpenCount;
+                }
+
+                // Debug bitmap — only for layers with actual open chains,
+                // not every layer. Independent of the (blocked) viewport
+                // refactor entirely — pure 2D rasterization.
+                if (layerOpenCount > 0)
+                {
+
+                    // TEMPORARY diagnostic — investigating the arc-shaped gap cluster
+                    // near the circular hole (layers 31-37). Not permanent instrumentation.
+                    printf("[ExtractionPhase] --- gap investigation, layer %d ---\n", extractedLayer.layerIndex);
+
+                    // Find the largest chain (almost certainly the main circle/boundary)
+                    size_t largestIdx = 0;
+                    for (size_t i = 1; i < extractedLayer.chains.size(); ++i)
+                        if (extractedLayer.chains[i].points.size() > extractedLayer.chains[largestIdx].points.size())
+                            largestIdx = i;
+
+                    for (size_t i = 0; i < extractedLayer.chains.size(); ++i)
+                    {
+                        auto& chain = extractedLayer.chains[i];
+                        if (chain.isClosed) continue;
+
+                        float ownGap = glm::length(chain.points.front() - chain.points.back());
+
+                        // Nearest distance from either loose end to ANY point on the
+                        // largest chain (approximation via point sampling — fine for
+                        // this diagnostic, not for production code).
+                        float nearestToMain = 1e30f;
+                        if (i != largestIdx)
+                        {
+                            for (auto& p : extractedLayer.chains[largestIdx].points)
+                            {
+                                nearestToMain = std::min(nearestToMain, glm::length(chain.points.front() - p));
+                                nearestToMain = std::min(nearestToMain, glm::length(chain.points.back() - p));
+                            }
+                        }
+
+                        printf("[ExtractionPhase]   open chain: %zu points, own front/back gap=%.4f, nearest to main chain=%.4f\n",
+                            chain.points.size(), ownGap, nearestToMain);
+                    }
+
+
+
+                    std::string path = "C:\\temp\\layer_debug\\" + extracted.modelInstanceId +
+                        "_layer" + std::to_string(extractedLayer.layerIndex) + ".png";
+                    LayerBitmapDebug::dumpLayer(extractedLayer, path, 1024);
                 }
 
                 extracted.layers.push_back(std::move(extractedLayer));

@@ -499,6 +499,8 @@ add_library(pistachio_kinetica SHARED
     src/adapters/plugins/ToolpathEnginePlugin/AccelerationPhase.cpp
     src/adapters/plugins/ToolpathEnginePlugin/SlicingPhase.cpp
     src/adapters/plugins/ToolpathEnginePlugin/ExtractionPhase.cpp
+    src/adapters/plugins/ToolpathEnginePlugin/TopologyPhase.cpp
+    src/adapters/plugins/ToolpathEnginePlugin/LayerBitmapDebug.cpp
 
 )
 
