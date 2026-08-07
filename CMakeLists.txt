@@ -501,15 +501,17 @@ add_library(pistachio_kinetica SHARED
     src/adapters/plugins/ToolpathEnginePlugin/ExtractionPhase.cpp
     src/adapters/plugins/ToolpathEnginePlugin/TopologyPhase.cpp
     src/adapters/plugins/ToolpathEnginePlugin/LayerBitmapDebug.cpp
-
+    src/adapters/plugins/ToolpathEnginePlugin/WallGenerationPhase.cpp
 )
 
 target_include_directories(pistachio_kinetica PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
+     "${CLIPPER2_DIR}/CPP/Clipper2Lib/include"
 )
 
 target_link_libraries(pistachio_kinetica PRIVATE
     pistachio_core
+    Clipper2
 )
 
 # Output directory is "services", not "plugins" — this is what

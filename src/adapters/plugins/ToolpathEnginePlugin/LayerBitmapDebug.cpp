@@ -1,6 +1,9 @@
 #include "adapters/plugins/ToolpathEnginePlugin/LayerBitmapDebug.h"
 #include "adapters/plugins/ToolpathEnginePlugin/ExtractionPhase.h"
 #include "adapters/plugins/ToolpathEnginePlugin/TopologyPhase.h"
+#include "adapters/plugins/ToolpathEnginePlugin/WallGenerationPhase.h"
+
+
 
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include "stb_image_write.h"
@@ -190,6 +193,59 @@ namespace kinetica {
         if (runFile) runFile << runReport.dump(2);
 
         printf("[LayerBitmapDebug] wrote run report: %s\\run.json\n", outputDir.c_str());
+    }
+
+
+    // LayerBitmapDebug.cpp — add
+    void LayerBitmapDebug::dumpToolpathLayer(
+        const domain::v1::ToolpathLayer& layer,
+        int layerIndex,
+        const std::string& outputDir,
+        const std::string& modelInstanceId,
+        int imageSize)
+    {
+        if (layer.segments.empty()) return;
+
+        std::vector<std::vector<glm::vec3>> pointLists;   // one 2-point "list" per segment, for bounds computation
+        for (auto& seg : layer.segments)
+            pointLists.push_back({ seg.start.position, seg.end.position });
+
+        std::vector<const std::vector<glm::vec3>*> pointListPtrs;
+        for (auto& pl : pointLists) pointListPtrs.push_back(&pl);
+
+        glm::vec2 minP; float scale, margin;
+        if (!computeTransform(pointListPtrs, imageSize, minP, scale, margin)) return;
+
+        auto toPixel = [&](const glm::vec3& p) -> std::pair<int, int>
+            {
+                int px = static_cast<int>(margin + (p.x - minP.x) * scale);
+                int py = static_cast<int>(imageSize - (margin + (p.y - minP.y) * scale));
+                return { px, py };
+            };
+
+        std::vector<uint8_t> img(imageSize * imageSize * 3, 30);
+
+        auto colorFor = [](domain::v1::ToolpathMoveType type) -> RGB
+            {
+                switch (type)
+                {
+                case domain::v1::ToolpathMoveType::OuterWall: return { 0, 200, 0 };
+                case domain::v1::ToolpathMoveType::InnerWall: return { 0, 140, 230 };
+                case domain::v1::ToolpathMoveType::Infill:    return { 230, 140, 0 };
+                case domain::v1::ToolpathMoveType::Skin:      return { 230, 0, 200 };
+                default:                                        return { 150, 150, 150 };
+                }
+            };
+
+        for (auto& seg : layer.segments)
+        {
+            RGB color = colorFor(seg.moveType);
+            auto [x0, y0] = toPixel(seg.start.position);
+            auto [x1, y1] = toPixel(seg.end.position);
+            drawLine(img, imageSize, x0, y0, x1, y1, color);
+        }
+
+        writePng(img, imageSize, buildPath(outputDir, modelInstanceId, "toolpath", layerIndex));
     }
 
     void LayerBitmapDebug::dumpAllChainLayers(

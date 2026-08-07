@@ -45,7 +45,7 @@
     "slicer.layerHeight": 0.2,
     "slicer.maxSpeed": 100.0,
     "slicer.topLayerCount": 4,
-    "slicer.wallCount": 2
+    "slicer.wallCount": 4
   },
   "slicer.toolheads.0.generalSettings": {
     "extrusionWidth.percent": 112.0,

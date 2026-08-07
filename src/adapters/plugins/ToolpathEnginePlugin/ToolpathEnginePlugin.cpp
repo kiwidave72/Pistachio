@@ -19,6 +19,9 @@
 
 #include "adapters/plugins/ToolpathEnginePlugin/LayerBitmapDebug.h"
 
+#include "adapters/plugins/ToolpathEnginePlugin/WallGenerationPhase.h"
+
+
 
 #include <cstdio>
 
@@ -151,17 +154,52 @@ private:
         printf("[ToolpathEngine] P5 complete: %zu instances topologized\n", topologized.size());
 
 
+        kinetica::WallGenerationPhase wallGenerationPhase(*m_config);
+
+        domain::v1::Toolpath toolpath;   // single-toolhead scope — one Toolpath, no ToolheadToolpath wrapper yet
+        int totalWallSegments = 0;
+
+       
+
+        for (auto& topoInst : topologized)
+        {
+            toolpath.layers.clear();   // TEMP: currently overwrites per-instance — multi-instance
+            // Toolpath assembly not designed yet, single-instance
+            // testing only for now
+
+            for (auto& topoLayer : topoInst.topology.layers)
+            {
+                domain::v1::ToolpathLayer tpLayer;
+                tpLayer.z = topoLayer.z;
+
+                auto wallResult = wallGenerationPhase.run(topoLayer);
+                tpLayer.segments = wallResult.segments;
+
+                tpLayer.comments.push_back("P6 partial: walls only, no infill/skin yet");
+
+                totalWallSegments += (int)tpLayer.segments.size();
+                toolpath.layers.push_back(std::move(tpLayer));
+            }
+        }
+
+        printf("[ToolpathEngine] P6 (walls only, partial) complete: %d layers, %d wall segments total\n",
+            (int)toolpath.layers.size(), totalWallSegments);
+
+
+
 
         if (m_taskRunner)
         {
             auto extractedCopy = extracted;        // full copies — safe, nothing else will touch these again
             auto topologizedCopy = topologized;
-
+            auto toolpathCopy = toolpath;
             m_taskRunner->submit(
-                [extractedCopy, topologizedCopy](std::shared_ptr<TaskProgress>) {
+                [extractedCopy, topologizedCopy, toolpathCopy](std::shared_ptr<TaskProgress>) {
                     kinetica::LayerBitmapDebug::writeRunReport(extractedCopy, topologizedCopy, "C:\\temp\\layer_debug");
-                    kinetica::LayerBitmapDebug::dumpAllTopologyLayers(topologizedCopy, "C:\\temp\\layer_debug");
-                    kinetica::LayerBitmapDebug::dumpAllChainLayers(extractedCopy, "C:\\temp\\layer_debug");
+                    for (size_t i = 0; i < toolpathCopy.layers.size(); ++i)
+                        kinetica::LayerBitmapDebug::dumpToolpathLayer(toolpathCopy.layers[i], (int)i, "C:\\temp\\layer_debug", "wall_test", 1024);
+                    //kinetica::LayerBitmapDebug::dumpAllTopologyLayers(topologizedCopy, "C:\\temp\\layer_debug");
+                    //kinetica::LayerBitmapDebug::dumpAllChainLayers(extractedCopy, "C:\\temp\\layer_debug");
 
                 },
                 "Debug PNG dump", false, false, false);
@@ -169,8 +207,11 @@ private:
         else
         {
             kinetica::LayerBitmapDebug::writeRunReport(extracted, topologized, "C:\\temp\\layer_debug");
-            kinetica::LayerBitmapDebug::dumpAllTopologyLayers(topologized, "C:\\temp\\layer_debug");
-            kinetica::LayerBitmapDebug::dumpAllChainLayers(extracted, "C:\\temp\\layer_debug");
+            for (size_t i = 0; i < toolpath.layers.size(); ++i)
+                kinetica::LayerBitmapDebug::dumpToolpathLayer(toolpath.layers[i], (int)i, "C:\\temp\\layer_debug", "wall_test", 1024);
+            
+            //kinetica::LayerBitmapDebug::dumpAllTopologyLayers(topologized, "C:\\temp\\layer_debug");
+            //kinetica::LayerBitmapDebug::dumpAllChainLayers(extracted, "C:\\temp\\layer_debug");
 
         }
     }

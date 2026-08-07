@@ -86,6 +86,9 @@ namespace kinetica {
         std::vector<TopologizedGeometry> result;
         result.reserve(input.size());
 
+
+        printf("[TopologyPhase] input has %zu instances\n", input.size());
+
         for (auto& extracted : input)
         {
             domain::v1::AdvancedTopology topology;

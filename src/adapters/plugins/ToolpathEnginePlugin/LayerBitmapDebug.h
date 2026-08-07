@@ -5,7 +5,7 @@
 #include "domain/AdvancedTopology.h"
 #include "adapters/plugins/ToolpathEnginePlugin/ExtractionPhase.h"
 #include "adapters/plugins/ToolpathEnginePlugin/TopologyPhase.h"
-
+#include "domain/Toolpath.h"
 #include <string>
 #include <vector>
 
@@ -14,6 +14,14 @@ namespace kinetica {
     class LayerBitmapDebug
     {
     public:
+ 
+        static void dumpToolpathLayer(
+            const domain::v1::ToolpathLayer& layer,
+            int layerIndex,
+            const std::string& outputDir,
+            const std::string& modelInstanceId,
+            int imageSize = 1024);
+
         static void dumpChainLayer(
             const domain::v1::ExtractedLayer& layer,
             const std::string& outputDir,
