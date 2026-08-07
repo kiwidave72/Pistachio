@@ -20,6 +20,9 @@
 #include "adapters/plugins/ToolpathEnginePlugin/LayerBitmapDebug.h"
 
 #include "adapters/plugins/ToolpathEnginePlugin/WallGenerationPhase.h"
+#include "adapters/plugins/ToolpathEnginePlugin/RectilinearInfillStrategy.h"
+#include "adapters/plugins/ToolpathEnginePlugin/InfillRegionPhase.h"
+
 
 
 
@@ -145,7 +148,9 @@ private:
         kinetica::ExtractionPhase extractionPhase;
         auto extracted = extractionPhase.run(std::move(sliced));
 
-        printf("[ToolpathEngine] P4 complete: %zu instances extracted\n", extracted.size());
+         printf("[ToolpathEngine] P4 complete: %zu instances extracted\n", extracted.size());
+        if (!extracted.empty())
+            printf("[ToolpathEngine]   instance 0 has %zu layers\n", extracted[0].layers.size());
 
 
         kinetica::TopologyPhase topologyPhase;
@@ -155,10 +160,14 @@ private:
 
 
         kinetica::WallGenerationPhase wallGenerationPhase(*m_config);
+        kinetica::RectilinearInfillStrategy rectilinearInfill;
 
         domain::v1::Toolpath toolpath;   // single-toolhead scope — one Toolpath, no ToolheadToolpath wrapper yet
         int totalWallSegments = 0;
-
+       
+        
+        int totalInfillSegments = 0;
+        int totalHolesFilteredAsSpurious = 0;
        
 
         for (auto& topoInst : topologized)
@@ -174,10 +183,17 @@ private:
 
                 auto wallResult = wallGenerationPhase.run(topoLayer);
                 tpLayer.segments = wallResult.segments;
+                totalWallSegments += (int)wallResult.segments.size();
 
-                tpLayer.comments.push_back("P6 partial: walls only, no infill/skin yet");
+                auto infillRegion = kinetica::InfillRegionPhase::run(wallResult);
+                totalHolesFilteredAsSpurious += infillRegion.holesFilteredAsSpurious;
 
-                totalWallSegments += (int)tpLayer.segments.size();
+                auto infillSegments = rectilinearInfill.generate(infillRegion, topoLayer.z, *m_config);
+                tpLayer.segments.insert(tpLayer.segments.end(), infillSegments.begin(), infillSegments.end());
+                totalInfillSegments += (int)infillSegments.size();
+
+                tpLayer.comments.push_back("P6: walls + infill, no skin yet");
+
                 toolpath.layers.push_back(std::move(tpLayer));
             }
         }
@@ -186,7 +202,15 @@ private:
             (int)toolpath.layers.size(), totalWallSegments);
 
 
+         
+       
 
+       
+
+         
+
+        printf("[ToolpathEngine] P6 (walls + infill) complete: %d layers, %d wall segments, %d infill segments, %d holes filtered\n",
+            (int)toolpath.layers.size(), totalWallSegments, totalInfillSegments, totalHolesFilteredAsSpurious);
 
         if (m_taskRunner)
         {

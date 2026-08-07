@@ -716,6 +716,14 @@ namespace core {
             "slicer.Settings", "slicer.infill", "Infill", "Which registered infill strategy is currently in use", "Infill", SettingType::String, "rectilinear", "", false
         ));
 
+        
+        m_config.registerSetting(SettingInfo(
+            "slicer.infill.rectilinear.settings", "density", "Infill Density", "Percentage fill (0-100)", "Infill", SettingType::Float, 20.0, "", false
+        ));
+        m_config.registerSetting(SettingInfo(
+            "slicer.infill.rectilinear.settings", "angle", "Infill Angle", "Degrees, alternates 90 per layer for cross-hatching", "Infill", SettingType::Float, 45.0, "", false
+        ));
+
         initializeConfigFilament(0,"ABS");
         initializeConfigFilament(1, "PLA");
 

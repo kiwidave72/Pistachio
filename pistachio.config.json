@@ -47,6 +47,10 @@
     "slicer.topLayerCount": 4,
     "slicer.wallCount": 4
   },
+  "slicer.infill.rectilinear.settings": {
+    "angle": 45.0,
+    "density": 20.0
+  },
   "slicer.toolheads.0.generalSettings": {
     "extrusionWidth.percent": 112.0,
     "filament": "ABS",
