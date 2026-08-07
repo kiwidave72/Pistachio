@@ -188,7 +188,7 @@ private:
                 auto infillRegion = kinetica::InfillRegionPhase::run(wallResult);
                 totalHolesFilteredAsSpurious += infillRegion.holesFilteredAsSpurious;
 
-                auto infillSegments = rectilinearInfill.generate(infillRegion, topoLayer.z, *m_config);
+                auto infillSegments = rectilinearInfill.generate(infillRegion, wallResult, topoLayer.z, *m_config);
                 tpLayer.segments.insert(tpLayer.segments.end(), infillSegments.begin(), infillSegments.end());
                 totalInfillSegments += (int)infillSegments.size();
 

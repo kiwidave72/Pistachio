@@ -19,6 +19,7 @@
 #include "domain/InfillRegion.h"
 #include "domain/Toolpath.h"
 #include "ports/IConfigPort.h"
+#include "adapters/plugins/ToolpathEnginePlugin/WallGenerationPhase.h"
 
 #include <string>
 #include <vector>
@@ -39,6 +40,7 @@ namespace ports {
 
         virtual std::vector<domain::v1::ToolpathSegment> generate(
             const domain::v1::InfillRegion& region,
+            const domain::v1::WallGenerationResult& wallResult,
             float z,
             const ports::IConfigPort& config) = 0;
     };

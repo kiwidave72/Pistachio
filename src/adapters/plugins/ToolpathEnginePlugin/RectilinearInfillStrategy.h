@@ -13,6 +13,7 @@ namespace kinetica {
 
         std::vector<domain::v1::ToolpathSegment> generate(
             const domain::v1::InfillRegion& region,
+            const domain::v1::WallGenerationResult& wallResult,
             float z,
             const ports::IConfigPort& config) override;
     };
