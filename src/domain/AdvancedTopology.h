@@ -16,10 +16,13 @@
 // P5 doesn't distinguish, per P4's design). Chains P4 couldn't close
 // are skipped here, counted, not silently dropped without a trace.
 // -----------------------------------------------------------------------
+#pragma once
 
 #include <glm/glm.hpp>
 #include <string>
 #include <vector>
+
+#include "domain/DiagnosticMessage.h"
 
 namespace domain::v1 {
 
@@ -36,6 +39,7 @@ namespace domain::v1 {
         float z = 0.0f;
         std::vector<Contour> contours;
         int skippedOpenChains = 0;
+        std::vector<DiagnosticMessage> diagnostics;
     };
 
     class AdvancedTopology

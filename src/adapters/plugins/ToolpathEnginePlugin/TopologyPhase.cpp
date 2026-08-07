@@ -1,4 +1,5 @@
 #include "adapters/plugins/ToolpathEnginePlugin/TopologyPhase.h"
+#include "domain/DiagnosticMessage.h"
 
 #include <cstdio>
 
@@ -32,15 +33,27 @@ namespace kinetica {
             topoLayer.z = extracted.z;
 
             // Only closed chains participate — natural or repaired, P5
-            // doesn't distinguish. Track how many got skipped, don't drop
-            // silently.
+            // doesn't distinguish. Every excluded chain gets a diagnostic,
+            // not just a silent count increment.
             std::vector<const domain::v1::SegmentChain*> closedChains;
             for (auto& chain : extracted.chains)
             {
                 if (chain.isClosed && chain.points.size() >= 3)
+                {
                     closedChains.push_back(&chain);
-                else
-                    ++topoLayer.skippedOpenChains;
+                    continue;
+                }
+
+                ++topoLayer.skippedOpenChains;
+
+                domain::v1::DiagnosticMessage diag;
+                diag.severity = domain::v1::DiagnosticSeverity::Info;
+                diag.phase = "P5 TopologyPhase";
+                diag.message = "chain excluded from topology (not closed, "
+                    + std::to_string(chain.points.size()) + " points)";
+                diag.hasLocation = !chain.points.empty();
+                if (diag.hasLocation) diag.location = chain.points[0];
+                topoLayer.diagnostics.push_back(diag);
             }
 
             for (size_t i = 0; i < closedChains.size(); ++i)
@@ -68,7 +81,7 @@ namespace kinetica {
 
     } // anonymous namespace
 
-    std::vector<TopologizedGeometry> TopologyPhase::run(std::vector<ExtractedGeometry> input)
+    std::vector<TopologizedGeometry> TopologyPhase::run(const std::vector<ExtractedGeometry>& input)
     {
         std::vector<TopologizedGeometry> result;
         result.reserve(input.size());
@@ -89,6 +102,10 @@ namespace kinetica {
                 totalSkipped += topoLayer.skippedOpenChains;
 
                 topology.layers.push_back(std::move(topoLayer));
+                // NOTE: dumpTopologyLayer() removed from here — was called
+                // AFTER std::move(topoLayer) above (use-after-move bug),
+                // and duplicated what onRunPipeline()'s dumpAllTopologyLayers
+                // already does correctly, once, after this phase completes.
             }
 
             printf("[TopologyPhase] instance %s: %d outer contours, %d holes, %d chains skipped (unclosed)\n",

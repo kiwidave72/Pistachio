@@ -14,6 +14,7 @@
 // instance is expected to concretely surface as an open chain, not
 // something P4 repairs.
 // -----------------------------------------------------------------------
+#include "DiagnosticMessage.h"
 
 #include <glm/glm.hpp>
 #include <vector>
@@ -32,6 +33,7 @@ namespace domain::v1 {
         int layerIndex = 0;
         float z = 0.0f;
         std::vector<SegmentChain> chains;
+        std::vector<DiagnosticMessage> diagnostics;
     };
 
 } // namespace domain::v1

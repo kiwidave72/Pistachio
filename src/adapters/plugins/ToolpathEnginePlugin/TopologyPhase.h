@@ -26,7 +26,8 @@ namespace kinetica {
     class TopologyPhase
     {
     public:
-        std::vector<TopologizedGeometry> run(std::vector<ExtractedGeometry> input);
+        
+        std::vector<TopologizedGeometry> run(const std::vector<ExtractedGeometry>& input);
     };
 
 } // namespace kinetica

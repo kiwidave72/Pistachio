@@ -3,6 +3,7 @@
 #endif
 
 #include "adapters/plugins/ServiceModuleApi.h"
+#include "core/TaskRunner.h"
 #include "core/IApplication.h"
 #include "core/ServiceRegistry.h"
 #include "domain/ModelCache.h"
@@ -15,6 +16,8 @@
 #include "adapters/plugins/ToolpathEnginePlugin/SlicingPhase.h"
 #include "adapters/plugins/ToolpathEnginePlugin/ExtractionPhase.h"
 #include "adapters/plugins/ToolpathEnginePlugin/TopologyPhase.h"
+
+#include "adapters/plugins/ToolpathEnginePlugin/LayerBitmapDebug.h"
 
 
 #include <cstdio>
@@ -53,6 +56,7 @@ public:
         m_workspaceStore = app.services().resolve<domain::v1::WorkspaceStore>();
         m_config = app.services().resolve<ports::IConfigPort>();
         m_eventBus = app.services().resolve<ports::IEventBus>();
+        m_taskRunner = app.services().resolve<TaskRunner>();
 
         printf("[ToolpathEngine] resolved ModelCache=%p WorkspaceStore=%p IConfigPort=%p IEventBus=%p\n",
             (void*)m_modelCache, (void*)m_workspaceStore, (void*)m_config, (void*)m_eventBus);
@@ -82,6 +86,7 @@ private:
     domain::v1::WorkspaceStore* m_workspaceStore = nullptr;
     ports::IConfigPort* m_config = nullptr;
     ports::IEventBus* m_eventBus = nullptr;
+    TaskRunner* m_taskRunner = nullptr;
 
     void onRunPipeline(const std::string& buildPlateId)
     {
@@ -141,9 +146,33 @@ private:
 
 
         kinetica::TopologyPhase topologyPhase;
-        auto topologized = topologyPhase.run(std::move(extracted));
+        auto topologized = topologyPhase.run(extracted);
 
         printf("[ToolpathEngine] P5 complete: %zu instances topologized\n", topologized.size());
+
+
+
+        if (m_taskRunner)
+        {
+            auto extractedCopy = extracted;        // full copies — safe, nothing else will touch these again
+            auto topologizedCopy = topologized;
+
+            m_taskRunner->submit(
+                [extractedCopy, topologizedCopy](std::shared_ptr<TaskProgress>) {
+                    kinetica::LayerBitmapDebug::writeRunReport(extractedCopy, topologizedCopy, "C:\\temp\\layer_debug");
+                    kinetica::LayerBitmapDebug::dumpAllTopologyLayers(topologizedCopy, "C:\\temp\\layer_debug");
+                    kinetica::LayerBitmapDebug::dumpAllChainLayers(extractedCopy, "C:\\temp\\layer_debug");
+
+                },
+                "Debug PNG dump", false, false, false);
+        }
+        else
+        {
+            kinetica::LayerBitmapDebug::writeRunReport(extracted, topologized, "C:\\temp\\layer_debug");
+            kinetica::LayerBitmapDebug::dumpAllTopologyLayers(topologized, "C:\\temp\\layer_debug");
+            kinetica::LayerBitmapDebug::dumpAllChainLayers(extracted, "C:\\temp\\layer_debug");
+
+        }
     }
 
    
