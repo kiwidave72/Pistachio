@@ -464,8 +464,8 @@ int main(int argc, char** argv)
         // Renderer / IO / Solver
         // For now we default to a lightweight OpenGL demo renderer so the 3D viewport
         // always shows a scene (grid + cube) even before OCCT is fully wired up.
-        app->setRenderer(std::make_unique<adapters::GlCubeViewRenderer>());
-        //app->setRenderer(std::make_unique<adapters::OcctRenderer>());
+       // app->setRenderer(std::make_unique<adapters::GlCubeViewRenderer>());
+        app->setRenderer(std::make_unique<adapters::OcctRenderer>());
 
         app->addFileLoader(std::make_unique<adapters::StepFileLoader>());
         app->addFileLoader(std::make_unique<adapters::StlMeshLoader>());

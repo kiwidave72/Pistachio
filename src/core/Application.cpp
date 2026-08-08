@@ -211,6 +211,8 @@ namespace core {
 
             // UI adapter will call renderer in DrawViewport()
             m_uiAdapter->render();
+            
+            
 
             m_uiAdapter->endFrame();
         }

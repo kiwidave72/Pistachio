@@ -641,7 +641,11 @@ public:
                 opts.includeHidden = false;
                 opts.maxDepth = 10;
 
-                ScanResult result = scanner.scan("E:/github/Voron-2/STLs", opts);
+                //ScanResult result = scanner.scan("E:/github/Voron-2/STLs", opts);
+
+                // speed up the cache loading by looking at the test prints only
+                ScanResult result = scanner.scan("E:/github/Voron-2/STLs/Test_Prints", opts);
+
                 if (!result.success)
                 {
                     printf("[SlicerCore] scan failed: %s\n", result.errorMessage.c_str());
