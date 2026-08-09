@@ -38,6 +38,12 @@ namespace core {
         m_workspaceStore = std::make_unique<domain::v1::WorkspaceStore>(m_eventBus.get());
         m_services.registerService<domain::v1::WorkspaceStore>(m_workspaceStore.get());
 
+        m_viewportRendererRegistry = std::make_unique<core::ViewportRendererRegistry>();
+        m_services.registerService<ports::IViewportRendererRegistry>(m_viewportRendererRegistry.get());
+
+ 
+        m_toolpathStore = std::make_unique<domain::v1::ToolpathStore>(m_eventBus.get());
+        m_services.registerService<domain::v1::ToolpathStore>(m_toolpathStore.get());
     }
     void Application::attachTaskProgressReporter(std::unique_ptr<ports::ITaskProgressReporter> reporter)
     {

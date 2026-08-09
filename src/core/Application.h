@@ -19,15 +19,19 @@
 #include "core/ServiceRegistry.h"
 #include "ports/IEventBus.h"
 #include "ports/ITaskProgressReporter.h"
+
+#include "core/ViewportRendererRegistry.h"
+
 // Host-owned config store
 
 #include "core/ConfigStore.h"
-
+#include "domain/ToolpathStore.h"
 #include "domain/Model.h"
 #include "domain/SketchModel.h"
 
 namespace adapters { class EventBus; }
 namespace domain::v1 { class WorkspaceStore; }
+namespace domain::v1 { class ToolpathStore; }
 
 namespace core {
 
@@ -91,6 +95,9 @@ namespace core {
 
         std::unique_ptr<adapters::EventBus> m_eventBus;
         std::unique_ptr<domain::v1::WorkspaceStore> m_workspaceStore;
+        std::unique_ptr<domain::v1::ToolpathStore> m_toolpathStore;
+
+        std::unique_ptr<core::ViewportRendererRegistry> m_viewportRendererRegistry;
 
     private:
 

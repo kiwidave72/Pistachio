@@ -74,7 +74,7 @@ namespace kinetica {
 
             (contour.isOuter ? outerCount : holeCount)++;
 
-            printf("[WallGenerationPhase] layer z=%.2f: %d outer, %d hole contours\n", layer.z, outerCount, holeCount);
+            //printf("[WallGenerationPhase] layer z=%.2f: %d outer, %d hole contours\n", layer.z, outerCount, holeCount);
 
             // Outer walls shrink inward (negative offset); hole walls grow
             // outward into solid material (positive offset) — a hole needs
@@ -95,7 +95,7 @@ namespace kinetica {
 
                 if (offsetResult.empty())
                 {
-                    printf("[WallGenerationPhase] wall %d collapsed (contour too small), stopping at %d walls\n", i, i);
+                    //printf("[WallGenerationPhase] wall %d collapsed (contour too small), stopping at %d walls\n", i, i);
                     break;
                 }
 

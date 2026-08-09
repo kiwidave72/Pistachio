@@ -850,7 +850,13 @@ GLuint LoadTexture(const std::string& filename)
     // -----------------------------------------------------------------------
     // RenderModel Implementation
     // -----------------------------------------------------------------------
- 
+    RenderModel::RenderModel() {}
+    RenderModel::~RenderModel() {
+        if (vao) glDeleteVertexArrays(1, &vao);
+        if (vbo) glDeleteBuffers(1, &vbo);
+        if (ebo) glDeleteBuffers(1, &ebo);
+    }
+
     bool RenderModel::raycastBoundsOnly(const glm::vec3& rayOrigin, const glm::vec3& rayDirection, glm::mat4 modelMatrix) const
     {
         if (!model || !model->mesh) return false;
@@ -1143,7 +1149,7 @@ GLuint LoadTexture(const std::string& filename)
         //printf("[BuildPlateRenderer] after ensureGl()\n");
         m_sceneLayout.createLayout(project->buildPlates, *m_modelCache);
         //printf("[BuildPlateRenderer] after createLayout()\n");
-        m_sceneLayout.preRender();
+        //m_sceneLayout.preRender();
         //printf("[BuildPlateRenderer] after preRender()\n");
 
         m_buildPlates = project->buildPlates;
@@ -1163,7 +1169,7 @@ GLuint LoadTexture(const std::string& filename)
 
         m_buildPlates = buildPlates;
         m_sceneLayout.createLayout(buildPlates,*m_modelCache);
-        m_sceneLayout.preRender();
+        //m_sceneLayout.preRender();
     }
 
     // -----------------------------------------------------------------------
@@ -1253,7 +1259,9 @@ GLuint LoadTexture(const std::string& filename)
             }
 
             m_registry->renderDragDropTargets("ASSET_PATHS");
-            renderCameraGizmo();
+           
+            
+            //renderCameraGizmo();
 
 
             ImGuiWindowFlags flags = 
@@ -1729,7 +1737,7 @@ GLuint LoadTexture(const std::string& filename)
     // -----------------------------------------------------------------------
     // updateCamera — thin consumer of SceneLayout camera state
     // -----------------------------------------------------------------------
-    void BuildPlateRenderer::updateCamera(uint32_t w, uint32_t h)
+    /*void BuildPlateRenderer::updateCamera(uint32_t w, uint32_t h)
     {
         CameraState cam = m_sceneLayout.getCurrentCamera();
 
@@ -1748,8 +1756,31 @@ GLuint LoadTexture(const std::string& filename)
 
         float aspect = (h > 0) ? (float)w / (float)h : 1.0f;
         m_proj = glm::perspective(glm::radians(45.0f), aspect, 0.1f, cam.distance * 3.0f);
-    }
+    }*/
+    void BuildPlateRenderer::updateCamera(uint32_t w, uint32_t h)
+    {
 
+        if (!m_viewportController) return;
+        const CameraState& cam = m_viewportController->camera();   // was: m_sceneLayout.getCurrentCamera()
+
+        // pitch is already radians in the new global CameraState — no
+        // glm::radians() conversion needed here anymore (was needed for the
+        // old slicer::CameraState, which stored pitch in degrees).
+        float radiusOnXZ = cam.distance * std::cos(cam.pitch);
+        float heightOff = cam.distance * std::sin(cam.pitch);
+
+        glm::vec3 camPos = {
+            cam.target.x + std::cos(cam.yaw) * radiusOnXZ,
+            cam.target.y + heightOff,
+            cam.target.z + std::sin(cam.yaw) * radiusOnXZ
+        };
+
+        m_view = glm::lookAt(camPos, cam.target, glm::vec3(0, 1, 0));
+        m_camPos = camPos;
+
+        float aspect = (h > 0) ? (float)w / (float)h : 1.0f;
+        m_proj = glm::perspective(cam.fovYRadians, aspect, 0.1f, cam.distance * 3.0f);   // adaptive far-plane preserved
+    }
     // -----------------------------------------------------------------------
     // Camera Gizmo
     // -----------------------------------------------------------------------

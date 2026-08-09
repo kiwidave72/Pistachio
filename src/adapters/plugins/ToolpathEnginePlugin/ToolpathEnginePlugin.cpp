@@ -8,6 +8,7 @@
 #include "core/ServiceRegistry.h"
 #include "domain/ModelCache.h"
 #include "domain/WorkspaceStore.h"
+#include "domain/ToolpathStore.h"
 #include "ports/IConfigPort.h"
 #include "ports/IEventBus.h"
 #include "adapters/plugins/ToolpathEnginePlugin/ImportPhase.h"
@@ -23,6 +24,7 @@
 #include "adapters/plugins/ToolpathEnginePlugin/RectilinearInfillStrategy.h"
 #include "adapters/plugins/ToolpathEnginePlugin/InfillRegionPhase.h"
 
+#include "domain/ToolpathSerialization.h"
 
 
 
@@ -67,6 +69,9 @@ public:
         printf("[ToolpathEngine] resolved ModelCache=%p WorkspaceStore=%p IConfigPort=%p IEventBus=%p\n",
             (void*)m_modelCache, (void*)m_workspaceStore, (void*)m_config, (void*)m_eventBus);
 
+        m_toolPathStore = app.services().resolve<domain::v1::ToolpathStore>();
+
+       
         if (m_eventBus && m_modelCache && m_workspaceStore && m_config)
         {
             // payload = buildPlateId. Fired by the UI (SlicerCorePlugin)
@@ -75,6 +80,8 @@ public:
             {
                 onRunPipeline(buildPlateId);
             });
+
+            
         }
 
         printf("[ToolpathEngine] onLoad done\n");
@@ -90,6 +97,7 @@ public:
 private:
     domain::v1::ModelCache* m_modelCache = nullptr;
     domain::v1::WorkspaceStore* m_workspaceStore = nullptr;
+    domain::v1::ToolpathStore* m_toolPathStore = nullptr;
     ports::IConfigPort* m_config = nullptr;
     ports::IEventBus* m_eventBus = nullptr;
     TaskRunner* m_taskRunner = nullptr;
@@ -202,15 +210,14 @@ private:
             (int)toolpath.layers.size(), totalWallSegments);
 
 
-         
-       
-
-       
-
-         
-
         printf("[ToolpathEngine] P6 (walls + infill) complete: %d layers, %d wall segments, %d infill segments, %d holes filtered\n",
             (int)toolpath.layers.size(), totalWallSegments, totalInfillSegments, totalHolesFilteredAsSpurious);
+        
+
+        if (m_toolPathStore)
+            m_toolPathStore->set(toolpath);   // publishes "toolpath.updated" internally, no payload needed
+
+        m_eventBus->publish("toolpath.updated", "");
 
         if (m_taskRunner)
         {
@@ -220,8 +227,11 @@ private:
             m_taskRunner->submit(
                 [extractedCopy, topologizedCopy, toolpathCopy](std::shared_ptr<TaskProgress>) {
                     kinetica::LayerBitmapDebug::writeRunReport(extractedCopy, topologizedCopy, "C:\\temp\\layer_debug");
-                    for (size_t i = 0; i < toolpathCopy.layers.size(); ++i)
-                        kinetica::LayerBitmapDebug::dumpToolpathLayer(toolpathCopy.layers[i], (int)i, "C:\\temp\\layer_debug", "wall_test", 1024);
+                    
+                    //domain::v1::saveToolpathToFile(toolpathCopy, "C:\\temp\\layer_debug\\toolpath.json");
+                    
+                    //for (size_t i = 0; i < toolpathCopy.layers.size(); ++i)
+                    //    kinetica::LayerBitmapDebug::dumpToolpathLayer(toolpathCopy.layers[i], (int)i, "C:\\temp\\layer_debug", "wall_test", 1024);
                     //kinetica::LayerBitmapDebug::dumpAllTopologyLayers(topologizedCopy, "C:\\temp\\layer_debug");
                     //kinetica::LayerBitmapDebug::dumpAllChainLayers(extractedCopy, "C:\\temp\\layer_debug");
 

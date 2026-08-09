@@ -185,8 +185,8 @@ namespace kinetica {
         allBoundaries.insert(allBoundaries.end(), wallResult.innermostOuterBoundaries.begin(), wallResult.innermostOuterBoundaries.end());
         allBoundaries.insert(allBoundaries.end(), wallResult.innermostHoleBoundaries.begin(), wallResult.innermostHoleBoundaries.end());
 
-        printf("[RectilinearInfill] allBoundaries.size()=%zu (outer=%zu hole=%zu)\n",
-            allBoundaries.size(), wallResult.innermostOuterBoundaries.size(), wallResult.innermostHoleBoundaries.size());
+        //printf("[RectilinearInfill] allBoundaries.size()=%zu (outer=%zu hole=%zu)\n",
+        //    allBoundaries.size(), wallResult.innermostOuterBoundaries.size(), wallResult.innermostHoleBoundaries.size());
 
         std::vector<ScanPiece> pieces;
         bool reverseNext = false;
@@ -223,7 +223,7 @@ namespace kinetica {
             reverseNext = !reverseNext;
         }
 
-        printf("[RectilinearInfill] total pieces=%zu\n", pieces.size());
+        //printf("[RectilinearInfill] total pieces=%zu\n", pieces.size());
 
         std::vector<glm::vec2> currentRun;
         float maxWallArc = lineSpacing * 20.0f;
@@ -259,8 +259,8 @@ namespace kinetica {
 
             if (connectorStaysInsideRegion(lastPoint, nextStart, regionPaths))
             {
-                printf("[RectilinearInfill] connector OK: (%.3f,%.3f) -> (%.3f,%.3f)\n",
-                    lastPoint.x, lastPoint.y, nextStart.x, nextStart.y);
+                //printf("[RectilinearInfill] connector OK: (%.3f,%.3f) -> (%.3f,%.3f)\n",
+                //    lastPoint.x, lastPoint.y, nextStart.x, nextStart.y);
                 currentRun.insert(currentRun.end(), piece.points.begin(), piece.points.end());
                 continue;
             }
@@ -268,8 +268,8 @@ namespace kinetica {
             WallProjection projA = projectOntoWalls(lastPoint, allBoundaries, wallTolerance);
             WallProjection projB = projectOntoWalls(nextStart, allBoundaries, wallTolerance);
 
-            printf("[RectilinearInfill] fallback: (%.3f,%.3f)->(%.3f,%.3f) projA.boundary=%d projB.boundary=%d wallTolerance=%.4f\n",
-                lastPoint.x, lastPoint.y, nextStart.x, nextStart.y, projA.boundaryIndex, projB.boundaryIndex, wallTolerance);
+            //printf("[RectilinearInfill] fallback: (%.3f,%.3f)->(%.3f,%.3f) projA.boundary=%d projB.boundary=%d wallTolerance=%.4f\n",
+            //    lastPoint.x, lastPoint.y, nextStart.x, nextStart.y, projA.boundaryIndex, projB.boundaryIndex, wallTolerance);
 
             if (projA.boundaryIndex != -1 && projA.boundaryIndex == projB.boundaryIndex)
             {
@@ -277,8 +277,8 @@ namespace kinetica {
                     allBoundaries[projA.boundaryIndex],
                     projA.nearestVertexIndex, projB.nearestVertexIndex, maxWallArc);
 
-                printf("[RectilinearInfill]   wallPoints.size()=%zu maxWallArc=%.4f\n",
-                    wallPoints.size(), maxWallArc);
+                //printf("[RectilinearInfill]   wallPoints.size()=%zu maxWallArc=%.4f\n",
+                //    wallPoints.size(), maxWallArc);
 
                 if (!wallPoints.empty() && wallPoints.size() > 1)   // guard against degenerate single-point results
                 {

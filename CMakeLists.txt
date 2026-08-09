@@ -255,10 +255,13 @@ add_library(pistachio_core SHARED
     # Adapters
     src/adapters/eventbus/EventBus.cpp
     src/adapters/console/TaskProgressReporterConsole.cpp
+    
     src/adapters/rendering/OcctRenderer.cpp
+    src/adapters/rendering/CameraGizmoGLRender.cpp
+    
     src/adapters/loaders/StepFileLoader.cpp
     src/adapters/loaders/StlMeshLoader.cpp
-     src/adapters/loaders/StlLoaderAdapter.cpp
+    src/adapters/loaders/StlLoaderAdapter.cpp
 
     src/adapters/exporters/ObjExporter.cpp
     src/adapters/exporters/StlExporter.cpp
@@ -488,6 +491,41 @@ foreach(cfg Debug Release RelWithDebInfo MinSizeRel)
     )
 endforeach()
 
+# -------------------------
+# pistachio_toolpath_visualization (ToolpathVisualizationPlugin — IUiModule)
+# -------------------------
+add_library(pistachio_toolpath_visualization SHARED
+    src/adapters/ui/plugins/ToolpathVisualizationPlugin/ToolpathVisualizationPlugin.cpp
+    src/adapters/ui/plugins/ToolpathVisualizationPlugin/TestGridGLRender.cpp
+    src/adapters/ui/plugins/ToolpathVisualizationPlugin/ToolpathRibbonGLRender.cpp 
+    src/adapters/ui/plugins/ToolpathVisualizationPlugin/ToolpathRibbonGLMesh.cpp
+
+)
+
+target_include_directories(pistachio_toolpath_visualization PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/ports
+    "${IMGUI_DIR}"
+    "${IMGUI_DIR}/backends"
+    "${IMGUI_CUSTOM_DIR}"
+    ${GLM_DIR}
+    ${STB_DIR}
+)
+
+target_link_libraries(pistachio_toolpath_visualization PRIVATE
+    pistachio_core
+)
+
+# Output directory is "plugins", not "services" — this is an IUiModule,
+# loaded in Phase 2 by UiPluginRegistry, not ServiceModuleRegistry.
+foreach(cfg Debug Release RelWithDebInfo MinSizeRel)
+    string(TOUPPER "${cfg}" CFGU)
+    set_target_properties(pistachio_toolpath_visualization PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY_${CFGU} "${CMAKE_BINARY_DIR}/bin/${cfg}/plugins"
+        LIBRARY_OUTPUT_DIRECTORY_${CFGU} "${CMAKE_BINARY_DIR}/bin/${cfg}/plugins"
+        ARCHIVE_OUTPUT_DIRECTORY_${CFGU} "${CMAKE_BINARY_DIR}/lib/${cfg}"
+    )
+endforeach()
 
 # -------------------------
 # pistachio_kinetica (ToolpathEnginePlugin — IServiceModule)

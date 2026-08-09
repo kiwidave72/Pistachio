@@ -2,6 +2,9 @@
 #include "adapters/ui/IconsFontAwesomeRegular.h"
 #include "ports/ITaskProgressReporter.h"
 
+#include "adapters/rendering/ViewportController.h"
+#include "ports/IViewportRendererRegistry.h"
+
 #include "core/Application.h"
 #include "ports/IConfigPort.h"
 #include "adapters/ui/ContributionRegistry.h"
@@ -74,7 +77,7 @@ void SceneController::changeToSingleBuildPlateView(slicer::BuildPlateRenderer* b
 
     //update the scenbounds - zooming??
     // 
-    //move the camera to be inline with the build plate??
+    //move the camera to be inline with the build plate??c
 
 
 }
@@ -200,7 +203,8 @@ bool WorkspaceService::loadWorkspace(std::string path, std::string fileName) {
                 for each(domain::v1::BuildPlate * buildPlate in project->buildPlates)
                 {
 
-                    std::string path = "C:\\github\\Pistachio-config\\Assets\\STL\\buildplate.stl";
+                     
+                    std::string path = "C:\\github\\Pistachio-config\\Assets\\STL\\BuildPlate.stl";
 
                     StlLoaderAdapter loader = StlLoaderAdapter(m_cache);
                     loader.load(path);
@@ -554,7 +558,7 @@ void SlicerService::loadWorkspace() {
     project->name = "Test Project";
     project->label = "Test Project";
 
-    std::string path = "C:\\github\\Pistachio-config\\Assets\\STL\\buildplate.stl";
+    std::string path = "C:\\github\\Pistachio-config\\Assets\\STL\\BuildPlate.stl";
 
       
     StlLoaderAdapter loader =  StlLoaderAdapter(m_cache);
@@ -612,7 +616,7 @@ public:
 
        // FolderScanner scanner1;
        //ScanFileResult hash = scanner1.scanFile ("E:\\github\\Voron-2\\STLs\\Test_Prints\\Voron_Design_Cube_v7.stl");
-
+       
 
         m_app = reinterpret_cast<core::Application*>(svc.app);
         m_config = reinterpret_cast<ports::IConfigPort*>(svc.config);
@@ -624,8 +628,16 @@ public:
         m_workspaceService = new WorkspaceService(dataContext,*m_workspaceStore, *m_modelCache, taskRunner);
         m_slicerService = new SlicerService(dataContext,*m_workspaceStore, *m_modelCache, taskRunner);
        
+        auto* viewportRegistry = svc.application->services().resolve<ports::IViewportRendererRegistry>();
+        if (viewportRegistry)
+            m_viewportController = std::make_unique<ViewportController>(*viewportRegistry);
+
         m_slicerService->loadWorkspace();
         auto* eventBus = svc.application->services().resolve<ports::IEventBus>();
+
+
+       
+
 
         taskRunner->group("Startup Load")
             .sequential()
@@ -665,7 +677,7 @@ public:
             {
                 
               progress->setMessage("Loading workspace.json");
-              m_workspaceService->loadWorkspace("c:\\temp\\", "workspace.json");
+              m_workspaceService->loadWorkspace("c:\\temp\\", "cube_workspace.json");
             })
             .completed([this, eventBus](bool success)
             {
@@ -718,6 +730,9 @@ public:
 
         if (m_registry)
         {
+
+            
+
             // add menu items
             m_menuContrib = m_registry->contributeMenu(k_pluginId, "Slicer", 300);
             m_menuContrib->addItem(
@@ -730,6 +745,22 @@ public:
 
             // add ribbon items
             m_ribbonContrib = m_registry->contributeRibbon(k_pluginId, "Slicer", 300);
+
+
+            m_ribbonContrib->addButton("toggle_viewport", "Toggle View", "", 60, [this]() {
+                if (!m_viewportController) return;
+
+                if (m_viewportController->activeId() == "toolpath_ribbon")
+                    m_viewportController->setActiveRenderer("");   // back to plate view — however that's currently selected
+                else {
+
+                    m_viewportController->setActiveRenderer("toolpath_ribbon");
+                    m_viewportController->setTarget(glm::vec3(190.0f, 190.0f, 15.0f));   // matches the reference cube's real bed-space center
+
+                }
+
+                });
+
             m_ribbonContrib->addButton( "slice_now", "Slice","", 10, [this, eventBus]() {
 
                 // now update the UI.
@@ -829,7 +860,7 @@ public:
                         std::shared_ptr<domain::v1::Model> buildPlateModel = plate->buildPlateModel;
                         FolderScanner scanner;
 
-                        std::string path = "C:\\github\\Pistachio-config\\Assets\\STL\\buildplate.stl";
+                        std::string path = "C:\\github\\Pistachio-config\\Assets\\STL\\BuildPlate.stl";
 
                         StlLoaderAdapter loader = StlLoaderAdapter(*m_modelCache);
                         loader.load(path);
@@ -980,6 +1011,7 @@ private:
 
     SlicerService* m_slicerService = nullptr;
     WorkspaceService* m_workspaceService = nullptr;
+    std::unique_ptr<ViewportController> m_viewportController;
 
     core::Application* m_app = nullptr;
     ports::IConfigPort* m_config = nullptr;
@@ -1472,33 +1504,282 @@ private:
             ImGui::TextDisabled("Select an asset to preview.");
         }
     }
+    void renderGizmoOverlay(ImVec2 viewportTopLeft, ImVec2 avail)
+    {
+        const uint32_t gizmoSize = 200;
+        const float pad = 14.0f;
+        ImVec2 gizmoScreenPos(
+            viewportTopLeft.x + avail.x - gizmoSize - pad,
+            viewportTopLeft.y + pad);
+        ImVec2 gizmoCentre(gizmoScreenPos.x + gizmoSize * 0.5f, gizmoScreenPos.y + gizmoSize * 0.5f);
 
+        GLuint gizmoTex = m_viewportController->renderGizmoAndGetTexture(gizmoSize);
+
+        ImGui::SetCursorScreenPos(gizmoScreenPos);
+        if (gizmoTex)
+            ImGui::Image((ImTextureID)(intptr_t)gizmoTex, ImVec2((float)gizmoSize, (float)gizmoSize), ImVec2(0, 1), ImVec2(1, 0));
+
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+
+        auto* gizmo = m_viewportController->gizmo();
+        struct LabelDef { glm::vec3 normal; const char* text; };
+        LabelDef labels[] = {
+            { { 0, 1, 0}, "TOP"  }, { { 0, 0, 1}, "FRONT"}, { { 1, 0, 0}, "RIGHT"},
+            { { 0, 0,-1}, "BACK" }, { {-1, 0, 0}, "LEFT" }, { { 0,-1, 0}, "BTM"  },
+        };
+        const float faceS = 0.72f;
+        glm::vec3 camFwd = gizmo->cameraForward();
+        for (auto& lb : labels)
+        {
+            if (glm::dot(lb.normal, camFwd) >= -0.1f) continue;
+            glm::vec2 local = gizmo->project2D(lb.normal * faceS, gizmoSize, gizmoSize);
+            ImVec2 screenPt(gizmoScreenPos.x + local.x, gizmoScreenPos.y + local.y);
+            ImVec2 ts = ImGui::CalcTextSize(lb.text);
+            float bpad = 3.0f;
+            dl->AddRectFilled(
+                ImVec2(screenPt.x - ts.x * 0.5f - bpad, screenPt.y - ts.y * 0.5f - bpad),
+                ImVec2(screenPt.x + ts.x * 0.5f + bpad, screenPt.y + ts.y * 0.5f + bpad),
+                IM_COL32(0, 0, 0, 90), 3.0f);
+            dl->AddText(ImVec2(screenPt.x - ts.x * 0.5f, screenPt.y - ts.y * 0.5f), IM_COL32(255, 255, 255, 245), lb.text);
+        }
+
+        ImVec2 mousePos = ImGui::GetMousePos();
+        ImGui::SetCursorScreenPos(gizmoScreenPos);
+        ImGui::InvisibleButton("##camgizmo", ImVec2((float)gizmoSize, (float)gizmoSize));
+
+        bool clicked = ImGui::IsItemClicked(ImGuiMouseButton_Left);
+        bool dragging = ImGui::IsItemActive() && ImGui::IsMouseDragging(ImGuiMouseButton_Left);
+
+        if (dragging)
+        {
+            ImVec2 delta = ImGui::GetIO().MouseDelta;
+            m_viewportController->orbit(delta.x * 0.005f, -delta.y * 0.005f);
+        }
+        else if (clicked)
+        {
+            m_viewportController->handleGizmoClick(mousePos.x - gizmoScreenPos.x, mousePos.y - gizmoScreenPos.y, gizmoSize);
+        }
+
+        float arrowR = gizmoSize * 0.52f;
+        struct Arrow { float angle, dYawRad, dPitchDeg; };
+        Arrow arrows[] = {
+            { 0.0f, 0.25f, 0.0f }, { glm::pi<float>(), -0.25f, 0.0f },
+            { glm::half_pi<float>(), 0.0f, 15.0f }, { -glm::half_pi<float>(), 0.0f, -15.0f },
+        };
+        for (auto& arr : arrows)
+        {
+            float ax = gizmoCentre.x + std::cos(arr.angle) * arrowR;
+            float ay = gizmoCentre.y - std::sin(arr.angle) * arrowR;
+            float as = 9.0f, tipAngle = arr.angle + glm::pi<float>();
+            ImVec2 tip(ax + std::cos(tipAngle) * as, ay - std::sin(tipAngle) * as);
+            ImVec2 lft(ax + std::cos(tipAngle + glm::half_pi<float>()) * as * 0.5f, ay - std::sin(tipAngle + glm::half_pi<float>()) * as * 0.5f);
+            ImVec2 rgt(ax + std::cos(tipAngle - glm::half_pi<float>()) * as * 0.5f, ay - std::sin(tipAngle - glm::half_pi<float>()) * as * 0.5f);
+            bool hov = glm::length(glm::vec2(mousePos.x - ax, mousePos.y - ay)) < as * 1.5f;
+            dl->AddTriangleFilled(tip, lft, rgt, hov ? IM_COL32(230, 230, 230, 255) : IM_COL32(160, 160, 165, 200));
+            if (hov && ImGui::IsMouseClicked(ImGuiMouseButton_Left))
+                m_viewportController->orbit(arr.dYawRad, glm::radians(arr.dPitchDeg));
+        }
+    }
     void renderBuildPlate()
     {
-        // Use the child window's inner size — guaranteed non-zero since
-        // we're inside BeginChild("##slicer_preview")
-        ImVec2 avail = ImGui::GetContentRegionAvail();
-        uint32_t w = (uint32_t)std::max(4.0f, avail.x);
-        uint32_t h = (uint32_t)std::max(4.0f, avail.y);
-
-        //printf("[Preview] renderBuildPlate: w=%u h=%u loaded=%d\n",
-        //    w, h,m_buildPlateRenderer.isLoaded() ? 1 : 0);
-
-        // Tick auto-rotation
-        //m_preview.paused = ImGui::IsWindowHovered();
         m_buildPlateRenderer->tick(ImGui::GetIO().DeltaTime);
 
-        if (m_buildPlateRenderer->isLoaded())
+        bool showToolpathView = m_viewportController && m_viewportController->activeId() == "toolpath_ribbon";
+        ImVec2 viewportTopLeft = ImGui::GetCursorScreenPos();
+        ImVec2 avail = ImGui::GetContentRegionAvail();
+
+        if (showToolpathView)
+        {
+            uint32_t w = (uint32_t)avail.x, h = (uint32_t)avail.y;
+            GLuint tex = m_viewportController->renderAndGetTexture(w, h, ImGui::GetIO().DeltaTime, ImGui::IsWindowHovered());
+            if (tex) ImGui::Image((ImTextureID)(intptr_t)tex, avail);
+            if (ImGui::IsItemHovered()) m_viewportController->zoom(ImGui::GetIO().MouseWheel * 10.0f);
+
+            renderGizmoOverlay(viewportTopLeft, avail);
+
+            if (showToolpathView && m_viewportController->activeLayerCount() > 0)
+            {
+                int maxLayer = m_viewportController->activeLayerCount() - 1;
+                int layer = m_viewportController->activeVisibleLayer();
+
+                ImVec2 scrubPos(viewportTopLeft.x + 8.0f, viewportTopLeft.y + 8.0f);
+                ImVec2 scrubSize(28.0f, avail.y - 16.0f);
+
+                ImGui::SetCursorScreenPos(scrubPos);
+                if (ImGui::VSliderInt("##layerScrub", scrubSize, &layer, 0, maxLayer, "%d"))
+                    m_viewportController->setActiveVisibleLayer(layer);
+
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Layer %d / %d", layer, maxLayer);
+            }
+        }
+        else if (m_buildPlateRenderer->isLoaded())
         {
             m_buildPlateRenderer->setRegistry(this->m_registry);
-
+            m_buildPlateRenderer->setViewportController(*m_viewportController);
             m_buildPlateRenderer->renderWindow();
+
+            renderGizmoOverlay(viewportTopLeft, avail);
         }
         else
         {
             ImGui::TextDisabled("Select an asset to preview.");
         }
     }
+    //void renderBuildPlate()
+    //{
+    //    m_buildPlateRenderer->tick(ImGui::GetIO().DeltaTime);
+
+    //    bool showToolpathView = m_viewportController && m_viewportController->activeId() == "toolpath";
+
+    //    if (showToolpathView)
+    //    {
+    //        ImVec2 avail = ImGui::GetContentRegionAvail();
+    //        uint32_t w = (uint32_t)avail.x, h = (uint32_t)avail.y;
+
+    //        ImVec2 viewportTopLeft = ImGui::GetCursorScreenPos();
+    //        GLuint tex = m_viewportController->renderAndGetTexture(
+    //            w, h, ImGui::GetIO().DeltaTime, ImGui::IsWindowHovered());
+
+    //        if (tex)
+    //            ImGui::Image((ImTextureID)(intptr_t)tex, avail);
+
+    //        if (ImGui::IsItemHovered())
+    //            m_viewportController->zoom(ImGui::GetIO().MouseWheel * 10.0f);
+
+    //        const uint32_t gizmoSize = 200;
+    //        const float pad = 14.0f;
+    //        ImVec2 gizmoScreenPos(
+    //            viewportTopLeft.x + avail.x - gizmoSize - pad,
+    //            viewportTopLeft.y + pad);
+    //        ImVec2 gizmoCentre(gizmoScreenPos.x + gizmoSize * 0.5f, gizmoScreenPos.y + gizmoSize * 0.5f);
+
+    //        GLuint gizmoTex = m_viewportController->renderGizmoAndGetTexture(gizmoSize);
+
+    //        ImGui::SetCursorScreenPos(gizmoScreenPos);
+    //        if (gizmoTex)
+    //            ImGui::Image((ImTextureID)(intptr_t)gizmoTex, ImVec2((float)gizmoSize, (float)gizmoSize), ImVec2(0, 1), ImVec2(1, 0));
+
+    //        ImDrawList* dl = ImGui::GetWindowDrawList();
+
+    //        // ---- Labels ----
+    //        auto* gizmo = m_viewportController->gizmo();   // needs a small accessor added to ViewportController
+    //        struct LabelDef { glm::vec3 centre; glm::vec3 normal; const char* text; };
+    //        LabelDef labels[] = {
+    //            {{ 0,  1,  0}, { 0, 1, 0}, "TOP"  },
+    //            {{ 0,  0,  1}, { 0, 0, 1}, "FRONT"},
+    //            {{ 1,  0,  0}, { 1, 0, 0}, "RIGHT"},
+    //            {{ 0,  0, -1}, { 0, 0,-1}, "BACK" },
+    //            {{-1,  0,  0}, {-1, 0, 0}, "LEFT" },
+    //            {{ 0, -1,  0}, { 0,-1, 0}, "BTM"  },
+    //        };
+    //        const float faceS = 0.72f;
+    //        glm::vec3 camFwd = gizmo->cameraForward();
+    //        for (auto& lb : labels)
+    //        {
+    //            if (glm::dot(lb.normal, camFwd) >= -0.1f) continue;
+
+    //            glm::vec2 local = gizmo->project2D(lb.normal * faceS, gizmoSize, gizmoSize);
+    //            ImVec2 screenPt(gizmoScreenPos.x + local.x, gizmoScreenPos.y + local.y);
+    //            ImVec2 ts = ImGui::CalcTextSize(lb.text);
+    //            float bpad = 3.0f;
+    //            dl->AddRectFilled(
+    //                ImVec2(screenPt.x - ts.x * 0.5f - bpad, screenPt.y - ts.y * 0.5f - bpad),
+    //                ImVec2(screenPt.x + ts.x * 0.5f + bpad, screenPt.y + ts.y * 0.5f + bpad),
+    //                IM_COL32(0, 0, 0, 90), 3.0f);
+    //            dl->AddText(ImVec2(screenPt.x - ts.x * 0.5f, screenPt.y - ts.y * 0.5f),
+    //                IM_COL32(255, 255, 255, 245), lb.text);
+    //        }
+
+    //        // ---- Drag / click input ----
+    //        ImVec2 mousePos = ImGui::GetMousePos();
+
+    //        ImGui::SetCursorScreenPos(gizmoScreenPos);
+    //        ImGui::InvisibleButton("##camgizmo_toolpath", ImVec2((float)gizmoSize, (float)gizmoSize));
+
+    //        bool clicked = ImGui::IsItemClicked(ImGuiMouseButton_Left);
+    //        bool dragging = ImGui::IsItemActive() && ImGui::IsMouseDragging(ImGuiMouseButton_Left);
+
+    //        if (dragging)
+    //        {
+    //            ImVec2 delta = ImGui::GetIO().MouseDelta;
+    //            // Radians throughout, unlike the original degree-mixed formula —
+    //            // ViewportController::orbit() already clamps pitch to +-1.5 rad.
+    //            m_viewportController->orbit(delta.x * 0.005f, -delta.y * 0.005f);
+    //        }
+    //        else if (clicked)
+    //        {
+    //            float localX = mousePos.x - gizmoScreenPos.x;
+    //            float localY = mousePos.y - gizmoScreenPos.y;
+    //            m_viewportController->handleGizmoClick(localX, localY, gizmoSize);   // gizmoSize now passed
+    //        }
+
+    //        // ---- Orbit arrows ----
+    //        float arrowR = gizmoSize * 0.52f;
+    //        struct Arrow { float angle; float dYawRad; float dPitchDeg; };
+    //        Arrow arrows[] = {
+    //            { 0.0f,                   0.25f,  0.0f },
+    //            { glm::pi<float>(),      -0.25f,  0.0f },
+    //            { glm::half_pi<float>(),  0.0f,  15.0f },
+    //            {-glm::half_pi<float>(),  0.0f, -15.0f },
+    //        };
+    //        for (auto& arr : arrows)
+    //        {
+    //            float ax = gizmoCentre.x + std::cos(arr.angle) * arrowR;
+    //            float ay = gizmoCentre.y - std::sin(arr.angle) * arrowR;
+    //            float as = 9.0f;
+    //            float tipAngle = arr.angle + glm::pi<float>();
+
+    //            ImVec2 tip(ax + std::cos(tipAngle) * as, ay - std::sin(tipAngle) * as);
+    //            ImVec2 lft(ax + std::cos(tipAngle + glm::half_pi<float>()) * as * 0.5f, ay - std::sin(tipAngle + glm::half_pi<float>()) * as * 0.5f);
+    //            ImVec2 rgt(ax + std::cos(tipAngle - glm::half_pi<float>()) * as * 0.5f, ay - std::sin(tipAngle - glm::half_pi<float>()) * as * 0.5f);
+
+    //            bool hov = glm::length(glm::vec2(mousePos.x - ax, mousePos.y - ay)) < as * 1.5f;
+    //            ImU32 col = hov ? IM_COL32(230, 230, 230, 255) : IM_COL32(160, 160, 165, 200);
+    //            dl->AddTriangleFilled(tip, lft, rgt, col);
+
+    //            if (hov && ImGui::IsMouseClicked(ImGuiMouseButton_Left))
+    //                m_viewportController->orbit(arr.dYawRad, glm::radians(arr.dPitchDeg));
+    //        }
+    //    }
+    //    else if (m_buildPlateRenderer->isLoaded())
+    //    {
+    //        m_buildPlateRenderer->setRegistry(this->m_registry);
+    //        m_buildPlateRenderer->renderWindow();
+    //    }
+    //    else
+    //    {
+    //        ImGui::TextDisabled("Select an asset to preview.");
+    //    }
+
+
+
+
+
+    //    //// Use the child window's inner size — guaranteed non-zero since
+    //    //// we're inside BeginChild("##slicer_preview")
+    //    //ImVec2 avail = ImGui::GetContentRegionAvail();
+    //    //uint32_t w = (uint32_t)std::max(4.0f, avail.x);
+    //    //uint32_t h = (uint32_t)std::max(4.0f, avail.y);
+
+    //    ////printf("[Preview] renderBuildPlate: w=%u h=%u loaded=%d\n",
+    //    ////    w, h,m_buildPlateRenderer.isLoaded() ? 1 : 0);
+
+    //    //// Tick auto-rotation
+    //    ////m_preview.paused = ImGui::IsWindowHovered();
+    //    //m_buildPlateRenderer->tick(ImGui::GetIO().DeltaTime);
+
+    //    //if (m_buildPlateRenderer->isLoaded())
+    //    //{
+    //    //    m_buildPlateRenderer->setRegistry(this->m_registry);
+
+    //    //    m_buildPlateRenderer->renderWindow();
+    //    //}
+    //    //else
+    //    //{
+    //    //    ImGui::TextDisabled("Select an asset to preview.");
+    //    //}
+    //}
 
     void sectionHeader(const char* title)
     {

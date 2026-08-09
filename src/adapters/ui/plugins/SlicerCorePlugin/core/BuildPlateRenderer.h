@@ -9,7 +9,8 @@
 #include <chrono>    
 
 #include "NavigationManager.h"
-
+#include "adapters/rendering/ViewportController.h"
+#include "ports/I3DViewportGLRender.h"
 
 namespace slicer {
 
@@ -128,6 +129,10 @@ namespace slicer {
     {
     public:
 
+        RenderModel();
+        ~RenderModel();
+
+
         std::shared_ptr<domain::v1::Model> model;
 
         GLuint vao = 0;
@@ -163,12 +168,12 @@ namespace slicer {
 
     };
 
-    struct CameraState {
+    /*struct CameraState {
         glm::vec3 target;
         float distance;
         float yaw;
         float pitch;
-    };
+    };*/
 
     struct PlateEntry {
         glm::vec2 center;
@@ -273,7 +278,7 @@ namespace slicer {
         
  
         void updateViewModel(std::vector<domain::v1::BuildPlate*> buildPlates);
-
+        void setViewportController(ViewportController& controller) { m_viewportController = &controller; }
         void clear();
         void tick(float dtSeconds);
         float autoRotateSpeed = 0.785f; // ~pi/4 per second
@@ -303,6 +308,9 @@ namespace slicer {
         //SelectionManager& getSelectionManager() { return m_selectionManager; }
 
     private:
+
+        ViewportController* m_viewportController = nullptr;
+
         GLuint m_singleIconTexture = 0;
         GLuint m_multiIconTexture = 0;
         bool m_multiBuildPlateView = false;
