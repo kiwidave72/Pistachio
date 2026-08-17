@@ -1,5 +1,4 @@
-﻿
-#include "adapters/ui/TaskProgressReporterImGui.h"
+﻿#include "adapters/ui/TaskProgressReporterImGui.h"
 #include <iostream>
 #include <memory>
 #include <filesystem>
@@ -21,10 +20,12 @@
 #include "adapters/ui/plugins/UiPluginLoader.h"
 #include "adapters/ui/plugins/UiModuleApi.h"
 #include "adapters/plugins/ServiceModuleRegistry.h"
- 
+
 
 #include "adapters/loaders/StlMeshLoader.h"
+#ifdef USE_OPENCASCADE
 #include "adapters/loaders/StepFileLoader.h"
+#endif
 #include "adapters/exporters/ObjExporter.h"
 #include "adapters/exporters/StlExporter.h"
 
@@ -33,7 +34,9 @@
 // OCCT is still available, but this OpenGL renderer guarantees we see a 3D scene
 // even when OCCT isn't wired up yet.
 #include "adapters/rendering/GlCubeViewRenderer.h"
+#ifdef USE_OPENCASCADE
 #include "adapters/rendering/OcctRenderer.h"
+#endif
 #include "adapters/persistence/JsonSketchDocumentAdapter.h"
 #include "adapters/solvers/BasicConstraintSolver.h"
 
@@ -68,26 +71,27 @@ namespace
     public:
         explicit HotReloadUiAdapter(core::Application* app)
             : m_app(app)
-        {}
+        {
+        }
 
         bool initialize() override
         {
             if (!m_host.initialize())
                 return false;
             m_svc.application = m_app;
-            
-            
+
+
             m_svc.app = m_app;
             m_svc.window = m_host.window();
             m_svc.guiHost = static_cast<IGuiHost*>(&m_host);
             m_svc.config = (m_app ? (void*)m_app->getConfig() : nullptr);
-          
+
             m_svc.taskRunner = m_app->taskRunner.get();
 
             m_svc.registry = &m_host.contributionRegistry();  // ← wire registry
 
-            
-            m_dataContext = m_app->getDataContext() ;
+
+            m_dataContext = m_app->getDataContext();
 
 
             if (m_app)
@@ -101,7 +105,7 @@ namespace
             int servicesLoaded = m_serviceRegistry.loadAll(*m_app);
             printf("[HotReload] initialize: %d service plugin(s) loaded\n", servicesLoaded);
 
-            int loaded = m_registry.loadAll(m_svc,*m_dataContext);
+            int loaded = m_registry.loadAll(m_svc, *m_dataContext);
             printf("[HotReload] initialize: %d plugin(s) loaded\n", loaded);
 
             RebuildImGuiFontsTexture();
@@ -235,87 +239,87 @@ namespace
             m_host.beginFrame();
         }*/
 
-void beginFrame() override
-{
-    // Reload first — acts on pending flags set LAST frame
-    if (m_enabled && (m_reloadPending || m_registry.hasReloadPending()))
-    {
-        printf("[HotReload] beginFrame: reloading\n");
-        m_registry.reloadAll(m_svc, *m_dataContext);
-        m_reloadPending = false;
-        m_registry.clearReloadPending();
-        printf("[HotReload] beginFrame: reload done\n");
-    }
-
-    // THEN detect changes — sets pending for NEXT frame
-    if (m_enabled)
-        m_registry.tickAutoReload(m_svc);
-
-    m_host.beginFrame();
-}
-
-    void endFrame() override
-    {
-        m_host.endFrame();
-
-        if (m_disableRequested)
+        void beginFrame() override
         {
-            printf("[HotReload] endFrame: disabling plugins\n");
-            m_disableRequested = false;
-            m_registry.unloadAll(m_svc, *m_dataContext);
-            m_enabled = false;
+            // Reload first — acts on pending flags set LAST frame
+            if (m_enabled && (m_reloadPending || m_registry.hasReloadPending()))
+            {
+                printf("[HotReload] beginFrame: reloading\n");
+                m_registry.reloadAll(m_svc, *m_dataContext);
+                m_reloadPending = false;
+                m_registry.clearReloadPending();
+                printf("[HotReload] beginFrame: reload done\n");
+            }
+
+            // THEN detect changes — sets pending for NEXT frame
+            if (m_enabled)
+                m_registry.tickAutoReload(m_svc);
+
+            m_host.beginFrame();
         }
 
-        if (m_enableRequested)
+        void endFrame() override
         {
-            printf("[HotReload] endFrame: enabling plugins\n");
-            m_enableRequested = false;
-            m_registry.loadAll(m_svc, *m_dataContext);
-            m_enabled = true;
+            m_host.endFrame();
+
+            if (m_disableRequested)
+            {
+                printf("[HotReload] endFrame: disabling plugins\n");
+                m_disableRequested = false;
+                m_registry.unloadAll(m_svc, *m_dataContext);
+                m_enabled = false;
+            }
+
+            if (m_enableRequested)
+            {
+                printf("[HotReload] endFrame: enabling plugins\n");
+                m_enableRequested = false;
+                m_registry.loadAll(m_svc, *m_dataContext);
+                m_enabled = true;
+            }
         }
-    }
-    void render() override
-    {
-        if (!m_enabled) return;
-        m_registry.renderAll(m_svc, *m_dataContext);
-    }
-        
-//        void endFrame() override
-//        {
-//            m_host.endFrame(); 
-//        // SAFE POINT: enable / disable plugin here (font atlas unlocked)
-//        if (m_disableRequested)
-//        {
-//            m_disableRequested = false;
-//            m_loader.unload();
-//        }
-//
-//        if (m_enableRequested)
-//        {
-//            m_enableRequested = false;
-//            m_loader.load(m_svc);
-//            RebuildImGuiFontsTexture();
-//        }
-//// ImGui::Render() happens inside endFrame(); font atlas unlocked afterwards.
-//
-//            if (!m_enabled)
-//                return;
-//
-//            if (m_reloadPending) {
-//                // Try reload; if build is still writing/locked, keep pending and retry next frame.
-//                if (m_loader.reload(m_svc)) {
-//                    
-//                    RebuildImGuiFontsTexture();
-//m_reloadPending = false;
-//                    // Prefer the observed write time if we have it, otherwise read current.
-//                    if (m_pendingWrite != std::filesystem::file_time_type{})
-//                        m_lastWrite = m_pendingWrite;
-//                    else
-//                        m_lastWrite = safeLastWriteTime(m_loader.sourcePath());
-//                    m_pendingWrite = {};
-//                }
-//            }
-//        }
+        void render() override
+        {
+            if (!m_enabled) return;
+            m_registry.renderAll(m_svc, *m_dataContext);
+        }
+
+        //        void endFrame() override
+        //        {
+        //            m_host.endFrame(); 
+        //        // SAFE POINT: enable / disable plugin here (font atlas unlocked)
+        //        if (m_disableRequested)
+        //        {
+        //            m_disableRequested = false;
+        //            m_loader.unload();
+        //        }
+        //
+        //        if (m_enableRequested)
+        //        {
+        //            m_enableRequested = false;
+        //            m_loader.load(m_svc);
+        //            RebuildImGuiFontsTexture();
+        //        }
+        //// ImGui::Render() happens inside endFrame(); font atlas unlocked afterwards.
+        //
+        //            if (!m_enabled)
+        //                return;
+        //
+        //            if (m_reloadPending) {
+        //                // Try reload; if build is still writing/locked, keep pending and retry next frame.
+        //                if (m_loader.reload(m_svc)) {
+        //                    
+        //                    RebuildImGuiFontsTexture();
+        //m_reloadPending = false;
+        //                    // Prefer the observed write time if we have it, otherwise read current.
+        //                    if (m_pendingWrite != std::filesystem::file_time_type{})
+        //                        m_lastWrite = m_pendingWrite;
+        //                    else
+        //                        m_lastWrite = safeLastWriteTime(m_loader.sourcePath());
+        //                    m_pendingWrite = {};
+        //                }
+        //            }
+        //        }
 
         void setMenubarCallback(const std::function<void()>& menubarCallback) override
         {
@@ -333,7 +337,7 @@ void beginFrame() override
             ports::UiPluginStatus s{};
             //s.enabled = m_enabled;
             ////s.loaded  = m_loader.isLoaded();
- 
+
             //s.lastError  = m_loader.lastError();
             //s.sourcePath = m_loader.sourcePath();
             //s.loadedPath = m_loader.loadedPath();
@@ -375,7 +379,8 @@ void beginFrame() override
             try {
                 if (!p.empty() && std::filesystem::exists(p))
                     return std::filesystem::last_write_time(p);
-            } catch (...) {}
+            }
+            catch (...) {}
             return {};
         }
 
@@ -426,7 +431,7 @@ void beginFrame() override
         core::Application* m_app = nullptr;
 
         adapters::ImGuiHost m_host;
-        
+
         UiPluginRegistry m_registry;
         ServiceModuleRegistry m_serviceRegistry;
 
@@ -467,7 +472,9 @@ int main(int argc, char** argv)
        // app->setRenderer(std::make_unique<adapters::GlCubeViewRenderer>());
         //app->setRenderer(std::make_unique<adapters::OcctRenderer>());
 
+#ifdef USE_OPENCASCADE
         app->addFileLoader(std::make_unique<adapters::StepFileLoader>());
+#endif
         app->addFileLoader(std::make_unique<adapters::StlMeshLoader>());
         app->addExporter(std::make_unique<adapters::ObjExporter>());
         app->addExporter(std::make_unique<adapters::StlExporter>());

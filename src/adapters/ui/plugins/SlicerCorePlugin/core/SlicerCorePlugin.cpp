@@ -731,7 +731,7 @@ public:
                 {
 
                     progress->setMessage("Loading workspace.json");
-                    m_workspaceService->loadWorkspace("c:\\temp\\", "cube_and_skirt_workspace.json");
+                    m_workspaceService->loadWorkspace("c:\\temp\\", "workspace.json");
                 })
             .completed([this](bool success)
                 {

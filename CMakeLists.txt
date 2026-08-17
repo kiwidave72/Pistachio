@@ -32,35 +32,53 @@ endif()
 
 # -------------------------
 # OpenCASCADE Configuration
+#
+# Fully optional. Source investigation found exactly two .cpp files that
+# actually #include real OCC headers: OcctRenderer.cpp (whose only
+# constructor call, in main.cpp, is already commented out -- entirely
+# unused at runtime) and StepFileLoader.cpp (one live call site in
+# main.cpp, for STEP file import). Nothing else in the codebase transitively
+# needs it. This flag drops both from the build, the OCC include/link
+# directories, and the whole TKernel...TKCDF link list below -- this is
+# what let RelWithDebInfo (and the whole TKernel.dll/tbb12.dll runtime-DLL
+# saga) be sidestepped rather than chased further. Re-enable with
+# -DUSE_OPENCASCADE=ON once that's worth revisiting; nothing here is
+# deleted, just conditionally compiled out.
 # -------------------------
-if(DEFINED ENV{OpenCASCADE_DIR})
-    set(OpenCASCADE_DIR $ENV{OpenCASCADE_DIR})
-else()
-    set(OpenCASCADE_DIR "C:/opencascade-7.9.3/opencascade-7.9.3-vc14-64" CACHE PATH "OpenCASCADE installation directory")
-endif()
+option(USE_OPENCASCADE "Enable OpenCASCADE integration (STEP import via StepFileLoader; OcctRenderer, currently unused/dead code)" OFF)
 
-if(EXISTS "${OpenCASCADE_DIR}/inc")
-    set(OpenCASCADE_INCLUDE_DIR "${OpenCASCADE_DIR}/inc")
-elseif(EXISTS "${OpenCASCADE_DIR}/include/opencascade")
-    set(OpenCASCADE_INCLUDE_DIR "${OpenCASCADE_DIR}/include/opencascade")
-else()
-    message(FATAL_ERROR "Could not find OpenCASCADE include dir under: ${OpenCASCADE_DIR}")
-endif()
+if(USE_OPENCASCADE)
+    if(DEFINED ENV{OpenCASCADE_DIR})
+        set(OpenCASCADE_DIR $ENV{OpenCASCADE_DIR})
+    else()
+        set(OpenCASCADE_DIR "C:/opencascade-7.9.3/opencascade-7.9.3-vc14-64" CACHE PATH "OpenCASCADE installation directory")
+    endif()
 
-if(EXISTS "${OpenCASCADE_DIR}/win64/vc14/lib")
-    set(OpenCASCADE_LIBRARY_DIR "${OpenCASCADE_DIR}/win64/vc14/lib")
-    set(OpenCASCADE_BINARY_DIR "${OpenCASCADE_DIR}/win64/vc14/bin")
-elseif(EXISTS "${OpenCASCADE_DIR}/lib")
-    set(OpenCASCADE_LIBRARY_DIR "${OpenCASCADE_DIR}/lib")
-    set(OpenCASCADE_BINARY_DIR "${OpenCASCADE_DIR}/bin")
-else()
-    message(FATAL_ERROR "Could not find OpenCASCADE lib dir under: ${OpenCASCADE_DIR}")
-endif()
+    if(EXISTS "${OpenCASCADE_DIR}/inc")
+        set(OpenCASCADE_INCLUDE_DIR "${OpenCASCADE_DIR}/inc")
+    elseif(EXISTS "${OpenCASCADE_DIR}/include/opencascade")
+        set(OpenCASCADE_INCLUDE_DIR "${OpenCASCADE_DIR}/include/opencascade")
+    else()
+        message(FATAL_ERROR "Could not find OpenCASCADE include dir under: ${OpenCASCADE_DIR}")
+    endif()
 
-message(STATUS "OpenCASCADE root: ${OpenCASCADE_DIR}")
-message(STATUS "OpenCASCADE includes: ${OpenCASCADE_INCLUDE_DIR}")
-message(STATUS "OpenCASCADE libraries: ${OpenCASCADE_LIBRARY_DIR}")
-message(STATUS "OpenCASCADE binaries: ${OpenCASCADE_BINARY_DIR}")
+    if(EXISTS "${OpenCASCADE_DIR}/win64/vc14/lib")
+        set(OpenCASCADE_LIBRARY_DIR "${OpenCASCADE_DIR}/win64/vc14/lib")
+        set(OpenCASCADE_BINARY_DIR "${OpenCASCADE_DIR}/win64/vc14/bin")
+    elseif(EXISTS "${OpenCASCADE_DIR}/lib")
+        set(OpenCASCADE_LIBRARY_DIR "${OpenCASCADE_DIR}/lib")
+        set(OpenCASCADE_BINARY_DIR "${OpenCASCADE_DIR}/bin")
+    else()
+        message(FATAL_ERROR "Could not find OpenCASCADE lib dir under: ${OpenCASCADE_DIR}")
+    endif()
+
+    message(STATUS "OpenCASCADE root: ${OpenCASCADE_DIR}")
+    message(STATUS "OpenCASCADE includes: ${OpenCASCADE_INCLUDE_DIR}")
+    message(STATUS "OpenCASCADE libraries: ${OpenCASCADE_LIBRARY_DIR}")
+    message(STATUS "OpenCASCADE binaries: ${OpenCASCADE_BINARY_DIR}")
+else()
+    message(STATUS "OpenCASCADE: disabled (USE_OPENCASCADE=OFF) -- StepFileLoader (STEP import) will not be built; OcctRenderer was already unused")
+endif()
 
 # -------------------------
 # Packages
@@ -223,7 +241,9 @@ endif()
 # -------------------------
 # Include OpenCASCADE
 # -------------------------
-include_directories(${OpenCASCADE_INCLUDE_DIR})
+if(USE_OPENCASCADE)
+    include_directories(${OpenCASCADE_INCLUDE_DIR})
+endif()
 
 # -------------------------
 # pistachio_core (SHARED)
@@ -242,6 +262,16 @@ file(GLOB_RECURSE DOMAIN_SOURCES CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/src/domain/*.h"
 )
 
+# See the USE_OPENCASCADE option comment above -- these two files are the
+# only ones in the whole codebase that actually #include real OCC headers.
+set(OCC_SOURCES "")
+if(USE_OPENCASCADE)
+    list(APPEND OCC_SOURCES
+        src/adapters/rendering/OcctRenderer.cpp
+        src/adapters/loaders/StepFileLoader.cpp
+    )
+endif()
+
 add_library(pistachio_core SHARED
     # Domain
     ${DOMAIN_SOURCES}
@@ -256,12 +286,12 @@ add_library(pistachio_core SHARED
     src/adapters/eventbus/EventBus.cpp
     src/adapters/console/TaskProgressReporterConsole.cpp
     
-    src/adapters/rendering/OcctRenderer.cpp
     src/adapters/rendering/CameraGizmoGLRender.cpp
     
-    src/adapters/loaders/StepFileLoader.cpp
     src/adapters/loaders/StlMeshLoader.cpp
     src/adapters/loaders/StlLoaderAdapter.cpp
+
+    ${OCC_SOURCES}
 
     src/adapters/exporters/ObjExporter.cpp
     src/adapters/exporters/StlExporter.cpp
@@ -285,38 +315,46 @@ target_include_directories(pistachio_core PUBLIC
     "${NLOHMANN_JSON_DIR}/single_include"
 )
 
-target_link_directories(pistachio_core PUBLIC
-    ${OpenCASCADE_LIBRARY_DIR}
-)
+if(USE_OPENCASCADE)
+    target_link_directories(pistachio_core PUBLIC ${OpenCASCADE_LIBRARY_DIR})
+endif()
 
 target_link_libraries(pistachio_core PUBLIC
     imgui
     nlohmann_json
     Threads::Threads
-
-    # OpenCASCADE libs
-    TKernel
-    TKMath
-    TKG2d
-    TKG3d
-    TKGeomBase
-    TKGeomAlgo
-    TKBRep
-    TKTopAlgo
-    TKPrim
-    TKMesh
-    TKService
-    TKOpenGl
-    TKV3d
-    TKXCAF
-    TKBin
-    TKBinXCAF
-    TKXSBase
-    TKDESTEP
-    TKLCAF
-    TKCAF
-    TKCDF
 )
+
+if(USE_OPENCASCADE)
+    target_link_libraries(pistachio_core PUBLIC
+        TKernel
+        TKMath
+        TKG2d
+        TKG3d
+        TKGeomBase
+        TKGeomAlgo
+        TKBRep
+        TKTopAlgo
+        TKPrim
+        TKMesh
+        TKService
+        TKOpenGl
+        TKV3d
+        TKXCAF
+        TKBin
+        TKBinXCAF
+        TKXSBase
+        TKDESTEP
+        TKLCAF
+        TKCAF
+        TKCDF
+    )
+    # PUBLIC so consumers (main.cpp) can #ifdef USE_OPENCASCADE around the
+    # StepFileLoader construction and #include of OcctRenderer.h -- the
+    # latter pulls in real OCC headers itself, so it can't just be included
+    # unconditionally when the OCC include dir isn't even on the path.
+    target_compile_definitions(pistachio_core PUBLIC USE_OPENCASCADE)
+endif()
 
 if(WIN32)
     target_link_libraries(pistachio_core PUBLIC opengl32)
