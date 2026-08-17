@@ -101,6 +101,15 @@ void ToolpathRibbonGLMesh::ensureGl()
     m_glInitialized = true;
 }
 
+void ToolpathRibbonGLMesh::indexRangeForLayers(int startLayer, int endLayer, uint32_t& outOffset, uint32_t& outCount) const
+{
+    startLayer = glm::clamp(startLayer, 0, layerCount() - 1);
+    endLayer = glm::clamp(endLayer, startLayer, layerCount() - 1);
+
+    outOffset = (startLayer > 0) ? m_layerCumulativeCounts[startLayer - 1] : 0;
+    uint32_t endOffset = m_layerCumulativeCounts[endLayer];
+    outCount = endOffset - outOffset;
+}
 void ToolpathRibbonGLMesh::build(const domain::v1::Toolpath& toolpath)
 {
     ensureGl();

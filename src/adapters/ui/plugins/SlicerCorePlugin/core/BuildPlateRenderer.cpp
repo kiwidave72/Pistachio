@@ -6,6 +6,8 @@
 
 #include "core/GuidUtils.h"
 #include "domain/dataContext.h"
+#include "domain/RaycastHit.h"
+
 #include "BuildPlateRenderer.h"
 #include "FolderScanner.h" 
 #include <glad/glad.h>
@@ -847,275 +849,7 @@ GLuint LoadTexture(const std::string& filename)
         }
     }
 
-    // -----------------------------------------------------------------------
-    // RenderModel Implementation
-    // -----------------------------------------------------------------------
-    RenderModel::RenderModel() {}
-    RenderModel::~RenderModel() {
-        if (vao) glDeleteVertexArrays(1, &vao);
-        if (vbo) glDeleteBuffers(1, &vbo);
-        if (ebo) glDeleteBuffers(1, &ebo);
-    }
-
-    bool RenderModel::raycastBoundsOnly(const glm::vec3& rayOrigin, const glm::vec3& rayDirection, glm::mat4 modelMatrix) const
-    {
-        if (!model || !model->mesh) return false;
-
-        const auto& b = model->mesh->bounds;
-        glm::vec3 center = (b.max + b.min) * 0.5f;
-        float radius = glm::length(b.max - b.min) * 0.5f;
-
-        glm::vec4 worldCenter4 = modelMatrix * glm::vec4(center, 1.0f);
-        glm::vec3 worldCenter = glm::vec3(worldCenter4) / worldCenter4.w;
-
-        // Account for scale — radius should reflect the largest scaled extent
-        glm::vec3 scale(glm::length(glm::vec3(modelMatrix[0])), glm::length(glm::vec3(modelMatrix[1])), glm::length(glm::vec3(modelMatrix[2])));
-        float worldRadius = radius * std::max({ scale.x, scale.y, scale.z });
-
-        // Ray-sphere intersection
-        glm::vec3 oc = rayOrigin - worldCenter;
-        float b2 = glm::dot(oc, rayDirection);
-        float c = glm::dot(oc, oc) - worldRadius * worldRadius;
-        float discriminant = b2 * b2 - c;
-
-        return discriminant >= 0.0f;   // ray passes through (or near) the sphere
-    }
-    void RenderModel::createVertixBuffer()
-    {
-        std::shared_ptr<Mesh> mesh = model->mesh;
-
-        glGenVertexArrays(1, &vao);
-        glGenBuffers(1, &vbo);
-        glGenBuffers(1, &ebo);
-
-        glBindVertexArray(vao);
-
-        glBindBuffer(GL_ARRAY_BUFFER, vbo);
-        glBufferData(GL_ARRAY_BUFFER,
-            mesh->vertices.size() * sizeof(Vertex),
-            mesh->vertices.data(), GL_STATIC_DRAW);
-
-        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ebo);
-        glBufferData(GL_ELEMENT_ARRAY_BUFFER,
-            mesh->indices.size() * sizeof(uint32_t),
-            mesh->indices.data(), GL_STATIC_DRAW);
-
-        glEnableVertexAttribArray(0);
-        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE,
-            sizeof(Vertex),
-            (void*)offsetof(Vertex, position));
-
-        glEnableVertexAttribArray(1);
-        glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE,
-            sizeof(Vertex),
-            (void*)offsetof(Vertex, normal));
-
-        glBindVertexArray(0);
-
-        indexCount = (uint32_t)mesh->indices.size();
-    }
-
-    // -----------------------------------------------------------------------
-    bool RenderModel::create(std::shared_ptr<domain::v1::Model> sourceModel, glm::vec2& center, bool isBuildPlateModel)
-    {
-        if (!sourceModel->mesh)
-            return false;
-
-        model = std::make_shared<domain::v1::Model>();
-         model->fileName = sourceModel->fileName;
-        model->fileLocation = sourceModel->fileLocation;
-        model->label = sourceModel->label;
-        model->Id = sourceModel->Id;
-        model->mesh = sourceModel->mesh;
-        createVertixBuffer();  
-
-        return true;
-    }
-    // -----------------------------------------------------------------------
-    glm::mat4 RenderModel::getModelMatrix(const Transform& transform, glm::vec2 layoutOffset, bool isPlate) const
-    {
-        if (!model || !model->mesh) return glm::mat4(1.0f);
-        glm::vec3 boundsCenter = (model->mesh->bounds.max + model->mesh->bounds.min) * 0.5f;
-
-        float liftZ = model->mesh->bounds.size().z * 0.5f * transform.scale.z;
-        float verticalOffset = isPlate ? -liftZ : liftZ;
-
-        // World-space position: layoutOffset (plate placement) + transform.position (arrange placement)
-        glm::vec3 worldPos(
-            layoutOffset.x + transform.position.x,
-            verticalOffset,
-            layoutOffset.y + transform.position.y);
-        glm::mat4 worldPosMat = glm::translate(glm::mat4(1.0f), worldPos);
-
-        glm::mat4 toOrigin = glm::translate(glm::mat4(1.0f), -boundsCenter * transform.scale);
-        glm::mat4 axisFix = glm::rotate(glm::mat4(1.0f), glm::radians(-90.0f), glm::vec3(1, 0, 0));
-
-        glm::mat4 rotScale = glm::mat4(1.0f);
-        rotScale = glm::rotate(rotScale, glm::radians(transform.rotation.x), glm::vec3(1, 0, 0));
-        rotScale = glm::rotate(rotScale, glm::radians(transform.rotation.y), glm::vec3(0, 1, 0));
-        rotScale = glm::rotate(rotScale, glm::radians(transform.rotation.z), glm::vec3(0, 0, 1));
-        rotScale = glm::scale(rotScale, transform.scale);
-
-        return worldPosMat * axisFix * rotScale * toOrigin;
-    }
-    // -----------------------------------------------------------------------
-    glm::mat4 RenderModel::getBoundingBoxMatrix(const Transform& transform, glm::vec2 layoutOffset) const
-    {
-        if (!model || !model->mesh) return glm::mat4(1.0f);
-
-        const auto& bounds = model->mesh->bounds;
-        glm::vec3 boundsCenter = (bounds.max + bounds.min) * 0.5f;
-        glm::vec3 boundsSize = bounds.max - bounds.min;
-
-        float liftZ = boundsSize.z * 0.5f * transform.scale.z;
-
-        glm::vec3 worldPos(
-            layoutOffset.x + transform.position.x,
-            liftZ,
-            layoutOffset.y + transform.position.y);
-        glm::mat4 worldPosMat = glm::translate(glm::mat4(1.0f), worldPos);
-
-        glm::mat4 axisFix = glm::rotate(glm::mat4(1.0f), glm::radians(-90.0f), glm::vec3(1, 0, 0));
-
-        glm::mat4 rotScale = glm::mat4(1.0f);
-        rotScale = glm::rotate(rotScale, glm::radians(transform.rotation.x), glm::vec3(1, 0, 0));
-        rotScale = glm::rotate(rotScale, glm::radians(transform.rotation.y), glm::vec3(0, 1, 0));
-        rotScale = glm::rotate(rotScale, glm::radians(transform.rotation.z), glm::vec3(0, 0, 1));
-        rotScale = glm::scale(rotScale, transform.scale);
-
-        // Same centering step getModelMatrix() already uses successfully — unchanged, reused exactly.
-        glm::mat4 toOrigin = glm::translate(glm::mat4(1.0f), -boundsCenter * transform.scale);
-
-        // Maps the unit cube (-0.5..0.5) into mesh-space, spanning boundsMin..boundsMax —
-        // i.e. the box's "shape" expressed the same way real mesh vertices are.
-        glm::mat4 boxLocalMatrix = glm::translate(glm::mat4(1.0f), boundsCenter) * glm::scale(glm::mat4(1.0f), boundsSize);
-
-        return worldPosMat * axisFix * rotScale * toOrigin * boxLocalMatrix;
-    }
-    // -----------------------------------------------------------------------
-    void RenderModel::render(   glm::vec3 color, 
-                                const Transform& transform,
-                                GLuint shader, 
-                                glm::mat4 view,
-                                glm::mat4 proj,
-                                glm::vec3 camPos, 
-                                glm::vec2 center, 
-                                float ghostFactor, 
-                                bool isPlate 
-                            ) const
-    {
-        if (!model) return;
-
-        glm::mat4 modelMat = getModelMatrix(transform,center,isPlate);
-
-        glUseProgram(shader);
-        
-        glUniformMatrix4fv(glGetUniformLocation(shader, "uModel"), 1, GL_FALSE, glm::value_ptr(modelMat));
-
-
-        glUniformMatrix4fv(glGetUniformLocation(shader, "uView"),  1, GL_FALSE, glm::value_ptr(view));
-        glUniformMatrix4fv(glGetUniformLocation(shader, "uProj"),  1, GL_FALSE, glm::value_ptr(proj));
-        glUniform3f(glGetUniformLocation(shader, "uCamPos"),   camPos.x, camPos.y, camPos.z);
-        glUniform3f(glGetUniformLocation(shader, "uLightDir"), -0.4f, -0.8f, -0.4f);
-        glUniform3f(glGetUniformLocation(shader, "uBaseColor"),
-             color.r,  color.g,  color.b);
-        glUniform1f(glGetUniformLocation(shader, "uGhostFactor"), ghostFactor);
-
-        glBindVertexArray(vao);
-        glDrawElements(GL_TRIANGLES, indexCount, GL_UNSIGNED_INT, 0);
-        glBindVertexArray(0);
-
-        //printf("[RenderModel::render] vao=%u indexCount=%u shader=%u pos=(%.2f,%.2f,%.2f)\n",
-        //    vao, indexCount, shader, modelMat[3][0], modelMat[3][1], modelMat[3][2]);
-
-    }
-
-    // -----------------------------------------------------------------------
-    bool RenderModel::intersectTriangle(const glm::vec3& rayOrigin, const glm::vec3& rayDirection,
-        const glm::vec3& v0, const glm::vec3& v1, const glm::vec3& v2,
-        float& t, float& u, float& v) const
-    {
-        const float EPSILON = 0.000001f;
-
-        glm::vec3 edge1 = v1 - v0;
-        glm::vec3 edge2 = v2 - v0;
-        glm::vec3 h = glm::cross(rayDirection, edge2);
-        float a = glm::dot(edge1, h);
-
-        if (a > -EPSILON && a < EPSILON) return false;
-
-        float f = 1.0f / a;
-        glm::vec3 s = rayOrigin - v0;
-        u = f * glm::dot(s, h);
-        if (u < 0.0f || u > 1.0f) return false;
-
-        glm::vec3 q = glm::cross(s, edge1);
-        v = f * glm::dot(rayDirection, q);
-        if (v < 0.0f || u + v > 1.0f) return false;
-
-        t = f * glm::dot(edge2, q);
-        return (t > EPSILON);
-    }
-
-    // -----------------------------------------------------------------------
-    bool RenderModel::raycast(const glm::vec3& rayOrigin, const glm::vec3& rayDirection,
-        RaycastHit& outHit, glm::mat4 modelMatrix) const
-    {
-        if (!model || !model->mesh || model->mesh->vertices.empty()) return false;
-
-        glm::mat4 invModelMatrix = glm::inverse(modelMatrix);
-        glm::vec4 localRayOrigin4 = invModelMatrix * glm::vec4(rayOrigin, 1.0f);
-        glm::vec3 localRayOrigin  = glm::vec3(localRayOrigin4) / localRayOrigin4.w;
-        glm::vec4 localRayDir4    = invModelMatrix * glm::vec4(rayDirection, 0.0f);
-        glm::vec3 localRayDir     = glm::normalize(glm::vec3(localRayDir4));
-
-        const auto& vertices = model->mesh->vertices;
-        const auto& indices  = model->mesh->indices;
-
-        float    closestT = std::numeric_limits<float>::max();
-        bool     hit      = false;
-        uint32_t hitTriangleIndex = 0;
-        glm::vec3 hitPoint, hitNormal;
-
-        for (size_t i = 0; i < indices.size(); i += 3) {
-            if (indices[i]   >= vertices.size() ||
-                indices[i+1] >= vertices.size() ||
-                indices[i+2] >= vertices.size()) continue;
-
-            const auto& v0 = vertices[indices[i]].position;
-            const auto& v1 = vertices[indices[i+1]].position;
-            const auto& v2 = vertices[indices[i+2]].position;
-
-            float t, u, v;
-            if (intersectTriangle(localRayOrigin, localRayDir, v0, v1, v2, t, u, v)) {
-                if (t < closestT && t > 0.0f) {
-                    closestT = t;
-                    hit = true;
-                    hitTriangleIndex = (uint32_t)(i / 3);
-                    hitPoint  = localRayOrigin + localRayDir * t;
-                    hitNormal = glm::normalize(glm::mix(
-                        glm::mix(vertices[indices[i]].normal, vertices[indices[i+1]].normal, u),
-                        vertices[indices[i+2]].normal, v));
-                }
-            }
-        }
-
-        if (hit) {
-            glm::vec4 worldHitPoint = modelMatrix * glm::vec4(hitPoint, 1.0f);
-            outHit.point  = glm::vec3(worldHitPoint) / worldHitPoint.w;
-            glm::mat3 normalMatrix = glm::transpose(glm::inverse(glm::mat3(modelMatrix)));
-            outHit.normal = glm::normalize(normalMatrix * hitNormal);
-            outHit.hit          = true;
-            outHit.renderModel  = const_cast<RenderModel*>(this);
-            outHit.model        = model;
-            outHit.distance     = glm::length(outHit.point - rayOrigin);
-            outHit.triangleIndex = hitTriangleIndex;
-			outHit.instanceId = instanceId;
-            return true;
-        }
-
-        return false;
-    }
+     
 
     // -----------------------------------------------------------------------
     // BuildPlateRenderer
@@ -1190,7 +924,7 @@ GLuint LoadTexture(const std::string& filename)
         ImVec2 avail = ImGui::GetContentRegionAvail();
         uint32_t w = (uint32_t)std::max(4.0f, avail.x);
         uint32_t h = (uint32_t)std::max(4.0f, avail.y);
-
+        ImVec2 cursorPos = ImGui::GetCursorScreenPos();
         render(w, h);
 
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
@@ -1199,7 +933,7 @@ GLuint LoadTexture(const std::string& filename)
 
         if (m_fboColor)
         {
-            ImVec2 cursorPos = ImGui::GetCursorScreenPos();
+           
 
             ImGui::Image(
                 (ImTextureID)(intptr_t)m_fboColor,
@@ -1363,18 +1097,45 @@ GLuint LoadTexture(const std::string& filename)
 
 			//ImGui::End(); // end slicer window
 
+
+
+
             // --- FPS overlay, bottom-right of the viewport image ---
             char fpsText[32];
             snprintf(fpsText, sizeof(fpsText), "%.1f FPS", m_fpsDisplay);
             ImVec2 textSize = ImGui::CalcTextSize(fpsText);
-            ImVec2 textPos(cursorPos.x + w - textSize.x - 10.0f, cursorPos.y + h - textSize.y - 8.0f);
+            ImVec2 textPos(cursorPos.x +  - textSize.x - 10.0f, cursorPos.y + h - textSize.y - 8.0f);
 
             ImDrawList* dl = ImGui::GetWindowDrawList();
+
             dl->AddRectFilled(
                 ImVec2(textPos.x - 4, textPos.y - 2),
                 ImVec2(textPos.x + textSize.x + 4, textPos.y + textSize.y + 2),
                 IM_COL32(0, 0, 0, 130), 3.0f);
             dl->AddText(textPos, IM_COL32(255, 255, 255, 230), fpsText);
+
+
+            if (!m_viewportController) return;
+            const CameraState& cam = m_viewportController->camera();
+
+            char camerStateText[80];
+            snprintf(camerStateText, sizeof(camerStateText), "Yaw %.1f  ,Pitch %.1f ,Distance %.1f ", cam.yaw, cam.pitch, cam.distance);
+
+            ImVec2 textSize2 = ImGui::CalcTextSize(camerStateText);
+            ImVec2 textPos2(cursorPos.x + w - textSize2.x - 10.0f, cursorPos.y + h - textSize2.y - 128.0f);
+
+            dl->AddRectFilled(ImVec2(textPos2.x - 4, textPos2.y - 2), ImVec2(textPos2.x + textSize2.x + 4, textPos2.y + textSize2.y + 2), IM_COL32(0, 0, 0, 130), 3.0f);
+            dl->AddText(textPos2, IM_COL32(255, 255, 255, 230), camerStateText);
+
+            char targetText[80];
+            snprintf(targetText, sizeof(targetText), " %.1f  , %.1f , %.1f ", cam.target.x, cam.target.y, cam.target.y);
+
+            ImVec2 textSize3 = ImGui::CalcTextSize(targetText);
+            ImVec2 textPos3(cursorPos.x + w - textSize3.x - 10.0f, cursorPos.y + h - textSize3.y - 68.0f);
+
+            dl->AddRectFilled(ImVec2(textPos3.x - 4, textPos3.y - 2), ImVec2(textPos3.x + textSize3.x + 4, textPos3.y + textSize3.y + 2), IM_COL32(0, 0, 0, 130), 3.0f);
+            dl->AddText(textPos3, IM_COL32(255, 255, 255, 230), targetText);
+
         }
     }
 

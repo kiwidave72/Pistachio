@@ -91,7 +91,7 @@ namespace kinetica {
 
                 Clipper2Lib::Paths64 offsetResult = Clipper2Lib::InflatePaths(
                     { basePath }, offsetAmount,
-                    Clipper2Lib::JoinType::Round, Clipper2Lib::EndType::Polygon);
+                    Clipper2Lib::JoinType::Square, Clipper2Lib::EndType::Polygon);
 
                 if (offsetResult.empty())
                 {

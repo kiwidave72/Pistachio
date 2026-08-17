@@ -1,18 +1,19 @@
-#pragma once
+ï»¿#pragma once
 
 // -----------------------------------------------------------------------
 // ViewportController.h
 //
-// Owned directly by SlicerCorePlugin as a plain member — NOT a service,
+// Owned directly by SlicerCorePlugin as a plain member ï¿½ NOT a service,
 // NOT registered anywhere. Exactly one instance, ever. Owns the single
 // shared CameraState/orbit math, which registered renderer is currently
 // active, and the camera gizmo (fixed chrome, not a swappable renderer
-// — owned directly, not through IViewportRendererRegistry).
+// ï¿½ owned directly, not through IViewportRendererRegistry).
 // -----------------------------------------------------------------------
 
 #include "ports/I3DViewportGLRender.h"
 #include "ports/IViewportRendererRegistry.h"
 #include "adapters/rendering/CameraGizmoGLRender.h"
+#include "domain/RenderCameraContext.h"
 
 #include <memory>
 #include <string>
@@ -25,14 +26,19 @@ public:
     {
         m_camera.target = glm::vec3(0.0f);
         m_camera.distance = 200.0f;
-        m_camera.yaw = 4.71239f;              // matches SceneLayout::m_defaultYaw (already radians)
-        m_camera.pitch = glm::radians(45.0f);  // matches SceneLayout::m_defaultPitch (converted from degrees)
+        m_camera.yaw = 0.0f;// 4.71239f;              // matches SceneLayout::m_defaultYaw (already radians)
+        m_camera.pitch = glm::radians(35.0f);  // matches SceneLayout::m_defaultPitch (converted from degrees)
 
         m_gizmo = std::make_unique<CameraGizmoGLRender>();
     }
 
     void setActiveRenderer(const std::string& id)
     {
+        // m_camera is intentionally left untouched here -- it's one
+        // shared camera across every registered renderer (see the class
+        // comment), so switching renderers should not reset it to that
+        // renderer's default*() values. Whatever orbit/zoom state the
+        // user was at carries straight over.
         m_activeRenderer = m_registry.resolve(id);
         m_activeId = m_activeRenderer ? id : std::string();
     }
@@ -51,9 +57,11 @@ public:
         m_camera.distance = glm::clamp(m_camera.distance - delta, 5.0f, 2000.0f);
     }
 
+    void setActiveVisibleLayerRange(int start, int end) { if (m_activeRenderer) m_activeRenderer->setVisibleLayerRange(start, end); }
+
     void setTarget(const glm::vec3& target) { m_camera.target = target; }
 
-    // Absolute set — used by the gizmo's click-to-snap, distinct from
+    // Absolute set ï¿½ used by the gizmo's click-to-snap, distinct from
     // orbit()'s incremental delta used for drag.
     void setYawPitch(float yaw, float pitch)
     {
@@ -62,6 +70,16 @@ public:
     }
 
     const CameraState& camera() const { return m_camera; }
+
+    // Diagnostic only -- see the long comment on CameraState::axisMode in
+    // ports/I3DViewportGLRender.h. Mutates the ONE shared CameraState
+    // instance (m_camera below), which every renderer -- regardless of
+    // which plugin DLL it lives in -- receives by reference each frame via
+    // renderAndGetTexture()'s render() call. This is what makes the toggle
+    // genuinely affect every view at once; a static in a header function
+    // could not, since each DLL gets its own independent copy of that.
+    void cycleCameraAxisMode() { m_camera.axisMode = (m_camera.axisMode + 1) % 4; }
+    const char* cameraAxisModeName() const { return domain::v1::cameraAxisModeName(m_camera.axisMode); }
 
     GLuint renderAndGetTexture(uint32_t width, uint32_t height, float deltaSeconds, bool canControl)
     {
@@ -74,7 +92,11 @@ public:
         m_activeRenderer->render(width, height, m_camera, ctx);
         return m_activeRenderer->getTexture();
     }
-
+    void renderActiveUI(ImVec2 topLeft, ImVec2 size)
+    {
+        if (m_activeRenderer)
+            m_activeRenderer->renderUI(topLeft, size);
+    }
     // Renders the gizmo into its own small FBO, sized independently of
     // the main viewport. Caller displays it as a separate small
     // ImGui::Image() overlay in the viewport corner.
@@ -84,7 +106,7 @@ public:
         return m_gizmo->getTexture();
     }
 
-    // handleGizmoClick() — needs gizmoSize passed through, matching the new hitTestFace signature
+    // handleGizmoClick() ï¿½ needs gizmoSize passed through, matching the new hitTestFace signature
     bool handleGizmoClick(float gizmoLocalX, float gizmoLocalY, uint32_t gizmoSize)
     {
         float yaw, pitch;
@@ -96,7 +118,7 @@ public:
         return false;
     }
 
-    
+
     CameraGizmoGLRender* gizmo() const { return m_gizmo.get(); }
 
     int activeLayerCount() const { return m_activeRenderer ? m_activeRenderer->layerCount() : 0; }
@@ -108,7 +130,6 @@ private:
     I3DViewportGLRender* m_activeRenderer = nullptr;
     std::string m_activeId;
     CameraState m_camera;
-
 
     std::unique_ptr<CameraGizmoGLRender> m_gizmo;
 };

@@ -14,11 +14,14 @@
 // not a one-off hack.
 // -----------------------------------------------------------------------
 
+#include "domain/Toolpath.h"
 #include "ports/I3DViewportGLRender.h"
 #include "adapters/ui/plugins/ToolpathVisualizationPlugin/ToolpathRibbonGLMesh.h"
 
 #include <memory>
 #include <string>
+
+#include <chrono> 
 
 class ToolpathRibbonGLRender final : public I3DViewportGLRender
 {
@@ -26,14 +29,19 @@ public:
      ToolpathRibbonGLRender();
     ~ToolpathRibbonGLRender() override;
 
+    void setVisibleLayerRange(int startLayer, int endLayer);
+    int visibleLayerStart() const { return m_layerRangeStart; }
+    int visibleLayerEnd() const { return m_layerRangeEnd; }
+
     int layerCount() const override { return m_mesh.layerCount(); }
+
     int visibleLayer() const override { return m_visibleLayer; }
     void setVisibleLayer(int layer) override;
-    //{ m_visibleLayer = glm::clamp(layer, 0, m_mesh.layerCount() - 1); }
-
+ 
     const char* name() const override { return "Toolpath (ribbon)"; }
 
     void render(uint32_t width, uint32_t height, const CameraState& camera, const ViewportRenderContext& ctx) override;
+    void renderUI(ImVec2 topLeft, ImVec2 size) override;
     GLuint getTexture() const override;
     RaycastHit raycast(const glm::vec3& origin, const glm::vec3& dir, const CameraState& camera) override;
 
@@ -49,6 +57,14 @@ private:
     void ensureGl();
     void ensureFramebuffer(uint32_t width, uint32_t height);
 
+    GLuint m_gridVao = 0, m_gridVbo = 0;
+    int m_gridVertexCount = 0;
+     
+    float m_fpsAccumTime = 0.0f;
+    int   m_fpsFrameCount = 0;
+    float m_fpsDisplay = 0.0f;
+    std::chrono::steady_clock::time_point m_lastFrameTime = std::chrono::steady_clock::now();
+
     bool m_glInitialized = false;
     uint32_t m_fboWidth = 0;
     uint32_t m_fboHeight = 0;
@@ -59,6 +75,15 @@ private:
 
     GLuint m_shader = 0;
 
+    CameraState m_cameraState;
+
     ToolpathRibbonGLMesh m_mesh;
     int m_visibleLayer = -1;   // -1 = show all layers
+    
+    int m_layerRangeStart = 0;
+    int m_layerRangeEnd = -1;
+
+    domain::v1::ToolpathSegment m_firstLayerFirstSegment;
+    domain::v1::ToolpathSegment m_lastLayerLastSegment;
+    glm::mat4 m_lastModelMatrix{ 1.0f };
 };

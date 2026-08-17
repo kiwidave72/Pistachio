@@ -1,12 +1,15 @@
 #include "adapters/ui/plugins/UiModuleApi.h"
 #include "adapters/ui/plugins/ToolpathVisualizationPlugin/TestGridGLRender.h"
 #include "adapters/ui/plugins/ToolpathVisualizationPlugin/ToolpathRibbonGLRender.h"
+#include "adapters/ui/plugins/ToolpathVisualizationPlugin/DebugComparisonGLRender.h"
 
 #include "core/IApplication.h"
 #include "ports/IViewportRendererRegistry.h"
 #include "core/ServiceRegistry.h"
 #include "ports/IEventBus.h"
 #include "domain/ToolpathStore.h"
+#include "domain/ToolpathBinaryIO.h"
+
 #include <memory>
 #include <cstdio>
 
@@ -55,7 +58,15 @@ public:
         printf("[ToolpathVisualization] registered 'toolpath_ribbon' renderer\n");
 
 
+
+        m_debugComparison = std::make_unique<DebugComparisonGLRender>();
+        registry->registerRenderer("debug_comparison", m_debugComparison.get());
+        printf("[ToolpathVisualization] registered 'debug_comparison' renderer\n");
+
+
         m_eventBus = svc.application->services().resolve<ports::IEventBus>();
+
+
 
         m_eventBus->subscribe("toolpath.updated", [this, &svc](const std::string&) {
             auto* store = svc.application->services().resolve<domain::v1::ToolpathStore>();
@@ -63,11 +74,35 @@ public:
                 m_ribbon->setToolpath(*store->get());
             });
          
+        auto* modelCache = svc.application->services().resolve<domain::v1::ModelCache>();
 
+       
 
+         
 
+       
+      
+        /*auto* toolpathStore = svc.application->services().resolve<domain::v1::ToolpathStore>();
+        if (toolpathStore && toolpathStore->hasToolpath())
+            m_debugComparison->loadToolpath(*toolpathStore->get());*/
+        //m_debugComparison->loadToolpath()->loadToolpath("C:\\temp\\layer_debug\\toolpath.bin");
 
+        domain::v1::Toolpath toolpath;
+        if (domain::v1::loadToolpathBinary(toolpath, "C:\\temp\\layer_debug\\toolpath.bin"))
+            m_debugComparison->loadToolpath(toolpath);
      
+
+       m_eventBus->subscribe("debug.toggle.model", [this](const std::string& payload) {
+            if (m_debugComparison) m_debugComparison->setShowModel(payload == "1");
+            });
+
+       m_eventBus->subscribe("debug.toggle.solidshader", [this](const std::string& payload) {
+           if (m_debugComparison) m_debugComparison->setUseSolidShader(payload == "1");
+           });
+
+       m_eventBus->subscribe("debug.toggle.ribbon", [this](const std::string& payload) {
+            if (m_debugComparison) m_debugComparison->setShowRibbon(payload == "1");
+            });
     }
 
     void onUnload(UiHostServices& svc, domain::DataContext& dataContext) override
@@ -92,8 +127,10 @@ public:
 private:
     std::unique_ptr<TestGridGLRender> m_testGrid;
     std::unique_ptr<ToolpathRibbonGLRender> m_ribbon;
+    std::unique_ptr<DebugComparisonGLRender>  m_debugComparison;
 
     ports::IEventBus* m_eventBus = nullptr;
+
 };
 
 // -----------------------------------------------------------------------

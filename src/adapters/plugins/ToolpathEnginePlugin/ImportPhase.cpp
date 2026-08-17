@@ -1,6 +1,6 @@
 #include "adapters/plugins/ToolpathEnginePlugin/ImportPhase.h"
 #include "ports/IConfigPort.h"   
- 
+
 #include <glm/gtc/matrix_transform.hpp>
 #include <cstdio>
 
@@ -8,14 +8,18 @@ namespace kinetica {
 
     std::vector<domain::v1::UnifiedGeometry> ImportPhase::run(domain::v1::BuildPlate* buildPlate)
     {
+
         std::vector<domain::v1::UnifiedGeometry> result;
         if (!buildPlate) return result;
 
-        float bedSizeX = ports::getConfig<float>(m_config, "slicer.Settings", "bed.size.X");
-        float bedSizeY = ports::getConfig<float>(m_config, "slicer.Settings", "bed.size.Y");
-
-        glm::mat4 bedCornerOffset = glm::translate(glm::mat4(1.0f),
-            glm::vec3(bedSizeX * 0.5f, bedSizeY * 0.5f, 0.0f));
+        // No bed-corner offset needed here: instance->transform.position
+        // is already written in bed space by arrangeBuildPlate() (front-
+        // left corner = local (0,0), back-right = local (bedSize,bedSize),
+        // matching "bed space" this phase is producing). Adding
+        // +bedSize/2 on top of that double-shifts every part -- a part
+        // correctly centered at (175,175) was landing at (350,350), the
+        // far corner, not just in the debug visualiser but in the actual
+        // generated toolpath.
 
         for (auto& instance : buildPlate->modelInstances)
         {
@@ -24,12 +28,12 @@ namespace kinetica {
             auto model = m_modelCache.getModel(instance->modelHash);
             if (!model || !model->mesh)
             {
-                printf("[ImportPhase] WARNING: no model/mesh for instance %s (hash %s) — skipped\n",
+                printf("[ImportPhase] WARNING: no model/mesh for instance %s (hash %s) -- skipped\n",
                     instance->id.c_str(), instance->modelHash.c_str());
                 continue;
             }
 
-            glm::mat4 combined = bedCornerOffset * instance->transform.matrix();
+            glm::mat4 combined = instance->transform.matrix();
 
             domain::v1::UnifiedGeometry geom;
             geom.modelInstanceId = instance->id;
@@ -65,6 +69,8 @@ namespace kinetica {
 
             result.push_back(std::move(geom));
         }
+
+
 
         return result;
     }

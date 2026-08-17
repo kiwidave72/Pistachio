@@ -1,9 +1,12 @@
-#include "adapters/ui/plugins/UiModuleApi.h"
+ï»¿#include "adapters/ui/plugins/UiModuleApi.h"
 #include "adapters/ui/IconsFontAwesomeRegular.h"
 #include "ports/ITaskProgressReporter.h"
 
 #include "adapters/rendering/ViewportController.h"
 #include "ports/IViewportRendererRegistry.h"
+
+#include "EditableSceneGLRender.h"
+#include "EditableSceneLayout.h"
 
 #include "core/Application.h"
 #include "ports/IConfigPort.h"
@@ -45,33 +48,33 @@
 using namespace Clipper2Lib;
 using namespace adapters::scanning;
 using namespace core::commands;
- 
+
 
 
 class SceneController {
 
-    public:
-        SceneController();
-        ~SceneController();
+public:
+    SceneController();
+    ~SceneController();
 
 
-        void changeToMultiBuildPlateView(slicer::BuildPlateRenderer* buildPlateRender);
-        
-        void changeToSingleBuildPlateView(slicer::BuildPlateRenderer* buildPlateRender);
+    void changeToMultiBuildPlateView(slicer::BuildPlateRenderer* buildPlateRender);
 
-        void selectBuildPlate(domain::v1::Project* project, domain::v1::BuildPlate* selectBuildPlate);
-        
-        void UnselectedBuildPlates(domain::v1::Project* project);
+    void changeToSingleBuildPlateView(slicer::BuildPlateRenderer* buildPlateRender);
 
-         
+    void selectBuildPlate(domain::v1::Project* project, domain::v1::BuildPlate* selectBuildPlate);
+
+    void UnselectedBuildPlates(domain::v1::Project* project);
 
 
-    private:
+
+
+private:
 
 };
 
 
-void SceneController::changeToSingleBuildPlateView(slicer::BuildPlateRenderer* buildPlateRender  ) {
+void SceneController::changeToSingleBuildPlateView(slicer::BuildPlateRenderer* buildPlateRender) {
 
     //buildPlateRender->getSceneLayout().createSingleLayout(true);
 
@@ -100,7 +103,7 @@ public:
         if (!m_hasRun)
         {
             m_store.read([&](const domain::v1::Workspace& ws) { m_before = nlohmann::json(ws); });
-            m_action();   // zero-arg — action already captured store/whatever it needs
+            m_action();   // zero-arg â€” action already captured store/whatever it needs
             m_store.read([&](const domain::v1::Workspace& ws) { m_after = nlohmann::json(ws); });
             m_hasRun = true;
         }
@@ -134,13 +137,13 @@ public:
 
     void Do() override
     {
-     }
+    }
 
     void Undo() override
     {
-     }
+    }
 
- };
+};
 
 
 
@@ -150,8 +153,8 @@ class IWorkspaceService
 public:
     virtual  ~IWorkspaceService() = default;
 
-    virtual  bool loadWorkspace( std::string path, std::string fileName) =0;
-    virtual  void saveWorkspace( std::string path, std::string fileName) =0;
+    virtual  bool loadWorkspace(std::string path, std::string fileName) = 0;
+    virtual  void saveWorkspace(std::string path, std::string fileName) = 0;
 
 
 };
@@ -167,7 +170,7 @@ public:
     ~WorkspaceService();
     bool loadWorkspace(std::string path, std::string fileName) override;
     void saveWorkspace(std::string path, std::string fileName) override;
-    
+
 
 
 };
@@ -187,15 +190,24 @@ bool WorkspaceService::loadWorkspace(std::string path, std::string fileName) {
     if (!file) return false;
 
     std::string tok;
-
+    bool loadedOk = true;
 
     m_workspaceStore->commit([&](domain::v1::Workspace& ws)
         {
             nlohmann::json j;
             file >> j;
 
-            j.get_to(ws);
+            try {
+                j.get_to(ws);
 
+            }
+            catch (const nlohmann::json::exception& e) {
+                printf("[WorkspaceService] loadWorkspace: failed to parse %s: %s\n",
+                    (path + "\\" + fileName).c_str(), e.what());
+                loadedOk = false;
+                return;
+            }
+            loadedOk = true;
             FolderScanner scanner = FolderScanner();
 
             for each(domain::v1::Project * project in ws.projects)
@@ -203,7 +215,7 @@ bool WorkspaceService::loadWorkspace(std::string path, std::string fileName) {
                 for each(domain::v1::BuildPlate * buildPlate in project->buildPlates)
                 {
 
-                     
+
                     std::string path = "C:\\github\\Pistachio-config\\Assets\\STL\\BuildPlate.stl";
 
                     StlLoaderAdapter loader = StlLoaderAdapter(m_cache);
@@ -244,10 +256,10 @@ bool WorkspaceService::loadWorkspace(std::string path, std::string fileName) {
         });
 
 
-    return true;
+    return loadedOk;
 
 }
-void WorkspaceService::saveWorkspace( std::string path, std::string fileName) {
+void WorkspaceService::saveWorkspace(std::string path, std::string fileName) {
 
 }
 
@@ -255,7 +267,7 @@ class ISlicerService
 {
 
 public:
-     virtual  ~ISlicerService() = default;
+    virtual  ~ISlicerService() = default;
 
 
 
@@ -281,7 +293,7 @@ public:
 
 };
 
-SlicerService::SlicerService(domain::DataContext& dataContext, domain::v1::WorkspaceStore& workspaceStore ,ModelCache& cache, TaskRunner* taskRunner) 
+SlicerService::SlicerService(domain::DataContext& dataContext, domain::v1::WorkspaceStore& workspaceStore, ModelCache& cache, TaskRunner* taskRunner)
     : m_dataContext(dataContext), m_cache(cache)
 {
     m_workspaceStore = &workspaceStore;
@@ -325,28 +337,35 @@ Paths64 GetModel2DPath(domain::v1::Model* model, float rotationY) {
     result.push_back(path);
     return result;
 }
-  
+
 void SlicerService::arrangeBuildPlate(domain::v1::BuildPlate* selectedBuildPlate) {
 
     auto startTime = std::chrono::high_resolution_clock::now();
 
-    if (!selectedBuildPlate || !selectedBuildPlate->buildPlateModel ) {
+    if (!selectedBuildPlate || !selectedBuildPlate->buildPlateModel) {
         std::cout << "[ARRANGE] Error: Selected BuildPlate or its bounds are null.\n";
         return;
     }
 
-    auto bpBounds = selectedBuildPlate->buildPlateModel->mesh->bounds ;
+    auto bpBounds = selectedBuildPlate->buildPlateModel->mesh->bounds;
 
     float halfPlateW = (bpBounds.max.x - bpBounds.min.x) * 0.5f;
     float halfPlateD = (bpBounds.max.y - bpBounds.min.y) * 0.5f;
-    glm::vec2 bpCenter(0.0f, 0.0f);
+
+    // bpCenter is the center of the *logical* placement space instances
+    // live in -- front-left corner = local (0,0), back-right corner =
+    // local (bedSize, bedSize) -- not the plate mesh's own local/CAD
+    // coordinates (bpBounds above, which is a separate, unrelated frame).
+    // For a 350mm bed that logical space's center is (175, 175), i.e.
+    // exactly (halfPlateW, halfPlateD): the bed's half-size, not (0,0).
+    glm::vec2 bpCenter(halfPlateW, halfPlateD);
 
     // Sort instances by resolved mesh footprint area, largest first
     std::sort(selectedBuildPlate->modelInstances.begin(), selectedBuildPlate->modelInstances.end(),
         [this](const std::unique_ptr<ModelInstance>& a, const std::unique_ptr<ModelInstance>& b) {
             auto modelA = m_cache.getModel(a->modelHash);
             auto modelB = m_cache.getModel(b->modelHash);
-            if (!modelA || !modelB || !modelA->mesh|| !modelB->mesh) return false;
+            if (!modelA || !modelB || !modelA->mesh || !modelB->mesh) return false;
             float areaA = (modelA->mesh->bounds.max.x - modelA->mesh->bounds.min.x) * (modelA->mesh->bounds.max.y - modelA->mesh->bounds.min.y);
             float areaB = (modelB->mesh->bounds.max.x - modelB->mesh->bounds.min.x) * (modelB->mesh->bounds.max.y - modelB->mesh->bounds.min.y);
             return areaA > areaB;
@@ -366,7 +385,7 @@ void SlicerService::arrangeBuildPlate(domain::v1::BuildPlate* selectedBuildPlate
         auto model = m_cache.getModel(instance->modelHash);
         if (!model || !model->mesh) {
             std::cout << "[ARRANGE] Skipped \"" << instance->name << "\": no local bounds.\n";
-            continue; 
+            continue;
         }
 
         auto modelStart = std::chrono::high_resolution_clock::now();
@@ -374,6 +393,24 @@ void SlicerService::arrangeBuildPlate(domain::v1::BuildPlate* selectedBuildPlate
         float halfW = (model->mesh->bounds.max.x - model->mesh->bounds.min.x) * 0.5f;
         float halfD = (model->mesh->bounds.max.y - model->mesh->bounds.min.y) * 0.5f;
         float maxRadius = std::sqrt(halfPlateW * halfPlateW + halfPlateD * halfPlateD);
+
+        // The packing search below (testX +/- halfW etc.) works in terms of
+        // the part's FOOTPRINT CENTER -- but StandardModelRenderStrategy::
+        // computeModelMatrix() places transform.position at the mesh's own
+        // LOCAL ORIGIN point, not its footprint center. Those only coincide
+        // if a mesh happens to be modeled with its local origin exactly at
+        // its own center; our test cube's local origin is at a *corner*
+        // (bounds 0..30), so every part placed here has been landing
+        // offset from its intended footprint position by this amount --
+        // small enough on a 30-unit cube against a 350mm bed to go
+        // unnoticed, obvious on something larger like a skirt. This
+        // converts a footprint-center placement into the correct
+        // local-origin placement before it's written to transform.position
+        // below, so the two conventions stay consistent regardless of
+        // where a given mesh's own local origin happens to sit.
+        glm::vec2 localCenterOffset(
+            (model->mesh->bounds.min.x + model->mesh->bounds.max.x) * 0.5f,
+            (model->mesh->bounds.min.y + model->mesh->bounds.max.y) * 0.5f);
 
         bool placed = false;
         glm::vec2 bestPos(0.0f);
@@ -389,8 +426,14 @@ void SlicerService::arrangeBuildPlate(domain::v1::BuildPlate* selectedBuildPlate
                 float testY = bpCenter.y + r * std::sin(angle);
                 positionsTested++;
 
-                if ((testX - halfW) < -halfPlateW || (testX + halfW) > halfPlateW ||
-                    (testY - halfD) < -halfPlateD || (testY + halfD) > halfPlateD) {
+                // Boundary check is relative to bpCenter, not a hardcoded
+                // (0,0)-centered plate -- otherwise this still bounds
+                // candidates against the *old* search origin even though
+                // bpCenter has moved, which is what pulled placement off
+                // to one side instead of landing exactly on bpCenter for
+                // a lone part.
+                if ((testX - halfW) < (bpCenter.x - halfPlateW) || (testX + halfW) > (bpCenter.x + halfPlateW) ||
+                    (testY - halfD) < (bpCenter.y - halfPlateD) || (testY + halfD) > (bpCenter.y + halfPlateD)) {
                     continue;
                 }
 
@@ -418,12 +461,13 @@ void SlicerService::arrangeBuildPlate(domain::v1::BuildPlate* selectedBuildPlate
         totalPositionsTested += positionsTested;
 
         if (placed) {
-            // only update local position coords as world coords depend on build plate location in 3D space.
-            instance->transform.position.x = bestPos.x;
-            instance->transform.position.y = bestPos.y;
+            // bestPos is the footprint CENTER (see localCenterOffset
+            // comment above); subtracting the mesh's own local-origin-to-
+            // center offset here converts it to the correct local-origin
+            // placement the renderer actually expects.
+            instance->transform.position.x = bestPos.x - localCenterOffset.x;
+            instance->transform.position.y = bestPos.y - localCenterOffset.y;
             instance->transform.position.z = 0.0f;
-
-            instance->transform.rotation.y = 0.0f; // rotation not considered in this pass
             placedRects.push_back({ bestPos.x, bestPos.y, halfW, halfD });
             placedCount++;
 
@@ -432,8 +476,13 @@ void SlicerService::arrangeBuildPlate(domain::v1::BuildPlate* selectedBuildPlate
         }
         else {
             failedCount++;
-            instance->transform.position.x = bpBounds.max.x + 20;
-            instance->transform.position.y = bpBounds.max.y + 20;
+            // Past the back-right corner of the logical placement space
+            // (bpCenter + half-size), not bpBounds.max -- that's the
+            // plate mesh's own local/CAD coordinates, a different frame.
+            // Same local-origin-vs-footprint-center conversion as the
+            // placed branch above.
+            instance->transform.position.x = ((bpCenter.x + halfPlateW) + 20) - localCenterOffset.x;
+            instance->transform.position.y = ((bpCenter.y + halfPlateD) + 20) - localCenterOffset.y;
             instance->transform.position.z = 0.0f;
 
             std::cout << "[ARRANGE] FAILED to place \"" << instance->name << "\""
@@ -457,10 +506,10 @@ bool SlicerService::saveWorkspaceToFile(const std::string& filePath) {
 
         // Implicitly converts context to json, then pretty-prints with 4-space indentation
         m_workspaceStore->read([&](const domain::v1::Workspace& ws)
-        {
-            nlohmann::json j = ws;
-            file << j.dump(4);
-        });
+            {
+                nlohmann::json j = ws;
+                file << j.dump(4);
+            });
 
         return true;
     }
@@ -478,78 +527,78 @@ void SlicerService::addModel(domain::v1::BuildPlate* selectedBuildPlate, const v
         .sequential()
         .stopOnFailure(true)
         .showSubSteps(true)
-        .step("Scanning files..", [this, selectedBuildPlate, data, size](auto prog ) 
+        .step("Scanning files..", [this, selectedBuildPlate, data, size](auto prog )
         {*/
-            std::string raw((const char*)data, size);
-            std::istringstream pathString(raw);
-            std::string path;
-            FolderScanner folderScanner;
-            while (std::getline(pathString, path))
-            {
-                if (!path.empty())
-                {
-                    printf("[SlicerCore] dropped: %s\n", path.c_str());
+    std::string raw((const char*)data, size);
+    std::istringstream pathString(raw);
+    std::string path;
+    FolderScanner folderScanner;
+    while (std::getline(pathString, path))
+    {
+        if (!path.empty())
+        {
+            printf("[SlicerCore] dropped: %s\n", path.c_str());
 
-                    // load mesh and add to build plate
-                    StlLoaderAdapter loader = StlLoaderAdapter(m_cache);
-                    loader.load(path);
+            // load mesh and add to build plate
+            StlLoaderAdapter loader = StlLoaderAdapter(m_cache);
+            loader.load(path);
 
 
-                    ScanFileResult result = folderScanner.scanFile(path);
-                    if (!result.success) {
-                        // errored
-                        return;
-                    }
-
-                   std::shared_ptr<domain::v1::Model> m = std::make_shared<domain::v1::Model>();
-                    m->mesh = loader.getMesh();
-                    m->Id = result.file.fileHash;
-                    m->fileName = result.file.filename;
-                    m->fileLocation = result.file.fullPath;
-                    m->name = result.file.name;
-                    
-                    m->label = path.c_str();
-                    
-                    
-
-                    m_cache.models[result.file.fileHash] = m;
-                     
-                    auto it = this->m_cache.assets.find(result.file.fileHash);
-                    if (it == m_cache.assets.end() || !it->second)
-                    {
-                         return;
-                    }
-
-                    domain::v1::ImportedAsset& asset = *it->second;
-                    ModelInstanceFactory factory; 
-                    
-                    Mesh* mesh = loader.getMesh().get();
-                     
-                    std::vector<std::unique_ptr<ModelInstance>>  modelInstances =  factory.createFromFileMeta(asset, mesh);
-
-                    for (auto& instance : modelInstances)
-                    {
-                        
-                        selectedBuildPlate->modelInstances.push_back(std::move(instance));
-                    }
-
- 
-                    
-                }
+            ScanFileResult result = folderScanner.scanFile(path);
+            if (!result.success) {
+                // errored
+                return;
             }
-        //})
-        //.completed([this](bool ok) {
-        //    //m_buildPlateRenderer.updateViewModel(m_selectedProject->buildPlates);
 
-        //    })
-        //.submit();
+            std::shared_ptr<domain::v1::Model> m = std::make_shared<domain::v1::Model>();
+            m->mesh = loader.getMesh();
+            m->Id = result.file.fileHash;
+            m->fileName = result.file.filename;
+            m->fileLocation = result.file.fullPath;
+            m->name = result.file.name;
+
+            m->label = path.c_str();
+
+
+
+            m_cache.models[result.file.fileHash] = m;
+
+            auto it = this->m_cache.assets.find(result.file.fileHash);
+            if (it == m_cache.assets.end() || !it->second)
+            {
+                return;
+            }
+
+            domain::v1::ImportedAsset& asset = *it->second;
+            ModelInstanceFactory factory;
+
+            Mesh* mesh = loader.getMesh().get();
+
+            std::vector<std::unique_ptr<ModelInstance>>  modelInstances = factory.createFromFileMeta(asset, mesh);
+
+            for (auto& instance : modelInstances)
+            {
+
+                selectedBuildPlate->modelInstances.push_back(std::move(instance));
+            }
+
+
+
+        }
+    }
+    //})
+    //.completed([this](bool ok) {
+    //    //m_buildPlateRenderer.updateViewModel(m_selectedProject->buildPlates);
+
+    //    })
+    //.submit();
 }
 
- 
+
 
 void SlicerService::loadWorkspace() {
 
- 
+
 
     domain::v1::Project* project = new domain::v1::Project();
 
@@ -560,8 +609,8 @@ void SlicerService::loadWorkspace() {
 
     std::string path = "C:\\github\\Pistachio-config\\Assets\\STL\\BuildPlate.stl";
 
-      
-    StlLoaderAdapter loader =  StlLoaderAdapter(m_cache);
+
+    StlLoaderAdapter loader = StlLoaderAdapter(m_cache);
     loader.load(path);
 
     FolderScanner scanner = FolderScanner();
@@ -574,8 +623,8 @@ void SlicerService::loadWorkspace() {
 
     std::shared_ptr<domain::v1::Model> buildPlateModel = buildPlate->buildPlateModel;
     buildPlateModel->mesh = loader.getMesh();
-    buildPlateModel->Id = scanner.scanFile(path).file.fileHash.c_str(); 
-    
+    buildPlateModel->Id = scanner.scanFile(path).file.fileHash.c_str();
+
     buildPlate->buildPlateModel = buildPlateModel;
     project->buildPlates.push_back(buildPlate);
 
@@ -584,7 +633,7 @@ void SlicerService::loadWorkspace() {
     m_workspaceStore->commit([&](domain::v1::Workspace& ws) {
         ws.projects.push_back(project);
         });
- 
+
 }
 
 // -----------------------------------------------------------------------
@@ -593,18 +642,18 @@ void SlicerService::loadWorkspace() {
 class SlicerCorePlugin final : public IUiModule
 {
 public:
-   //SlicerCorePlugin(ModelCache& modelCache);
-    // ~SlicerCorePlugin() override = default;
+    //SlicerCorePlugin(ModelCache& modelCache);
+     // ~SlicerCorePlugin() override = default;
 
 
-    // -----------------------------------------------------------------------
+     // -----------------------------------------------------------------------
     void onLoad(UiHostServices& svc, domain::DataContext& dataContext) override
     {
         printf("[SlicerCore] onLoad\n");
-        
+
         m_modelCache = svc.application->services().resolve<domain::v1::ModelCache>();
         m_workspaceStore = svc.application->services().resolve<domain::v1::WorkspaceStore>();
-		
+
         m_taskreporter = svc.application->services().resolve<ports::ITaskProgressReporter>();
 
         //m_workspace = dataContext.m_workspace;
@@ -614,9 +663,9 @@ public:
         m_app->loadFile("C:\\github\\StepFileExtraction\\Debug\\Node_1\\Node_1_3\\Node_1_3_1\\Node_1_3_1_1.step");
         */
 
-       // FolderScanner scanner1;
-       //ScanFileResult hash = scanner1.scanFile ("E:\\github\\Voron-2\\STLs\\Test_Prints\\Voron_Design_Cube_v7.stl");
-       
+        // FolderScanner scanner1;
+        //ScanFileResult hash = scanner1.scanFile ("E:\\github\\Voron-2\\STLs\\Test_Prints\\Voron_Design_Cube_v7.stl");
+
 
         m_app = reinterpret_cast<core::Application*>(svc.app);
         m_config = reinterpret_cast<ports::IConfigPort*>(svc.config);
@@ -625,74 +674,99 @@ public:
         //taskRunner = reinterpret_cast<TaskRunner*>(svc.taskRunner);
         taskRunner = svc.application->services().resolve<TaskRunner>();
 
-        m_workspaceService = new WorkspaceService(dataContext,*m_workspaceStore, *m_modelCache, taskRunner);
-        m_slicerService = new SlicerService(dataContext,*m_workspaceStore, *m_modelCache, taskRunner);
-       
-        auto* viewportRegistry = svc.application->services().resolve<ports::IViewportRendererRegistry>();
-        if (viewportRegistry)
-            m_viewportController = std::make_unique<ViewportController>(*viewportRegistry);
+        m_workspaceService = new WorkspaceService(dataContext, *m_workspaceStore, *m_modelCache, taskRunner);
+        m_slicerService = new SlicerService(dataContext, *m_workspaceStore, *m_modelCache, taskRunner);
+
+
+
 
         m_slicerService->loadWorkspace();
-        auto* eventBus = svc.application->services().resolve<ports::IEventBus>();
+        m_eventBus = svc.application->services().resolve<ports::IEventBus>();
+
+        // SlicerCorePlugin::onLoad(), alongside the existing initialize() call
+        m_viewportRenderRegistry = svc.application->services().resolve<ports::IViewportRendererRegistry>();
+        if (m_viewportRenderRegistry)
+        {
+            m_viewportController = std::make_unique<ViewportController>(*m_viewportRenderRegistry);
+
+           
+        }
 
 
-       
 
 
         taskRunner->group("Startup Load")
             .sequential()
             .stopOnFailure(true)
             .step("Scanning asset library", [this](std::shared_ptr<TaskProgress> progress)
-            {
-                progress->setMessage("Scanning E:/github/Voron-2/STLs");
-
-                auto tempproject = std::make_shared<domain::v1::Project>();
-                FolderScanner scanner;
-                ScanOptions opts;
-                opts.recursive = true;
-                opts.includeHidden = false;
-                opts.maxDepth = 10;
-
-                //ScanResult result = scanner.scan("E:/github/Voron-2/STLs", opts);
-
-                // speed up the cache loading by looking at the test prints only
-                ScanResult result = scanner.scan("E:/github/Voron-2/STLs/Test_Prints", opts);
-
-                if (!result.success)
                 {
-                    printf("[SlicerCore] scan failed: %s\n", result.errorMessage.c_str());
-                    progress->failed = true;
-                    return;
-                }
+                    progress->setMessage("Scanning  Voron-2 STLs");
 
-                printf("Scanned: %s — %d files, %d folders\n",result.rootPath.c_str(), result.totalFiles, result.totalFolders);
+                    auto tempproject = std::make_shared<domain::v1::Project>();
+                    FolderScanner scanner;
+                    ScanOptions opts;
+                    opts.recursive = true;
+                    opts.includeHidden = false;
+                    opts.maxDepth = 10;
 
-                tempproject->fromScanResult(result, *m_modelCache);
-                m_scannedProject = tempproject;    
-                m_projectLoaded = true;
+                    // speed up the cache loading by looking at the test prints only
+                    ScanResult result = scanner.scan("e:\\github\\Voron-2\\STLs", opts);
+
+                    if (!result.success)
+                    {
+                        printf("[SlicerCore] scan failed: %s\n", result.errorMessage.c_str());
+                        progress->failed = true;
+                        return;
+                    }
+
+                    printf("Scanned: %s â€” %d files, %d folders\n", result.rootPath.c_str(), result.totalFiles, result.totalFolders);
+
+                    tempproject->fromScanResult(result, *m_modelCache);
+                    m_scannedProject = tempproject;
+                    m_projectLoaded = true;
 
 
-            })
+                })
             .step("Loading workspace", [this](std::shared_ptr<TaskProgress> progress)
-            {
-                
-              progress->setMessage("Loading workspace.json");
-              m_workspaceService->loadWorkspace("c:\\temp\\", "cube_workspace.json");
-            })
-            .completed([this, eventBus](bool success)
-            {
-                printf("[SlicerCore] startup load %s\n", success ? "complete" : "FAILED");
-                if (success)
                 {
-                    // now update the UI.
-                    auto* project = m_navigation->resolveOrDefaultProject(*m_workspaceStore);
-                    auto* buildPlate = m_navigation->resolveOrDefaultBuildPlate(project);
 
-                    m_slicerService->arrangeBuildPlate(buildPlate);
+                    progress->setMessage("Loading workspace.json");
+                    m_workspaceService->loadWorkspace("c:\\temp\\", "cube_and_skirt_workspace.json");
+                })
+            .completed([this](bool success)
+                {
+                    printf("[SlicerCore] startup load %s\n", success ? "complete" : "FAILED");
 
-                    m_buildPlateRenderer->updateViewModel(project->buildPlates);
-                }
-            })
+
+
+                    if (success)
+                    {
+
+                        m_editableScene = std::make_unique<EditableSceneGLRender>();
+                        m_viewportRenderRegistry->registerRenderer("editable_scene", m_editableScene.get());
+                        m_viewportController->setActiveRenderer("editable_scene");
+
+                        //m_debugComparison = std::make_unique<DebugComparisonGLRender>();
+                        //m_viewportRenderRegistry->registerRenderer("debug_comparison", m_debugComparison.get());
+                        
+                        
+                        //if (modelCache) m_debugComparison->loadModel(*modelCache, "f10d5414c209e764");
+                        //if (modelCache) m_debugComparison->loadModel(*modelCache, "fd0d5d3656e5b8a7");
+
+                        // m_viewportController->setTarget(glm::vec3(177.0f, 177.0f, 0.4f));
+
+                         // now update the UI.
+                        auto* project = m_navigation->resolveOrDefaultProject(*m_workspaceStore);
+                        auto* buildPlate = m_navigation->resolveOrDefaultBuildPlate(project);
+
+                        m_slicerService->arrangeBuildPlate(buildPlate);
+
+                        //m_buildPlateRenderer->updateViewModel(project->buildPlates);
+
+                        m_editableScene->sceneLayout().setActiveBuildPlate(buildPlate, *m_modelCache);
+
+                    }
+                })
             .submit();
 
         // need a better way to set these.
@@ -704,7 +778,9 @@ public:
         auto* buildPlate = m_navigation->resolveOrDefaultBuildPlate(project);
 
 
-        m_preview = slicer::StlPreviewRenderer(); 
+        
+
+        m_preview = slicer::StlPreviewRenderer();
 
         m_cmdHistory.OnHistoryChanged = [this]()
             {
@@ -716,7 +792,7 @@ public:
 
                 m_buildPlateRenderer->updateViewModel(project ? project->buildPlates : std::vector<domain::v1::BuildPlate*>{});
             };
-        
+
         if (buildPlate)
             m_slicerService->arrangeBuildPlate(buildPlate);
 
@@ -725,13 +801,13 @@ public:
         //printf("[SlicerCore] about to call initialize, project=%p, buildPlates.size()=%zu\n",
         //    (void*)m_selectedProject, m_selectedProject ? m_selectedProject->buildPlates.size() : 0);
 
-        m_buildPlateRenderer->initialize(*m_workspaceStore, project, *m_modelCache,*m_navigation);
+        m_buildPlateRenderer->initialize(*m_workspaceStore, project, *m_modelCache, *m_navigation);
         printf("[SlicerCore] initialize() returned\n");
 
         if (m_registry)
         {
 
-            
+
 
             // add menu items
             m_menuContrib = m_registry->contributeMenu(k_pluginId, "Slicer", 300);
@@ -748,73 +824,109 @@ public:
 
 
             m_ribbonContrib->addButton("toggle_viewport", "Toggle View", "", 60, [this]() {
+                //if (!m_viewportController) return;
+
+                //if (m_viewportController->activeId() == "debug_comparison")
+                //{
+                //    m_viewportController->setActiveRenderer("editable_scene");   // back to plate view â€” however that's currently selected
+                //}
+                //else
+                //{
+                //    m_viewportController->setActiveRenderer("debug_comparison");
+                //}
                 if (!m_viewportController) return;
 
-                if (m_viewportController->activeId() == "toolpath_ribbon")
-                    m_viewportController->setActiveRenderer("");   // back to plate view — however that's currently selected
-                else {
-
+                std::string current = m_viewportController->activeId();
+                if (current == "toolpath_ribbon")
+                    m_viewportController->setActiveRenderer("debug_comparison");
+                else if (current == "debug_comparison")
+                    m_viewportController->setActiveRenderer("editable_scene");
+                else
                     m_viewportController->setActiveRenderer("toolpath_ribbon");
-                    m_viewportController->setTarget(glm::vec3(190.0f, 190.0f, 15.0f));   // matches the reference cube's real bed-space center
-
-                }
 
                 });
 
-            m_ribbonContrib->addButton( "slice_now", "Slice","", 10, [this, eventBus]() {
+            // Diagnostic only -- see the long comment on CameraState::
+            // axisMode in ports/I3DViewportGLRender.h. Cycles the camera
+            // basis through a few candidate up/right conventions -- affects
+            // every registered renderer at once (editable scene, debug
+            // visualiser), since they all share one CameraState instance
+            // via m_viewportController. Mode 0 ("Default") is the
+            // confirmed-correct convention already baked in, so this is
+            // purely for exploring/confirming further, not a hidden
+            // regression risk.
+            m_ribbonContrib->addCustom("cam_axis_mode", 62, [this]() {
+                if (!m_viewportController) return;
+
+                char label[64];
+                snprintf(label, sizeof(label), "Cam Axis: %s", m_viewportController->cameraAxisModeName());
+                if (ImGui::Button(label))
+                {
+                    m_viewportController->cycleCameraAxisMode();
+                }
+                });
+
+            m_ribbonContrib->addButton("slice_now", "Slice", "", 10, [this]() {
 
                 // now update the UI.
                 auto* project = m_navigation->resolveOrDefaultProject(*m_workspaceStore);
                 auto* buildPlate = m_navigation->resolveOrDefaultBuildPlate(project);
 
                 printf("[SlicerCore] publishing run.pipeline for plate %s\n", buildPlate->Id.c_str());
-                eventBus->publish("run.pipeline", buildPlate->Id);
-                 
+                m_eventBus->publish("run.pipeline", buildPlate->Id);
+
                 });
-            m_ribbonContrib->addToggle( "slicer_panel", "Panel", 90, &m_panelOpen);
+            m_ribbonContrib->addToggle("slicer_panel", "Panel", 90, &m_panelOpen);
             m_ribbonContrib->addSeparator(20);
             m_ribbonContrib->addButton("refresh_view", "Refresh", "", 20, [this, project]() {
                 this->m_buildPlateRenderer->updateViewModel(project->buildPlates);  });
-            m_ribbonContrib->addButton("arrange_build_plate", "Arrange", "",20, [this, buildPlate]() {
-                this->m_slicerService->arrangeBuildPlate(buildPlate); });
+
+            m_ribbonContrib->addButton("arrange_build_plate", "Arrange", "", 20, [this]() {
+
+                auto* project = m_navigation->resolveOrDefaultProject(*m_workspaceStore);
+                auto* buildPlate = m_navigation->resolveOrDefaultBuildPlate(project);
+
+                m_slicerService->arrangeBuildPlate(buildPlate);
+                m_editableScene->sceneLayout().setActiveBuildPlate(buildPlate, *m_modelCache);
+                });
             m_ribbonContrib->addSeparator(30);
 
             // Load Workspace
-            m_ribbonContrib->addButton("load_workspace", "Load", ICON_FA_FOLDER_OPEN,  30, [this]() {
+            m_ribbonContrib->addButton("load_workspace", "Load", ICON_FA_FOLDER_OPEN, 30, [this]() {
                 auto cmd = std::make_unique<SnapshotCommand>(
                     *m_workspaceStore, "Load Worspace",
                     [this]() {
-                        m_workspaceService->loadWorkspace("c:\\temp\\", "workspace.json");
+                        m_workspaceService->loadWorkspace("c:\\temp\\", "cube_workspace.json");
                         auto* project = m_navigation->resolveOrDefaultProject(*m_workspaceStore);
                         m_buildPlateRenderer->updateViewModel(project->buildPlates);
                     });
                 m_cmdHistory.Execute(std::move(cmd));
-                
+
                 });
-            m_ribbonContrib->addButton("saveWorkspace", "Save", ICON_FA_FILE, 30,[this]() {
-                    auto* project = m_navigation->resolveOrDefaultProject(*m_workspaceStore);
-                    auto* buildPlate = m_navigation->resolveOrDefaultBuildPlate(project);
-                    
-                    const std::string fileName = "c:\\temp\\workspace.json";
-                    m_slicerService->saveWorkspaceToFile(fileName);
-                    m_buildPlateRenderer->updateViewModel(project->buildPlates);
-            });
+            m_ribbonContrib->addButton("saveWorkspace", "Save", ICON_FA_FILE, 30, [this]() {
+                auto* project = m_navigation->resolveOrDefaultProject(*m_workspaceStore);
+                auto* buildPlate = m_navigation->resolveOrDefaultBuildPlate(project);
+
+                const std::string fileName = "c:\\temp\\workspace.json";
+                m_slicerService->saveWorkspaceToFile(fileName);
+                m_buildPlateRenderer->updateViewModel(project->buildPlates);
+                });
             m_ribbonContrib->addSeparator(40);
 
             // undo / redo
-            auto undoRedoContrib =  m_registry->contributeRibbon(k_pluginId, "UndoRedo", 400);
-            undoRedoContrib->addButton("undo", "Undo","", 40, [this]() { m_cmdHistory.Undo(); });
-            undoRedoContrib->addButton("redo", "Redo","", 40, [this]() { m_cmdHistory.Redo(); });
+            auto undoRedoContrib = m_registry->contributeRibbon(k_pluginId, "UndoRedo", 400);
+            undoRedoContrib->addButton("undo", "Undo", "", 40, [this]() { m_cmdHistory.Undo(); });
+            undoRedoContrib->addButton("redo", "Redo", "", 40, [this]() { m_cmdHistory.Redo(); });
 
             // Single / Multi
             auto sceneLayoutContrib = m_registry->contributeRibbon(k_pluginId, "UndoRedo", 400);
-            sceneLayoutContrib->addButton("changeToSingle", "Single","", 40, [this]() {  m_buildPlateRenderer->getSceneLayout().selectPlate(0); });
-            sceneLayoutContrib->addButton("changeToMulti", "Multi", "",40, [this]() { m_buildPlateRenderer->getSceneLayout().selectPlate(-1); });
-  
+            sceneLayoutContrib->addButton("changeToSingle", "Single", "", 40, [this]() {  m_buildPlateRenderer->getSceneLayout().selectPlate(0); });
+            sceneLayoutContrib->addButton("changeToMulti", "Multi", "", 40, [this]() { m_buildPlateRenderer->getSceneLayout().selectPlate(-1); });
+
 
             auto partContrib = m_registry->contributeRibbon(k_pluginId, "Part", 400);
             // delete Part
-            partContrib->addButton("deletePart", "Delete","", 40, [this]() {
+            partContrib->addButton("deletePart", "Delete", "", 40, [this]() {
                 auto selectedIds = m_navigation->selection().getSelectedIds();
                 if (selectedIds.empty()) return;
 
@@ -844,8 +956,8 @@ public:
 
 
             auto plateContrib = m_registry->contributeRibbon(k_pluginId, "Plate", 400);
-            plateContrib->addButton("addPlate", "Add","", 60, [this]() {
-                
+            plateContrib->addButton("addPlate", "Add", "", 60, [this]() {
+
                 // Add plate
                 auto addCmd = std::make_unique<SnapshotCommand>(
                     *m_workspaceStore, "Add Build Plate",
@@ -868,15 +980,15 @@ public:
                         buildPlateModel->mesh = loader.getMesh();
 
                         buildPlateModel->Id = scanner.scanFile(path).file.fileHash.c_str();
-                        
+
                         plate->buildPlateModel = buildPlateModel;
                         project->buildPlates.push_back(plate);
                         m_navigation->setProject(project->Id);   // keep context consistent
                         m_navigation->setBuildPlate(plate->Id);  // select the new plate immediately
                     });
                 m_cmdHistory.Execute(std::move(addCmd));
-                
-                
+
+
                 });
 
 
@@ -884,7 +996,7 @@ public:
             m_dragDropContrib = m_registry->contributeDragDrop(
                 k_pluginId, "ASSET_PATHS", 100);
 
-            m_dragDropContrib->onDrop = [this](const void* data, size_t size )
+            m_dragDropContrib->onDrop = [this](const void* data, size_t size)
                 {
 
                     auto cmd = std::make_unique<SnapshotCommand>(
@@ -893,39 +1005,42 @@ public:
 
                             auto* project = m_navigation->resolveOrDefaultProject(*m_workspaceStore);
                             auto* buildPlate = m_navigation->resolveOrDefaultBuildPlate(project);
-                            
-                            m_slicerService->addModel(buildPlate , data, size);
+
+                            m_slicerService->addModel(buildPlate, data, size);
                             m_slicerService->arrangeBuildPlate(buildPlate);
 
-                             const std::string fileName = "c:\\temp\\workspace.json";
-                             m_slicerService->saveWorkspaceToFile(fileName);
-                             m_buildPlateRenderer->updateViewModel(project->buildPlates);
-                         
+                            const std::string fileName = "c:\\temp\\workspace.json";
+                            m_slicerService->saveWorkspaceToFile(fileName);
+                            m_buildPlateRenderer->updateViewModel(project->buildPlates);
+
                         });
-                        m_cmdHistory.Execute(std::move(cmd));
-                 };
+                    m_cmdHistory.Execute(std::move(cmd));
+                };
 
             m_dragDropContrib->onHoverRender = [this]()
                 {
-                    // Optional — draw a highlight overlay while dragging over
+                    // Optional â€” draw a highlight overlay while dragging over
                    /* ImVec2 min = ImGui::GetItemRectMin();
                     ImVec2 max = ImGui::GetItemRectMax();
                     ImGui::GetForegroundDrawList()->AddRect(
                         min, max, IM_COL32(100, 200, 255, 200), 4.0f, 0, 2.0f);*/
                 };
         }
-         printf("[SlicerCore] onLoad done\n");
+
+        m_viewportController->setActiveRenderer("editable_scene");
+
+        printf("[SlicerCore] onLoad done\n");
     }
 
     // -----------------------------------------------------------------------
-    void onUnload(UiHostServices& svc,domain::DataContext& dataContext ) override
+    void onUnload(UiHostServices& svc, domain::DataContext& dataContext) override
     {
         printf("[SlicerCore] onUnload\n");
         auto* registry = reinterpret_cast<adapters::ContributionRegistry*>(svc.registry);
         if (registry)
             registry->removeAllContributions(k_pluginId);
-        
-        
+
+
         m_dragDropContrib = nullptr;
         m_menuContrib = nullptr;
         m_ribbonContrib = nullptr;
@@ -933,8 +1048,8 @@ public:
         m_app = nullptr;
         m_config = nullptr;
         m_selectedAssetId = -1;
-         m_preview.clear();
-        
+        m_preview.clear();
+
 
     }
 
@@ -948,8 +1063,8 @@ public:
             // TODO: trigger slice
             m_sliceRequested = false;
         }
-        
-        if (m_guiHost->m_initialized  &&  m_filesLoaded == false) {
+
+        if (m_guiHost->m_initialized && m_filesLoaded == false) {
 
             m_filesLoaded = true;
             //taskRunner->group("Import Folders")
@@ -983,7 +1098,7 @@ public:
 
         }
         //taskRunner-> renderUI();
-       
+
         if (m_taskreporter) m_taskreporter->display();
 
         auto afterTaskRunner = std::chrono::high_resolution_clock::now();
@@ -1012,6 +1127,11 @@ private:
     SlicerService* m_slicerService = nullptr;
     WorkspaceService* m_workspaceService = nullptr;
     std::unique_ptr<ViewportController> m_viewportController;
+    ports::IViewportRendererRegistry* m_viewportRenderRegistry  ;
+
+
+    ports::IEventBus* m_eventBus = nullptr;
+
 
     core::Application* m_app = nullptr;
     ports::IConfigPort* m_config = nullptr;
@@ -1023,7 +1143,7 @@ private:
 
     //std::unique_ptr<domain::v1::Project> m_project;
 
-     
+
     domain::v1::Workspace* m_workspace;
     domain::v1::WorkspaceStore* m_workspaceStore = nullptr;
 
@@ -1031,10 +1151,10 @@ private:
 
     TaskRunner* taskRunner;
     ModelCache* m_modelCache; // the 3d mesh of the stls that have been loaded
-	ports::ITaskProgressReporter* m_taskreporter = nullptr;
+    ports::ITaskProgressReporter* m_taskreporter = nullptr;
 
     int   m_selectedAssetId = -1;
-    
+
     std::unordered_set<std::string> s_selected;
 
     int   m_selectedPlateId = -1;
@@ -1050,6 +1170,8 @@ private:
     slicer::StlPreviewRenderer m_preview;
 
     std::unique_ptr<slicer::BuildPlateRenderer> m_buildPlateRenderer;
+
+    std::unique_ptr<EditableSceneGLRender> m_editableScene;
 
     // -----------------------------------------------------------------------
     // Main panel
@@ -1117,7 +1239,7 @@ private:
 
 
 
-        
+
         // ---- Tree ----
         ImGui::BeginChild("##slicer_tree", ImVec2(0, m_treeHeight), true,
             ImGuiWindowFlags_HorizontalScrollbar);
@@ -1128,7 +1250,7 @@ private:
         //    ImGui::SetScrollY(ImGui::GetScrollY() -
         //        ImGui::GetIO().MouseWheel * ImGui::GetTextLineHeight() * 3.0f);
         //}
-        // Nuclear scroll fix — capture wheel before anything else consumes it
+        // Nuclear scroll fix â€” capture wheel before anything else consumes it
         ImGuiContext& g = *GImGui;
         if (ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem))
         {
@@ -1199,7 +1321,7 @@ private:
         //}
         renderPreview();
         ImGui::EndChild();
-       
+
     }
 
     // -----------------------------------------------------------------------
@@ -1252,20 +1374,20 @@ private:
             ImGui::TreePop();
         }
     }
-    void renderBuildPlates(domain::v1::BuildPlate*  plate)
+    void renderBuildPlates(domain::v1::BuildPlate* plate)
     {
         ImGuiTreeNodeFlags flags =
             ImGuiTreeNodeFlags_DefaultOpen |
             ImGuiTreeNodeFlags_OpenOnArrow |
             ImGuiTreeNodeFlags_SpanAvailWidth;
-        
-        ImGui::PushID(plate->Id.c_str() );
 
-        bool selected = (m_selectedPlateId >-1 );
+        ImGui::PushID(plate->Id.c_str());
+
+        bool selected = (m_selectedPlateId > -1);
 
         std::string label = plate->name.c_str();
 
-        
+
         if (ImGui::Selectable(label.c_str(), selected,
             ImGuiSelectableFlags_SpanAllColumns))
         {
@@ -1297,13 +1419,13 @@ private:
 
         //if (open)
         //{
-            for (auto& asset : folder.importedAssets)
-                renderAsset(*asset);
+        for (auto& asset : folder.importedAssets)
+            renderAsset(*asset);
 
-            for (auto& sub : folder.folders)
-                renderFolder(sub);
+        for (auto& sub : folder.folders)
+            renderFolder(sub);
 
-            ImGui::TreePop();
+        ImGui::TreePop();
         //}
 
         ImGui::PopID();
@@ -1321,7 +1443,7 @@ private:
         float indent = ImGui::GetTreeNodeToLabelSpacing();
         ImGui::Indent(indent);
 
-        // Icon — coloured by accent status
+        // Icon â€” coloured by accent status
         ImVec4 iconCol = asset.isAccent
             ? ImVec4(0.40f, 0.80f, 1.00f, 1.0f)
             : ImVec4(0.65f, 0.65f, 0.65f, 1.0f);
@@ -1342,7 +1464,7 @@ private:
             ImGuiIO& io = ImGui::GetIO();
             if (io.KeyCtrl)
             {
-                // Ctrl+click — toggle this item
+                // Ctrl+click â€” toggle this item
                 if (selected)
                     s_selected.erase(asset.Id);
                 else
@@ -1350,17 +1472,17 @@ private:
             }
             else if (io.KeyShift && !s_selected.empty())
             {
-                // Shift+click — range select (requires knowing render order)
+                // Shift+click â€” range select (requires knowing render order)
                 // Simple version: just add this item
                 s_selected.insert(asset.Id);
             }
             else
             {
-                // Plain click — select only this item
+                // Plain click â€” select only this item
                 s_selected.clear();
                 s_selected.insert(asset.Id);
                 //m_selectedAssetId = asset.Id;
-                 
+
                 StlLoaderAdapter loader = StlLoaderAdapter(*m_modelCache);
                 if (loader.load(asset.fileLocation))
                 {
@@ -1370,9 +1492,9 @@ private:
                 }
             }
 
-            
+
         }
-        
+
         ImGui::Unindent(indent);
         ImGui::PopID();
 
@@ -1382,8 +1504,8 @@ private:
             draggedAssetPointers.reserve(s_selected.size());
             std::string flattenedPayload = "";
 
-            for (std::string selectedId: s_selected) {
-                for (auto& assetItem : m_modelCache->assets ) {
+            for (std::string selectedId : s_selected) {
+                for (auto& assetItem : m_modelCache->assets) {
                     if (assetItem.first == selectedId) {
                         // Store the memory location of this specific asset instan-?ce
                         flattenedPayload = flattenedPayload + assetItem.second->fileLocation.c_str() + "\n";
@@ -1412,10 +1534,10 @@ private:
     // Properties panel
     // -----------------------------------------------------------------------
     void renderProperties()
-        { 
+    {
 
-        if(s_selected.size() == 0 || s_selected.size() > 1)
-        //if (m_selectedAssetId < 0)
+        if (s_selected.size() == 0 || s_selected.size() > 1)
+            //if (m_selectedAssetId < 0)
         {
             ImGui::TextDisabled("Select a file to view properties.");
             return;
@@ -1443,7 +1565,7 @@ private:
                     asset.name = buf;
             }
 
-            // Quantity — writes back to asset directly
+            // Quantity â€” writes back to asset directly
             ImGui::InputInt("Quantity##q", &asset.quantity);
             if (asset.quantity < 1) asset.quantity = 1;
 
@@ -1462,7 +1584,7 @@ private:
                 readOnlyRow("Notes", asset.description);
         }
 
-        
+
     }
 
     // -----------------------------------------------------------------------
@@ -1470,7 +1592,7 @@ private:
     // -----------------------------------------------------------------------
     void renderPreview()
     {
-        // Use the child window's inner size — guaranteed non-zero since
+        // Use the child window's inner size â€” guaranteed non-zero since
         // we're inside BeginChild("##slicer_preview")
         ImVec2 avail = ImGui::GetContentRegionAvail();
         uint32_t w = (uint32_t)std::max(4.0f, avail.x);
@@ -1584,203 +1706,81 @@ private:
     {
         m_buildPlateRenderer->tick(ImGui::GetIO().DeltaTime);
 
-        bool showToolpathView = m_viewportController && m_viewportController->activeId() == "toolpath_ribbon";
+        bool showToolpathView = m_viewportController && m_viewportController->activeId() == "debug_comparison";
         ImVec2 viewportTopLeft = ImGui::GetCursorScreenPos();
         ImVec2 avail = ImGui::GetContentRegionAvail();
 
-        if (showToolpathView)
+        /*if (showToolpathView)
+         {*/
+        uint32_t w = (uint32_t)avail.x, h = (uint32_t)avail.y;
+        GLuint tex = m_viewportController->renderAndGetTexture(w, h, ImGui::GetIO().DeltaTime, ImGui::IsWindowHovered());
+        if (tex) ImGui::Image((ImTextureID)(intptr_t)tex, avail);
+        if (ImGui::IsItemHovered()) m_viewportController->zoom(ImGui::GetIO().MouseWheel * 10.0f);
+
+
+        renderGizmoOverlay(viewportTopLeft, avail);
+
+        if (m_viewportController->activeLayerCount() > 0)
         {
-            uint32_t w = (uint32_t)avail.x, h = (uint32_t)avail.y;
-            GLuint tex = m_viewportController->renderAndGetTexture(w, h, ImGui::GetIO().DeltaTime, ImGui::IsWindowHovered());
-            if (tex) ImGui::Image((ImTextureID)(intptr_t)tex, avail);
-            if (ImGui::IsItemHovered()) m_viewportController->zoom(ImGui::GetIO().MouseWheel * 10.0f);
+            //if (tex) ImGui::Image((ImTextureID)(intptr_t)tex, avail);
 
-            renderGizmoOverlay(viewportTopLeft, avail);
+            
 
-            if (showToolpathView && m_viewportController->activeLayerCount() > 0)
-            {
-                int maxLayer = m_viewportController->activeLayerCount() - 1;
-                int layer = m_viewportController->activeVisibleLayer();
+            m_viewportController->renderActiveUI(viewportTopLeft, avail);   // NEW â€” correct draw order, guaranteed on top
 
-                ImVec2 scrubPos(viewportTopLeft.x + 8.0f, viewportTopLeft.y + 8.0f);
-                ImVec2 scrubSize(28.0f, avail.y - 16.0f);
+            int maxLayer = m_viewportController->activeLayerCount() - 1;
+            static int startLayer = 0, endLayer = 0;
 
-                ImGui::SetCursorScreenPos(scrubPos);
-                if (ImGui::VSliderInt("##layerScrub", scrubSize, &layer, 0, maxLayer, "%d"))
-                    m_viewportController->setActiveVisibleLayer(layer);
+            ImVec2 scrubPos(viewportTopLeft.x + 8.0f, viewportTopLeft.y + 8.0f);
+            ImVec2 scrubSize(20.0f, avail.y - 16.0f);
 
-                if (ImGui::IsItemHovered())
-                    ImGui::SetTooltip("Layer %d / %d", layer, maxLayer);
-            }
+            ImGui::SetCursorScreenPos(scrubPos);
+            ImGui::VSliderInt("##layerStart", scrubSize, &startLayer, 0, maxLayer, "%d");
+
+            ImGui::SetCursorScreenPos(ImVec2(scrubPos.x + 28.0f, scrubPos.y));
+            ImGui::VSliderInt("##layerEnd", scrubSize, &endLayer, 0, maxLayer, "%d");
+
+            if (startLayer > endLayer) endLayer = startLayer;   // keep valid â€” start layer alone gives a single-layer view
+            //    m_viewportController->setActiveVisibleLayer(startLayer);   // needs updating to a range-setter, see below
+            //else
+            m_viewportController->setActiveVisibleLayerRange(startLayer, endLayer);
+
+            static bool showModel = true, showRibbon = true;
+
+            ImVec2 debugPos(viewportTopLeft.x + 150.0f, viewportTopLeft.y + 8.0f);
+            ImGui::SetCursorScreenPos(debugPos);
+
+            if (ImGui::Checkbox("Show Mesh", &showModel))
+                m_eventBus->publish("debug.toggle.model", showModel ? "1" : "0");
+
+            ImGui::SameLine();
+
+            if (ImGui::Checkbox("Show Ribbon", &showRibbon))
+                m_eventBus->publish("debug.toggle.ribbon", showRibbon ? "1" : "0");
+
+            ImVec2 debugPos2(viewportTopLeft.x + 150.0f, viewportTopLeft.y + 30.0f);
+            ImGui::SetCursorScreenPos(debugPos2);
+            static bool solidShader = false;
+            if (ImGui::Checkbox("Solid Shading", &solidShader))
+                m_eventBus->publish("debug.toggle.solidshader", solidShader ? "1" : "0");
+
         }
-        else if (m_buildPlateRenderer->isLoaded())
-        {
-            m_buildPlateRenderer->setRegistry(this->m_registry);
-            m_buildPlateRenderer->setViewportController(*m_viewportController);
-            m_buildPlateRenderer->renderWindow();
 
-            renderGizmoOverlay(viewportTopLeft, avail);
-        }
-        else
-        {
-            ImGui::TextDisabled("Select an asset to preview.");
-        }
+        
+        /*   }
+          else if (m_buildPlateRenderer->isLoaded())
+          {
+              m_buildPlateRenderer->setRegistry(this->m_registry);
+              m_buildPlateRenderer->setViewportController(*m_viewportController);
+              m_buildPlateRenderer->renderWindow();
+
+              renderGizmoOverlay(viewportTopLeft, avail);
+          }
+          else
+          {
+              ImGui::TextDisabled("Select an asset to preview.");
+          }*/
     }
-    //void renderBuildPlate()
-    //{
-    //    m_buildPlateRenderer->tick(ImGui::GetIO().DeltaTime);
-
-    //    bool showToolpathView = m_viewportController && m_viewportController->activeId() == "toolpath";
-
-    //    if (showToolpathView)
-    //    {
-    //        ImVec2 avail = ImGui::GetContentRegionAvail();
-    //        uint32_t w = (uint32_t)avail.x, h = (uint32_t)avail.y;
-
-    //        ImVec2 viewportTopLeft = ImGui::GetCursorScreenPos();
-    //        GLuint tex = m_viewportController->renderAndGetTexture(
-    //            w, h, ImGui::GetIO().DeltaTime, ImGui::IsWindowHovered());
-
-    //        if (tex)
-    //            ImGui::Image((ImTextureID)(intptr_t)tex, avail);
-
-    //        if (ImGui::IsItemHovered())
-    //            m_viewportController->zoom(ImGui::GetIO().MouseWheel * 10.0f);
-
-    //        const uint32_t gizmoSize = 200;
-    //        const float pad = 14.0f;
-    //        ImVec2 gizmoScreenPos(
-    //            viewportTopLeft.x + avail.x - gizmoSize - pad,
-    //            viewportTopLeft.y + pad);
-    //        ImVec2 gizmoCentre(gizmoScreenPos.x + gizmoSize * 0.5f, gizmoScreenPos.y + gizmoSize * 0.5f);
-
-    //        GLuint gizmoTex = m_viewportController->renderGizmoAndGetTexture(gizmoSize);
-
-    //        ImGui::SetCursorScreenPos(gizmoScreenPos);
-    //        if (gizmoTex)
-    //            ImGui::Image((ImTextureID)(intptr_t)gizmoTex, ImVec2((float)gizmoSize, (float)gizmoSize), ImVec2(0, 1), ImVec2(1, 0));
-
-    //        ImDrawList* dl = ImGui::GetWindowDrawList();
-
-    //        // ---- Labels ----
-    //        auto* gizmo = m_viewportController->gizmo();   // needs a small accessor added to ViewportController
-    //        struct LabelDef { glm::vec3 centre; glm::vec3 normal; const char* text; };
-    //        LabelDef labels[] = {
-    //            {{ 0,  1,  0}, { 0, 1, 0}, "TOP"  },
-    //            {{ 0,  0,  1}, { 0, 0, 1}, "FRONT"},
-    //            {{ 1,  0,  0}, { 1, 0, 0}, "RIGHT"},
-    //            {{ 0,  0, -1}, { 0, 0,-1}, "BACK" },
-    //            {{-1,  0,  0}, {-1, 0, 0}, "LEFT" },
-    //            {{ 0, -1,  0}, { 0,-1, 0}, "BTM"  },
-    //        };
-    //        const float faceS = 0.72f;
-    //        glm::vec3 camFwd = gizmo->cameraForward();
-    //        for (auto& lb : labels)
-    //        {
-    //            if (glm::dot(lb.normal, camFwd) >= -0.1f) continue;
-
-    //            glm::vec2 local = gizmo->project2D(lb.normal * faceS, gizmoSize, gizmoSize);
-    //            ImVec2 screenPt(gizmoScreenPos.x + local.x, gizmoScreenPos.y + local.y);
-    //            ImVec2 ts = ImGui::CalcTextSize(lb.text);
-    //            float bpad = 3.0f;
-    //            dl->AddRectFilled(
-    //                ImVec2(screenPt.x - ts.x * 0.5f - bpad, screenPt.y - ts.y * 0.5f - bpad),
-    //                ImVec2(screenPt.x + ts.x * 0.5f + bpad, screenPt.y + ts.y * 0.5f + bpad),
-    //                IM_COL32(0, 0, 0, 90), 3.0f);
-    //            dl->AddText(ImVec2(screenPt.x - ts.x * 0.5f, screenPt.y - ts.y * 0.5f),
-    //                IM_COL32(255, 255, 255, 245), lb.text);
-    //        }
-
-    //        // ---- Drag / click input ----
-    //        ImVec2 mousePos = ImGui::GetMousePos();
-
-    //        ImGui::SetCursorScreenPos(gizmoScreenPos);
-    //        ImGui::InvisibleButton("##camgizmo_toolpath", ImVec2((float)gizmoSize, (float)gizmoSize));
-
-    //        bool clicked = ImGui::IsItemClicked(ImGuiMouseButton_Left);
-    //        bool dragging = ImGui::IsItemActive() && ImGui::IsMouseDragging(ImGuiMouseButton_Left);
-
-    //        if (dragging)
-    //        {
-    //            ImVec2 delta = ImGui::GetIO().MouseDelta;
-    //            // Radians throughout, unlike the original degree-mixed formula —
-    //            // ViewportController::orbit() already clamps pitch to +-1.5 rad.
-    //            m_viewportController->orbit(delta.x * 0.005f, -delta.y * 0.005f);
-    //        }
-    //        else if (clicked)
-    //        {
-    //            float localX = mousePos.x - gizmoScreenPos.x;
-    //            float localY = mousePos.y - gizmoScreenPos.y;
-    //            m_viewportController->handleGizmoClick(localX, localY, gizmoSize);   // gizmoSize now passed
-    //        }
-
-    //        // ---- Orbit arrows ----
-    //        float arrowR = gizmoSize * 0.52f;
-    //        struct Arrow { float angle; float dYawRad; float dPitchDeg; };
-    //        Arrow arrows[] = {
-    //            { 0.0f,                   0.25f,  0.0f },
-    //            { glm::pi<float>(),      -0.25f,  0.0f },
-    //            { glm::half_pi<float>(),  0.0f,  15.0f },
-    //            {-glm::half_pi<float>(),  0.0f, -15.0f },
-    //        };
-    //        for (auto& arr : arrows)
-    //        {
-    //            float ax = gizmoCentre.x + std::cos(arr.angle) * arrowR;
-    //            float ay = gizmoCentre.y - std::sin(arr.angle) * arrowR;
-    //            float as = 9.0f;
-    //            float tipAngle = arr.angle + glm::pi<float>();
-
-    //            ImVec2 tip(ax + std::cos(tipAngle) * as, ay - std::sin(tipAngle) * as);
-    //            ImVec2 lft(ax + std::cos(tipAngle + glm::half_pi<float>()) * as * 0.5f, ay - std::sin(tipAngle + glm::half_pi<float>()) * as * 0.5f);
-    //            ImVec2 rgt(ax + std::cos(tipAngle - glm::half_pi<float>()) * as * 0.5f, ay - std::sin(tipAngle - glm::half_pi<float>()) * as * 0.5f);
-
-    //            bool hov = glm::length(glm::vec2(mousePos.x - ax, mousePos.y - ay)) < as * 1.5f;
-    //            ImU32 col = hov ? IM_COL32(230, 230, 230, 255) : IM_COL32(160, 160, 165, 200);
-    //            dl->AddTriangleFilled(tip, lft, rgt, col);
-
-    //            if (hov && ImGui::IsMouseClicked(ImGuiMouseButton_Left))
-    //                m_viewportController->orbit(arr.dYawRad, glm::radians(arr.dPitchDeg));
-    //        }
-    //    }
-    //    else if (m_buildPlateRenderer->isLoaded())
-    //    {
-    //        m_buildPlateRenderer->setRegistry(this->m_registry);
-    //        m_buildPlateRenderer->renderWindow();
-    //    }
-    //    else
-    //    {
-    //        ImGui::TextDisabled("Select an asset to preview.");
-    //    }
-
-
-
-
-
-    //    //// Use the child window's inner size — guaranteed non-zero since
-    //    //// we're inside BeginChild("##slicer_preview")
-    //    //ImVec2 avail = ImGui::GetContentRegionAvail();
-    //    //uint32_t w = (uint32_t)std::max(4.0f, avail.x);
-    //    //uint32_t h = (uint32_t)std::max(4.0f, avail.y);
-
-    //    ////printf("[Preview] renderBuildPlate: w=%u h=%u loaded=%d\n",
-    //    ////    w, h,m_buildPlateRenderer.isLoaded() ? 1 : 0);
-
-    //    //// Tick auto-rotation
-    //    ////m_preview.paused = ImGui::IsWindowHovered();
-    //    //m_buildPlateRenderer->tick(ImGui::GetIO().DeltaTime);
-
-    //    //if (m_buildPlateRenderer->isLoaded())
-    //    //{
-    //    //    m_buildPlateRenderer->setRegistry(this->m_registry);
-
-    //    //    m_buildPlateRenderer->renderWindow();
-    //    //}
-    //    //else
-    //    //{
-    //    //    ImGui::TextDisabled("Select an asset to preview.");
-    //    //}
-    //}
-
     void sectionHeader(const char* title)
     {
         ImGui::Spacing();
@@ -1808,7 +1808,7 @@ private:
     }
 };
 
- 
+
 
 
 // -----------------------------------------------------------------------

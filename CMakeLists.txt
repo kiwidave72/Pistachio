@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.15)
+ï»¿cmake_minimum_required(VERSION 3.15)
 project(Pistachio VERSION 1.0.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
@@ -448,7 +448,9 @@ add_library(pistachio_slicer_core SHARED
     src/adapters/ui/plugins/SlicerCorePlugin/core/SlicerCorePlugin.cpp
     src/adapters/ui/plugins/SlicerCorePlugin/core/FolderScanner.cpp
     src/adapters/ui/plugins/SlicerCorePlugin/core/StlPreviewRenderer.cpp
+    
     src/adapters/ui/plugins/SlicerCorePlugin/domain/Project.cpp
+
     src/adapters/ui/plugins/SlicerCorePlugin/core/BuildPLateRenderer.cpp
     src/adapters/ui/plugins/SlicerCorePlugin/domain/BoundaryBox.h
     src/adapters/ui/plugins/SlicerCorePlugin/domain/BoundaryBox.cpp
@@ -456,7 +458,7 @@ add_library(pistachio_slicer_core SHARED
     src/adapters/ui/plugins/SlicerCorePlugin/core/ModelInstanceFactory.cpp
     src/adapters/ui/plugins/SlicerCorePlugin/core/SelectionManager.cpp
     src/adapters/ui/plugins/SlicerCorePlugin/core/NavigationManager.cpp
-
+    src/adapters/ui/plugins/SlicerCorePlugin/core/EditableSceneGLRender.cpp
 
 )
 
@@ -492,13 +494,14 @@ foreach(cfg Debug Release RelWithDebInfo MinSizeRel)
 endforeach()
 
 # -------------------------
-# pistachio_toolpath_visualization (ToolpathVisualizationPlugin — IUiModule)
+# pistachio_toolpath_visualization (ToolpathVisualizationPlugin ï¿½ IUiModule)
 # -------------------------
 add_library(pistachio_toolpath_visualization SHARED
     src/adapters/ui/plugins/ToolpathVisualizationPlugin/ToolpathVisualizationPlugin.cpp
     src/adapters/ui/plugins/ToolpathVisualizationPlugin/TestGridGLRender.cpp
     src/adapters/ui/plugins/ToolpathVisualizationPlugin/ToolpathRibbonGLRender.cpp 
     src/adapters/ui/plugins/ToolpathVisualizationPlugin/ToolpathRibbonGLMesh.cpp
+    src/adapters/ui/plugins/ToolpathVisualizationPlugin/DebugComparisonGLRender.cpp
 
 )
 
@@ -516,7 +519,7 @@ target_link_libraries(pistachio_toolpath_visualization PRIVATE
     pistachio_core
 )
 
-# Output directory is "plugins", not "services" — this is an IUiModule,
+# Output directory is "plugins", not "services" ï¿½ this is an IUiModule,
 # loaded in Phase 2 by UiPluginRegistry, not ServiceModuleRegistry.
 foreach(cfg Debug Release RelWithDebInfo MinSizeRel)
     string(TOUPPER "${cfg}" CFGU)
@@ -528,7 +531,7 @@ foreach(cfg Debug Release RelWithDebInfo MinSizeRel)
 endforeach()
 
 # -------------------------
-# pistachio_kinetica (ToolpathEnginePlugin — IServiceModule)
+# pistachio_kinetica (ToolpathEnginePlugin ï¿½ IServiceModule)
 # -------------------------
 add_library(pistachio_kinetica SHARED
     src/adapters/plugins/ToolpathEnginePlugin/ToolpathEnginePlugin.cpp
@@ -554,7 +557,7 @@ target_link_libraries(pistachio_kinetica PRIVATE
     Clipper2
 )
 
-# Output directory is "services", not "plugins" — this is what
+# Output directory is "services", not "plugins" ï¿½ this is what
 # ServiceModuleRegistry::getServicesDir() scans.
 foreach(cfg Debug Release RelWithDebInfo MinSizeRel)
     string(TOUPPER "${cfg}" CFGU)
@@ -605,7 +608,7 @@ target_link_libraries(pistachio_service_stub PRIVATE
     pistachio_core
 )
 
-# NOTE: output directory is "services", not "plugins" — this is what
+# NOTE: output directory is "services", not "plugins" ï¿½ this is what
 # ServiceModuleRegistry::getServicesDir() scans. Every other plugin
 # target in this file outputs to bin/<cfg>/plugins; this one must not.
 foreach(cfg Debug Release RelWithDebInfo MinSizeRel)

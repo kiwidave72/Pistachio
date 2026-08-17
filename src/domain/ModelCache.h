@@ -8,25 +8,18 @@
 #include <sstream>
 #include <fstream>
 #include <mutex>
- 
 
-#include <nlohmann/json.hpp>  
- 
+#include <nlohmann/json.hpp>
+
 #include <glm/glm.hpp>
 
-namespace glm {
-    inline void to_json(nlohmann::json& j, const vec3& v) {
-        j = nlohmann::json{ {"x", v.x}, {"y", v.y}, {"z", v.z} };
-    }
-    inline void from_json(const nlohmann::json& j, vec3& v) {
-        j.at("x").get_to(v.x);
-        j.at("y").get_to(v.y);
-        j.at("z").get_to(v.z);
-    }
-}
+#include "domain/Transform.h"
 
+// glm::vec3 to_json/from_json — REMOVED. Now provided via
+// Transform.h -> domain/GlmJson.h, single canonical definition,
+// no longer duplicated here.
 
-namespace domain::v1{
+namespace domain::v1 {
 
     class Vertex
     {
@@ -108,70 +101,8 @@ namespace domain::v1{
         }
     };
 
-   
+    class Model {
 
-    struct Transform
-    {
-        glm::vec3 position;
-        glm::vec3 rotation;
-        glm::vec3 scale;
-
-        glm::mat4 matrix() const
-        {
-            glm::mat4 t = glm::translate(glm::mat4(1.0f), position);
-
-            glm::mat4 r = glm::mat4(1.0f);
-            r = glm::rotate(r, glm::radians(rotation.x), glm::vec3(1, 0, 0));
-            r = glm::rotate(r, glm::radians(rotation.y), glm::vec3(0, 1, 0));
-            r = glm::rotate(r, glm::radians(rotation.z), glm::vec3(0, 0, 1));
-
-            glm::mat4 s = glm::scale(glm::mat4(1.0f), scale);
-
-            return t * r * s;
-        }
-
-        void translate(const glm::vec3& delta)
-        {
-            position += delta;
-        }
-
-        void rotate(const glm::vec3& delta)
-        {
-            rotation += delta;
-        }
-
-        void setScale(const glm::vec3& value)
-        {
-            scale = value;
-        }
-
-        void reset()
-        {
-            position = { 0.0f, 0.0f, 0.0f };
-            rotation = { 0.0f, 0.0f, 0.0f };
-            scale = { 1.0f, 1.0f, 1.0f };
-        }
-    };
-    inline void to_json(nlohmann::json& j, const Transform& t)
-    {
-        j =
-        {
-            {"position", t.position},
-            {"rotation", t.rotation},
-            {"scale", t.scale}
-        };
-    }
-
-    inline void from_json(const nlohmann::json& j, Transform& t)
-    {
-        if (j.contains("position")) j.at("position").get_to(t.position);
-        if (j.contains("rotation")) j.at("rotation").get_to(t.rotation);
-        if (j.contains("scale")) j.at("scale").get_to(t.scale);
-    }
-
-
-    class Model{
-        
     public:
         std::string Id;
         std::string name;
@@ -179,7 +110,7 @@ namespace domain::v1{
         std::string fileName;
         std::string fileLocation;
         std::shared_ptr<Mesh> mesh;
-       
+
     };
 
     // 1. Convert Model instance to JSON
@@ -189,19 +120,19 @@ namespace domain::v1{
         j["label"] = m.label;
         j["fileName"] = m.fileName;
         j["fileLocation"] = m.fileLocation;
-          
+
     }
 
     // 2. Convert JSON back into a Model instance
     inline void from_json(const nlohmann::json& j, Model& m) {
-  
+
         // Deserialize primitive and string types safely
         if (j.contains("Id")) j["Id"].get_to(m.Id);
         if (j.contains("name")) j["name"].get_to(m.name);
         if (j.contains("label")) j["label"].get_to(m.label);
         if (j.contains("fileName")) j["fileName"].get_to(m.fileName);
         if (j.contains("fileLocation")) j["fileLocation"].get_to(m.fileLocation);
-          
+
     }
 
 
@@ -209,7 +140,7 @@ namespace domain::v1{
     class ImportedAsset
     {
     public:
-        std::string         Id ;
+        std::string         Id;
         std::string name;          // clean display name (no xN/[A])
         std::string label;         // original filename stem
         std::string fileName;      // filename with extension
@@ -235,6 +166,6 @@ namespace domain::v1{
     };
     // ModelCache.cpp
 
- 
-   
+
+
 }

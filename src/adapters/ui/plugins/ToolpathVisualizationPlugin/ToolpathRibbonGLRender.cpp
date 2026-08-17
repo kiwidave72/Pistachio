@@ -1,11 +1,15 @@
-#ifdef _WIN32
+﻿#ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h>
 #endif
-
+#include <imgui.h>
 #include "adapters/ui/plugins/ToolpathVisualizationPlugin/ToolpathRibbonGLRender.h"
 #include "domain/ToolpathSerialization.h"
+#include "domain/ToolpathBinaryIO.h"
+#include "domain/RenderCameraContext.h"
+#include "domain/AxisConvention.h"
+
 
 #include <glad/glad.h>
 #include <glm/gtc/matrix_transform.hpp>
@@ -15,6 +19,8 @@
 #include <string>
 #include <cmath>
 #include <cstdio>
+#include <vector>
+
 
 namespace {
 
@@ -75,6 +81,7 @@ void main() { FragColor = vec4(vColor, 1.0); }
         return p;
     }
 
+
 } // anonymous namespace
 
 ToolpathRibbonGLRender::ToolpathRibbonGLRender() = default;
@@ -86,7 +93,20 @@ ToolpathRibbonGLRender::~ToolpathRibbonGLRender()
         glDeleteFramebuffers(1, &m_fbo);
         glDeleteTextures(1, &m_colorTexture);
         glDeleteRenderbuffers(1, &m_depthRenderbuffer);
+
+
     }
+}
+void ToolpathRibbonGLRender::setVisibleLayer(int layer)
+{
+    setVisibleLayerRange(0, layer);
+}
+
+
+void ToolpathRibbonGLRender::setVisibleLayerRange(int startLayer, int endLayer)
+{
+    m_layerRangeStart = startLayer;
+    m_layerRangeEnd = endLayer;
 }
 
 void ToolpathRibbonGLRender::ensureGl()
@@ -120,6 +140,38 @@ void ToolpathRibbonGLRender::ensureGl()
         m_shader = linkProgram(vs, fs);
         glDeleteShader(vs);
         glDeleteShader(fs);
+
+
+
+        // Reference grid, Z=0 plane � same shader, drawn with the SAME mvp as
+        // the ribbon itself, so any Z misalignment (model floating above/below
+        // this plane) is immediately visible, not inferred from printed numbers.
+        std::vector<glm::vec3> gridLines;
+        const float bedX = 350.0f, bedY = 350.0f;   // TODO: read from config, hardcoded for this test
+        const float step = 20.0f;
+        for (float x = 0; x <= bedX; x += step)
+        {
+            gridLines.push_back(glm::vec3(x, 0, 0));
+            gridLines.push_back(glm::vec3(x, bedY, 0));
+        }
+        for (float y = 0; y <= bedY; y += step)
+        {
+            gridLines.push_back(glm::vec3(0, y, 0));
+            gridLines.push_back(glm::vec3(bedX, y, 0));
+        }
+        m_gridVertexCount = (int)gridLines.size();
+
+        glGenVertexArrays(1, &m_gridVao);
+        glGenBuffers(1, &m_gridVbo);
+        glBindVertexArray(m_gridVao);
+        glBindBuffer(GL_ARRAY_BUFFER, m_gridVbo);
+        glBufferData(GL_ARRAY_BUFFER, gridLines.size() * sizeof(glm::vec3), gridLines.data(), GL_STATIC_DRAW);
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(glm::vec3), (void*)0);
+        glBindVertexArray(0);
+
+
+
 
         m_glInitialized = true;
         printf("[ToolpathRibbonGLRender] GL initialised OK\n");
@@ -166,6 +218,20 @@ void ToolpathRibbonGLRender::setToolpath(const domain::v1::Toolpath& toolpath)
     ensureGl();
     m_mesh.build(toolpath);
     m_visibleLayer = m_mesh.layerCount() - 1;   // default: show everything
+    m_layerRangeStart = 0;
+    m_layerRangeEnd = m_mesh.layerCount() - 1;
+
+
+    if (!toolpath.layers.empty())
+    {
+        auto& firstLayer = toolpath.layers.front();
+        auto& lastLayer = toolpath.layers.back();
+        if (!firstLayer.segments.empty() && !lastLayer.segments.empty())
+        {
+            m_firstLayerFirstSegment = firstLayer.segments.front();
+            m_lastLayerLastSegment = lastLayer.segments.back();
+        }
+    }
 
     printf("[ToolpathRibbonGLRender] setToolpath: %d layers\n", m_mesh.layerCount());
 }
@@ -173,7 +239,7 @@ void ToolpathRibbonGLRender::setToolpath(const domain::v1::Toolpath& toolpath)
 void ToolpathRibbonGLRender::loadToolpath(const std::string& path)
 {
     domain::v1::Toolpath toolpath;
-    if (!domain::v1::loadToolpathFromFile(toolpath, path))
+    if (!domain::v1::loadToolpathBinary(toolpath, path))
     {
         printf("[ToolpathRibbonGLRender] FAILED to load %s\n", path.c_str());
         return;
@@ -183,13 +249,63 @@ void ToolpathRibbonGLRender::loadToolpath(const std::string& path)
     printf("[ToolpathRibbonGLRender] loaded %s\n", path.c_str());
 }
 
-void ToolpathRibbonGLRender::setVisibleLayer(int layer)
+
+void ToolpathRibbonGLRender::renderUI(ImVec2 topLeft, ImVec2 size)
 {
-    m_visibleLayer = glm::clamp(layer, 0, m_mesh.layerCount() - 1);
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+
+    // char fpsText[32];
+    // snprintf(fpsText, sizeof(fpsText), "%.1f FPS", m_fpsDisplay);
+
+    // ImVec2 textSize = ImGui::CalcTextSize(fpsText);
+    // ImVec2 textPos(topLeft.x + size.x - textSize.x - 00.0f, topLeft.y + size.y - textSize.y - 8.0f);
+
+    ///* dl->AddRectFilled(ImVec2(textPos.x - 4, textPos.y - 2), ImVec2(textPos.x + textSize.x + 4, textPos.y + textSize.y + 2), IM_COL32(0, 0, 0, 130), 3.0f);
+    // dl->AddText(textPos, IM_COL32(255, 255, 255, 230), fpsText);*/
+
+    // //topLeft.x = topLeft.x;
+    // //topLeft.y = topLeft.y;
+
+    char camerStateText[80];
+    snprintf(camerStateText, sizeof(camerStateText), "Yaw %.1f  ,Pitch %.1f ,Distance %.1f ", m_cameraState.yaw, m_cameraState.pitch, m_cameraState.distance);
+
+    ImVec2 camerStateSize = ImGui::CalcTextSize(camerStateText);
+    ImVec2 camerStatePos(topLeft.x + size.x - camerStateSize.x - 10.0f, topLeft.y + size.y - camerStateSize.y - 228.0f);
+
+    dl->AddRectFilled(ImVec2(camerStatePos.x - 4, camerStatePos.y - 2), ImVec2(camerStatePos.x + camerStateSize.x + 4, camerStatePos.y + camerStateSize.y + 2), IM_COL32(0, 0, 0, 130), 3.0f);
+    dl->AddText(camerStatePos, IM_COL32(255, 255, 255, 230), camerStateText);
+
+    // ... existing FPS block stays here ...
+
+
+    auto worldPos = [&](const glm::vec3& raw) {
+        return glm::vec3(m_lastModelMatrix * glm::vec4(raw, 1.0f));
+        };
+
+    glm::vec3 firstRaw = m_firstLayerFirstSegment.start.position;
+    glm::vec3 firstWorld = worldPos(firstRaw);
+    glm::vec3 lastRaw = m_lastLayerLastSegment.start.position;
+    glm::vec3 lastWorld = worldPos(lastRaw);
+
+    char buf[256];
+
+    snprintf(buf, sizeof(buf), "Layer0 raw=(%.2f,%.2f,%.2f) world=(%.2f,%.2f,%.2f)",
+        firstRaw.x, firstRaw.y, firstRaw.z, firstWorld.x, firstWorld.y, firstWorld.z);
+
+    ImVec2 textSize2 = ImGui::CalcTextSize(buf);
+    ImVec2 textPos2(topLeft.x + size.x - textSize2.x - 10.0f, topLeft.y + size.y - textSize2.y - 148.0f);
+
+    dl->AddText(textPos2, IM_COL32(255, 255, 0, 255), buf);
+    textPos2.y += ImGui::GetTextLineHeight() + 2;
+
+    snprintf(buf, sizeof(buf), "LayerN raw=(%.2f,%.2f,%.2f) world=(%.2f,%.2f,%.2f)",
+        lastRaw.x, lastRaw.y, lastRaw.z, lastWorld.x, lastWorld.y, lastWorld.z);
+    dl->AddText(textPos2, IM_COL32(255, 255, 0, 255), buf);
+
+
+
 }
 
-
- 
 void ToolpathRibbonGLRender::render(uint32_t width, uint32_t height, const CameraState& camera, const ViewportRenderContext& ctx)
 {
 
@@ -200,6 +316,29 @@ void ToolpathRibbonGLRender::render(uint32_t width, uint32_t height, const Camer
     ensureGl();
     if (!m_glInitialized) return;
 
+    ImVec2 avail = ImGui::GetContentRegionAvail();
+    uint32_t w = (uint32_t)std::max(4.0f, avail.x);
+    uint32_t h = (uint32_t)std::max(4.0f, avail.y);
+    ImVec2 cursorPos = ImGui::GetCursorScreenPos();
+
+    // --- Delta time ---
+    auto now = std::chrono::steady_clock::now();
+    float dt = std::chrono::duration<float>(now - m_lastFrameTime).count();
+    m_lastFrameTime = now;
+    dt = std::min(dt, 0.1f); // clamp to avoid huge jumps after stalls/breakpoints
+
+    dt = std::min(dt, 0.1f);
+
+    m_fpsAccumTime += dt;
+    m_fpsFrameCount++;
+    if (m_fpsAccumTime >= 0.5f)   // refresh twice a second � a raw per-frame number is too jittery to read
+    {
+        m_fpsDisplay = m_fpsFrameCount / m_fpsAccumTime;
+        m_fpsAccumTime = 0.0f;
+        m_fpsFrameCount = 0;
+    }
+
+
     ensureFramebuffer(width, height);
 
     glBindFramebuffer(GL_FRAMEBUFFER, m_fbo);
@@ -208,28 +347,72 @@ void ToolpathRibbonGLRender::render(uint32_t width, uint32_t height, const Camer
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
     glEnable(GL_DEPTH_TEST);
 
+
+    m_cameraState = camera;
+
     float aspect = (float)width / (float)height;
-    glm::mat4 proj = glm::perspective(camera.fovYRadians, aspect, camera.nearPlane, camera.farPlane);
 
-    glm::vec3 camPos(
-        camera.target.x + camera.distance * cos(camera.pitch) * cos(camera.yaw),
-        camera.target.y + camera.distance * sin(camera.pitch),
-        camera.target.z + camera.distance * cos(camera.pitch) * sin(camera.yaw));
+    // Same fix as DebugComparisonGLRender: this view previously had its
+    // own THIRD, separately hand-rolled camera formula (computed right/
+    // up/forward manually, then discarded them anyway in favor of
+    // glm::lookAt() with a hardcoded world-up of (0,1,0) -- meaning the
+    // "Cam Axis" toggle had zero effect here, and it never went through
+    // the same fix as the other two views). Get the canonical camera from
+    // buildCameraContext() (single source of truth), then remap into this
+    // view's native Z-up "bed space" via domain::v1::engineToDomain() --
+    // this view's geometry, like DebugComparisonGLRender's, is never
+    // axisFix'd, only shifted by bedToSceneTransform below.
+    domain::v1::RenderCameraContext engineContext = domain::v1::buildCameraContext(camera, aspect);
 
-    glm::mat4 view = glm::lookAt(camPos, camera.target, glm::vec3(0, 1, 0));
-    glm::mat4 mvp = proj * view;
+    glm::vec3 engRight(engineContext.view[0].x, engineContext.view[1].x, engineContext.view[2].x);
+    glm::vec3 engUp(engineContext.view[0].y, engineContext.view[1].y, engineContext.view[2].y);
+    glm::vec3 engForward = -glm::vec3(engineContext.view[0].z, engineContext.view[1].z, engineContext.view[2].z);
+
+    glm::vec3 camPos = domain::v1::engineToDomain(engineContext.camPos);
+    glm::vec3 right = domain::v1::engineToDomain(engRight);
+    glm::vec3 up = domain::v1::engineToDomain(engUp);
+    glm::vec3 forward = domain::v1::engineToDomain(engForward);
+
+    glm::mat4 view(
+        right.x, up.x, -forward.x, 0.0f,
+        right.y, up.y, -forward.y, 0.0f,
+        right.z, up.z, -forward.z, 0.0f,
+        -glm::dot(right, camPos), -glm::dot(up, camPos), glm::dot(forward, camPos), 1.0f
+    );
+
+    int bedSizeX = 350;
+    int bedSizeY = 350;
+    glm::mat4 bedToSceneTransform = glm::translate(glm::mat4(1.0f),
+        glm::vec3(-bedSizeX * 0.5f, -bedSizeY * 0.5f, 0.0f));   // inverse of ImportPhase's corner-offset
+
+    glm::mat4 modelMatrix = bedToSceneTransform;
+    glm::mat4 mvp = engineContext.proj * view * modelMatrix;
+    m_lastModelMatrix = modelMatrix;
 
     glUseProgram(m_shader);
     glUniformMatrix4fv(glGetUniformLocation(m_shader, "uMVP"), 1, GL_FALSE, glm::value_ptr(mvp));
 
+
+    uint32_t offset = 0, count = 0;
+    m_mesh.indexRangeForLayers(m_layerRangeStart, m_layerRangeEnd, offset, count);
+
     glBindVertexArray(m_mesh.vao());
-    uint32_t count = m_mesh.indexCountForLayer(m_visibleLayer);
     if (count > 0)
-        glDrawElements(GL_TRIANGLES, count, GL_UNSIGNED_INT, (void*)0);
+        glDrawElements(GL_TRIANGLES, count, GL_UNSIGNED_INT, (void*)(uintptr_t)(offset * sizeof(uint32_t)));
+    glBindVertexArray(0);
+
+    // NEW POSITION � grid, still inside the FBO binding
+    glUseProgram(m_shader);
+    glUniformMatrix4fv(glGetUniformLocation(m_shader, "uMVP"), 1, GL_FALSE, glm::value_ptr(mvp));
+    glBindVertexArray(m_gridVao);
+    glDrawArrays(GL_LINES, 0, m_gridVertexCount);
     glBindVertexArray(0);
 
     glDisable(GL_DEPTH_TEST);
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
+
+
+
 }
 
 GLuint ToolpathRibbonGLRender::getTexture() const

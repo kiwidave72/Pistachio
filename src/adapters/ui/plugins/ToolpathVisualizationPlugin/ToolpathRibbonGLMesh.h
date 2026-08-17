@@ -35,6 +35,8 @@ public:
 
     GLuint vao() const { return m_vao; }
 
+    void indexRangeForLayers(int startLayer, int endLayer, uint32_t& outOffset, uint32_t& outCount) const;
+
     // Cumulative index count through layer N (inclusive) — pass directly
     // as the count argument to glDrawElements, always starting from
     // index 0. layerCount() gives the valid range for a scrubber UI.

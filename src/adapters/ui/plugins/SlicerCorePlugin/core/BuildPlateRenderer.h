@@ -5,18 +5,19 @@
 #include "adapters/ui/ContributionRegistry.h"
 #include "SelectionManager.h"
 #include "domain/buildplate.h"
+
 #include <glad/glad.h>
 #include <chrono>    
 
+#include "domain/RenderModel.h"
+#include "domain/raycastHit.h"
 #include "NavigationManager.h"
 #include "adapters/rendering/ViewportController.h"
 #include "ports/I3DViewportGLRender.h"
 
 namespace slicer {
 
-    // Forward declaration
-    struct RaycastHit;
-
+   
     struct SceneBounds {
         glm::vec3 min{ FLT_MAX,  FLT_MAX,  FLT_MAX };
         glm::vec3 max{ -FLT_MAX, -FLT_MAX, -FLT_MAX };
@@ -71,20 +72,20 @@ namespace slicer {
         void render() const;
     };
 
-    // Raycast hit result structure
-    struct RaycastHit {
-        bool hit = false;
-        std::string instanceId;
-        class RenderModel* renderModel = nullptr;
-        std::shared_ptr<domain::v1::Model> model = nullptr;
-        glm::vec3 point;
-        glm::vec3 normal;
-        float distance = std::numeric_limits<float>::max();
-        uint32_t triangleIndex = 0;
-        std::string buildPlateId;    
-        bool isPlateHit = false;
+    //// Raycast hit result structure
+    //struct RaycastHit {
+    //    bool hit = false;
+    //    std::string instanceId;
+    //    class RenderModel* renderModel = nullptr;
+    //    std::shared_ptr<domain::v1::Model> model = nullptr;
+    //    glm::vec3 point;
+    //    glm::vec3 normal;
+    //    float distance = std::numeric_limits<float>::max();
+    //    uint32_t triangleIndex = 0;
+    //    std::string buildPlateId;    
+    //    bool isPlateHit = false;
 
-    };
+    //};
 
 
     // Add this class before SlicerCorePlugin
@@ -124,49 +125,7 @@ namespace slicer {
     };
 
 
-
-    class RenderModel
-    {
-    public:
-
-        RenderModel();
-        ~RenderModel();
-
-
-        std::shared_ptr<domain::v1::Model> model;
-
-        GLuint vao = 0;
-        GLuint vbo = 0;
-        GLuint ebo = 0;
-
-        uint32_t indexCount = 0;
-        std::string instanceId;
-
-        bool raycastBoundsOnly(const glm::vec3& rayOrigin, const glm::vec3& rayDirection, glm::mat4 modelMatrix) const;
-
-        bool create(std::shared_ptr<domain::v1::Model> sourceModel, glm::vec2& center,bool isBuildPlateModel = false);
-        void createVertixBuffer();
-        glm::mat4 getBoundingBoxMatrix(const Transform& transform, glm::vec2 layoutOffset) const;
-         void render(glm::vec3 color, 
-                const Transform& transform,
-                    GLuint shader, 
-                    glm::mat4 m_view, 
-                    glm::mat4 m_proj, 
-                    glm::vec3 m_camPos,
-                    glm::vec2 center, 
-                    float ghostFactor = 1.0f, bool isPlate=false) const;
-        
-
-        // Raycasting methods
-        glm::mat4 getModelMatrix(const Transform& transform, glm::vec2 center,bool isPlate=false) const;
-        bool raycast(const glm::vec3& rayOrigin, const glm::vec3& rayDirection,
-            RaycastHit& outHit, glm::mat4 modelMatrix) const;
-    private:
-        bool intersectTriangle(const glm::vec3& rayOrigin, const glm::vec3& rayDirection,
-            const glm::vec3& v0, const glm::vec3& v1, const glm::vec3& v2,
-            float& t, float& u, float& v) const;
-
-    };
+    
 
     /*struct CameraState {
         glm::vec3 target;
