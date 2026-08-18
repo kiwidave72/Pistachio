@@ -1,4 +1,4 @@
-#include "adapters/plugins/ToolpathEnginePlugin/ExtractionPhase.h"
+ï»¿#include "adapters/plugins/ToolpathEnginePlugin/ExtractionPhase.h"
 #include "adapters/plugins/ToolpathEnginePlugin/PositionKey.h"
 #include "domain/DiagnosticMessage.h"
 
@@ -47,8 +47,24 @@ namespace kinetica {
                     removeOne(segments[segIdx].end);
                 };
 
+            // Scans all 27 neighbor cells and returns the CLOSEST unused
+            // candidate within tolerance, not the first one encountered.
+            // First-found is a real bug in dense/fine mesh regions: when
+            // real, topologically distinct vertices sit closer together
+            // than kDefaultPositionTolerance (a rounded corner or small
+            // fillet routinely produces this), a query point can match a
+            // nearby-but-wrong candidate before ever reaching its true
+            // topological neighbor, silently routing the chain through
+            // the wrong vertex and orphaning the correct one instead.
+            // Nearest-match doesn't make ambiguity impossible in a truly
+            // pathological case, but it resolves the common one: prefer
+            // whichever candidate is actually closest, not whichever the
+            // hash map happened to enumerate first.
             auto popMatch = [&](const glm::vec3& point) -> std::pair<size_t, int>
                 {
+                    std::pair<size_t, int> best = { (size_t)-1, -1 };
+                    float bestDist = kDefaultPositionTolerance;
+
                     for (uint64_t key : neighborCellKeys(point))
                     {
                         auto it = adjacency.find(key);
@@ -58,11 +74,15 @@ namespace kinetica {
                             if (used[pr.first]) continue;
                             const glm::vec3& candidatePos = (pr.second == 0)
                                 ? segments[pr.first].start : segments[pr.first].end;
-                            if (positionsEqual(point, candidatePos))
-                                return pr;
+                            float dist = glm::length(point - candidatePos);
+                            if (dist <= bestDist)
+                            {
+                                bestDist = dist;
+                                best = pr;
+                            }
                         }
                     }
-                    return { (size_t)-1, -1 };
+                    return best;
                 };
 
             auto consume = [&](size_t segIdx)
@@ -87,7 +107,22 @@ namespace kinetica {
                 glm::vec3 current = points.back();
                 while (true)
                 {
-                    if (positionsEqual(current, points.front()))
+                    // points.size() > 2 guard: a chain can't legitimately
+                    // close on its very first segment alone (a polygon
+                    // needs at least 3 distinct vertices). Without this
+                    // guard, a single short segment whose own start and
+                    // end happen to fall within tolerance of each other --
+                    // routine in a densely-tessellated mesh region, not a
+                    // sign of degenerate geometry -- self-closes here on
+                    // the first check, before popMatch is ever tried. It
+                    // then gets silently un-closed by the size<3 check
+                    // further down with no diagnostic explaining why, and
+                    // worse, it's already been removed from the adjacency
+                    // map by consume() above, so its real neighboring
+                    // segment can never find it again -- turning one
+                    // short segment into a permanent gap in what should
+                    // have been a continuous chain.
+                    if (points.size() > 2 && positionsEqual(current, points.front()))
                     {
                         closed = true;
                         break;
@@ -116,7 +151,7 @@ namespace kinetica {
                 }
 
                 // If it didn't close, extend BACKWARD from the original
-                // start too — a segment landing mid-chain must be able to
+                // start too ï¿½ a segment landing mid-chain must be able to
                 // grow in both directions, not just forward.
                 if (!closed)
                 {
@@ -150,6 +185,10 @@ namespace kinetica {
 
                 // Repair: if the chain still isn't closed but its two loose
                 // ends are close, snap-bridge them rather than leave a gap.
+                // Requires >=3 points because a 2-point "loop" can never be
+                // a valid polygon (needs at least 3 distinct vertices to
+                // enclose an area) -- that's handled as a separate,
+                // distinct case below, not as a "repair".
                 if (!closed && points.size() >= 3)
                 {
                     float gap = glm::length(points.front() - points.back());
@@ -167,6 +206,40 @@ namespace kinetica {
                         diag.message = "chain repaired via gap snap, distance=" + std::to_string(gap);
                         diag.hasLocation = true;
                         diag.location = midpoint;
+                        outDiagnostics.push_back(diag);
+                    }
+                }
+
+                // A chain that never grew past its own starting segment
+                // (exactly 2 points -- both forward and backward dead-
+                // ended immediately) AND whose own two endpoints are
+                // already within normal position-matching tolerance of
+                // each other isn't a meaningful boundary fragment worth
+                // investigating as a defect. It can't be "repaired" into
+                // a closed loop (2 points can't enclose an area), but it
+                // also isn't the same kind of problem as a genuine
+                // unresolved dead-end -- a real gap (see the >=3-point
+                // case above, and the ~0.18mm gaps found investigating
+                // S6_bracket_set) is typically much larger than this
+                // tolerance. This is far more likely a near-zero-length
+                // sliver triangle, the kind fine circular tessellation
+                // routinely produces, showing up as slicing noise. Flag
+                // it explicitly as discarded so it reads differently in
+                // diagnostics than a real, unresolved dead-end -- one
+                // needs investigation, this doesn't.
+                if (!closed && points.size() == 2)
+                {
+                    float selfGap = glm::length(points.front() - points.back());
+                    if (selfGap <= kDefaultPositionTolerance)
+                    {
+                        domain::v1::DiagnosticMessage diag;
+                        diag.severity = domain::v1::DiagnosticSeverity::Info;
+                        diag.phase = "P4 ExtractionPhase";
+                        diag.message = "chain discarded as degenerate sliver (2 points, self-gap="
+                            + std::to_string(selfGap) + ", within position tolerance) -- "
+                            "likely fine-tessellation noise, not a boundary defect";
+                        diag.hasLocation = true;
+                        diag.location = (points.front() + points.back()) * 0.5f;
                         outDiagnostics.push_back(diag);
                     }
                 }

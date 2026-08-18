@@ -1,11 +1,26 @@
-#include "adapters/plugins/ToolpathEnginePlugin/AccelerationPhase.h"
+ï»¿#include "adapters/plugins/ToolpathEnginePlugin/AccelerationPhase.h"
 
 #include <cstdio>
 #include <cmath>
+#include <algorithm>
 
 namespace kinetica {
 
     namespace {
+
+        // Same tolerance philosophy as SlicingPhase's own classify()
+        // epsilon (1e-5f) -- a triangle's stored Z-extent and a query
+        // sliceZ are computed via completely independent floating-point
+        // paths (one from raw mesh vertex data, the other from
+        // minZ + firstLayerHeight + N*layerHeight), even when both are
+        // meant to represent the same real-world height. Without this
+        // padding, a triangle whose true crossing is exactly at a slice
+        // height can end up registered in a different bucket than the
+        // one that height's query actually looks in -- excluded before
+        // SlicingPhase's own epsilon-aware intersection test ever gets a
+        // chance to run. Padding the registration range, not just the
+        // later intersection check, is what actually closes that gap.
+        constexpr float kBucketBoundaryEpsilon = 1e-5f;
 
         domain::v1::UnifiedAcceleration buildAcceleration(
             const domain::v1::UnifiedGeometry& geom, float layerHeight)
@@ -33,11 +48,11 @@ namespace kinetica {
                 float triMinZ = std::min({ v0.z, v1.z, v2.z });
                 float triMaxZ = std::max({ v0.z, v1.z, v2.z });
 
-                int startBucket = accel.bucketIndexForZ(triMinZ);
-                int endBucket = accel.bucketIndexForZ(triMaxZ);
+                int startBucket = accel.bucketIndexForZ(triMinZ - kBucketBoundaryEpsilon);
+                int endBucket = accel.bucketIndexForZ(triMaxZ + kBucketBoundaryEpsilon);
 
                 // Both can legitimately be -1 only if triMinZ/triMaxZ fall
-                // outside [minZ, minZ + bucketCount*bucketHeight) — shouldn't
+                // outside [minZ, minZ + bucketCount*bucketHeight) ï¿½ shouldn't
                 // happen given bucketCount was sized from this same geometry's
                 // own bounds, but clamp defensively rather than skip silently.
                 if (startBucket < 0) startBucket = 0;

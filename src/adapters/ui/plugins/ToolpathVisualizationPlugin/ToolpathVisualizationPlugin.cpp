@@ -68,10 +68,13 @@ public:
 
 
 
-        m_eventBus->subscribe("toolpath.updated", [this, &svc](const std::string&) {
+        m_eventBus->subscribe("toolpathStore.updated", [this, &svc](const std::string&) {
             auto* store = svc.application->services().resolve<domain::v1::ToolpathStore>();
             if (store && store->hasToolpath())
                 m_ribbon->setToolpath(*store->get());
+                m_eventBus->publish("viewcontroler.setactive.toolpath_ribbon", "");
+
+                
             });
          
         auto* modelCache = svc.application->services().resolve<domain::v1::ModelCache>();

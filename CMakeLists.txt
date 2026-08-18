@@ -583,6 +583,9 @@ add_library(pistachio_kinetica SHARED
     src/adapters/plugins/ToolpathEnginePlugin/WallGenerationPhase.cpp
     src/adapters/plugins/ToolpathEnginePlugin/InfillRegionPhase.cpp
     src/adapters/plugins/ToolpathEnginePlugin/RectilinearInfillStrategy.cpp
+    src/adapters/plugins/ToolpathEnginePlugin/TopologyRepairPhase.cpp
+
+
 )
 
 target_include_directories(pistachio_kinetica PRIVATE

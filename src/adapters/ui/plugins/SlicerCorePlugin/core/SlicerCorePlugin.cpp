@@ -689,7 +689,12 @@ public:
         {
             m_viewportController = std::make_unique<ViewportController>(*m_viewportRenderRegistry);
 
-           
+            m_eventBus->subscribe("viewcontroler.setactive.toolpath_ribbon", [this](const std::string& payload) {
+                 
+				m_viewportController->setActiveRenderer("toolpath_ribbon");
+
+                });
+
         }
 
 
@@ -731,7 +736,7 @@ public:
                 {
 
                     progress->setMessage("Loading workspace.json");
-                    m_workspaceService->loadWorkspace("c:\\temp\\", "workspace.json");
+                    m_workspaceService->loadWorkspace("c:\\temp\\", "test_workspace.json");
                 })
             .completed([this](bool success)
                 {

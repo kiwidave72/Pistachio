@@ -1,4 +1,4 @@
-#include "adapters/plugins/ToolpathEnginePlugin/LayerBitmapDebug.h"
+ï»¿#include "adapters/plugins/ToolpathEnginePlugin/LayerBitmapDebug.h"
 #include "adapters/plugins/ToolpathEnginePlugin/ExtractionPhase.h"
 #include "adapters/plugins/ToolpathEnginePlugin/TopologyPhase.h"
 #include "adapters/plugins/ToolpathEnginePlugin/WallGenerationPhase.h"
@@ -13,6 +13,7 @@
 #include <cstdio>
 #include <cmath>
 #include <nlohmann/json.hpp>
+#include <fstream>
 
 namespace kinetica {
 
@@ -52,7 +53,7 @@ namespace kinetica {
         // Shared: compute bounds + scale for a set of point-lists, return
         // enough info to build a toPixel() closure. Works identically for
         // chains and contours, since both reduce to vector<glm::vec3>.
-        // pointLists is a collection of POINTERS to point vectors — must
+        // pointLists is a collection of POINTERS to point vectors ï¿½ must
         // dereference each element before iterating its points.
         template<typename PointListRange>
         bool computeTransform(const PointListRange& pointLists, int imageSize,
@@ -103,12 +104,40 @@ namespace kinetica {
             return j;
         }
 
-        // One layer's full report — same shape written both as a
+        // One layer's full report ï¿½ same shape written both as a
         // standalone sidecar and as one entry in the aggregate file.
+        // One layer's full report -- same shape written both as a
+        // standalone sidecar and as one entry in the aggregate file.
+        //
+        // unclosedChains carries raw point data for any chain P4 couldn't
+        // close -- the diagnostics array only ever had a summary message
+        // and a single location point, never the actual fragment geometry.
+        // Without this, diagnosing *why* a specific fragment failed to
+        // close (e.g. checking whether several endpoints cluster within
+        // tolerance of each other, the multi-segment-cluster ambiguity
+        // case) required re-running the pipeline with extra instrumentation
+        // each time. Closed chains aren't included here -- their shape is
+        // already fully represented in the topology contours if needed,
+        // and most layers have far more closed chains than unclosed ones,
+        // so this stays small in the common case rather than duplicating
+        // the whole layer's geometry into every report.
+        nlohmann::json unclosedChainToJson(const domain::v1::SegmentChain& chain)
+        {
+            nlohmann::json j;
+            j["pointCount"] = chain.points.size();
+            j["wasRepaired"] = chain.wasRepaired;
+            nlohmann::json points = nlohmann::json::array();
+            for (auto& p : chain.points)
+                points.push_back({ {"x", p.x}, {"y", p.y}, {"z", p.z} });
+            j["points"] = points;
+            return j;
+        }
+
         nlohmann::json buildLayerReport(
             const std::string& modelInstanceId, int layerIndex, float z,
             const std::vector<domain::v1::DiagnosticMessage>& chainDiagnostics,
-            const std::vector<domain::v1::DiagnosticMessage>& topologyDiagnostics)
+            const std::vector<domain::v1::DiagnosticMessage>& topologyDiagnostics,
+            const std::vector<domain::v1::SegmentChain>& chains)
         {
             nlohmann::json j;
             j["modelInstanceId"] = modelInstanceId;
@@ -124,14 +153,20 @@ namespace kinetica {
             for (auto& d : topologyDiagnostics) diag.push_back(diagnosticToJson(d));
             j["diagnostics"] = diag;
 
+            nlohmann::json unclosed = nlohmann::json::array();
+            for (auto& chain : chains)
+                if (!chain.isClosed)
+                    unclosed.push_back(unclosedChainToJson(chain));
+            j["unclosedChains"] = unclosed;
+
             return j;
         }
-       
-        
+
+
 
     } // anonymous namespace
 
-   
+
     std::string LayerBitmapDebug::buildPath(
         const std::string& outputDir,
         const std::string& modelInstanceId,
@@ -152,7 +187,7 @@ namespace kinetica {
         return modelInstanceId + "_" + prefix + buf + extension;
     }
 
-   
+
 
     void LayerBitmapDebug::writeRunReport(
         const std::vector<ExtractedGeometry>& extracted,
@@ -177,9 +212,10 @@ namespace kinetica {
                 auto layerReport = buildLayerReport(
                     extInst.modelInstanceId, chainLayer.layerIndex, chainLayer.z,
                     chainLayer.diagnostics,
-                    topoDiag ? *topoDiag : std::vector<domain::v1::DiagnosticMessage>{});
+                    topoDiag ? *topoDiag : std::vector<domain::v1::DiagnosticMessage>{},
+                    chainLayer.chains);
 
-                // Per-layer sidecar — same object, written standalone too
+                // Per-layer sidecar ï¿½ same object, written standalone too
                 std::string sidecarPath = buildPath(outputDir, extInst.modelInstanceId, "layer", chainLayer.layerIndex);
                 sidecarPath = sidecarPath.substr(0, sidecarPath.size() - 4) + ".json"; // swap .png -> .json
                 std::ofstream sidecar(sidecarPath);
@@ -196,7 +232,7 @@ namespace kinetica {
     }
 
 
-    // LayerBitmapDebug.cpp — add
+    // LayerBitmapDebug.cpp ï¿½ add
     void LayerBitmapDebug::dumpToolpathLayer(
         const domain::v1::ToolpathLayer& layer,
         int layerIndex,
@@ -266,7 +302,7 @@ namespace kinetica {
                 dumpTopologyLayer(layer, outputDir, instance.topology.modelInstanceId);
     }
 
-    
+
 
     void LayerBitmapDebug::dumpChainLayer(
         const domain::v1::ExtractedLayer& layer,
@@ -339,7 +375,7 @@ namespace kinetica {
 
             for (size_t i = 0; i < contour.points.size(); ++i)
             {
-                size_t next = (i + 1) % contour.points.size();   // contours are closed — wrap around
+                size_t next = (i + 1) % contour.points.size();   // contours are closed ï¿½ wrap around
                 auto [x0, y0] = toPixel(contour.points[i]);
                 auto [x1, y1] = toPixel(contour.points[next]);
                 drawLine(img, imageSize, x0, y0, x1, y1, color);

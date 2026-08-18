@@ -19,6 +19,8 @@
 #include "adapters/plugins/ToolpathEnginePlugin/SlicingPhase.h"
 #include "adapters/plugins/ToolpathEnginePlugin/ExtractionPhase.h"
 #include "adapters/plugins/ToolpathEnginePlugin/TopologyPhase.h"
+ 
+#include "adapters/plugins/ToolpathEnginePlugin/TopologyRepairPhase.h"
 
 #include "adapters/plugins/ToolpathEnginePlugin/LayerBitmapDebug.h"
 
@@ -170,6 +172,15 @@ private:
 
         printf("[ToolpathEngine] P5 complete: %zu instances topologized\n", topologized.size());
 
+
+        kinetica::TopologyRepairPhase topologyRepairPhase;
+        auto repairResult = topologyRepairPhase.run(std::move(topologized));
+        topologized = std::move(repairResult.geometry);
+
+        printf("[ToolpathEngine] P5R complete: %d repaired, %d flagged-but-not-repaired\n",
+            repairResult.report.totalRepaired, repairResult.report.totalFlaggedNotRepaired);
+
+
         // toolpath.layers must ACCUMULATE across every instance, not be
         // resized-and-overwritten per instance -- the previous version did
         // exactly that (toolpath.layers.resize() + toolpath.layers[i] =
@@ -294,7 +305,8 @@ private:
         if (m_toolPathStore)
             m_toolPathStore->set(toolpath);   // publishes "toolpath.updated" internally, no payload needed
 
-        m_eventBus->publish("toolpath.updated", "");
+        m_eventBus->publish("toolpathStore.updated", "");
+
 
         if (m_taskRunner)
         {
@@ -303,15 +315,15 @@ private:
             auto toolpathCopy = toolpath;
             m_taskRunner->submit(
                 [extractedCopy, topologizedCopy, toolpathCopy](std::shared_ptr<TaskProgress>) {
-                    //kinetica::LayerBitmapDebug::writeRunReport(extractedCopy, topologizedCopy, "C:\\temp\\layer_debug");
+                    kinetica::LayerBitmapDebug::writeRunReport(extractedCopy, topologizedCopy, "C:\\temp\\layer_debug");
 
                     //domain::v1::saveToolpathToFile(toolpathCopy, "C:\\temp\\layer_debug\\toolpath.json");
                     domain::v1::saveToolpathBinary(toolpathCopy, "C:\\temp\\layer_debug\\toolpath.bin");
                     //for (size_t i = 0; i < toolpathCopy.layers.size(); ++i)
-                    //    kinetica::LayerBitmapDebug::dumpToolpathLayer(toolpathCopy.layers[i], (int)i, "C:\\temp\\layer_debug", "wall_test", 1024);
+                    //   kinetica::LayerBitmapDebug::dumpToolpathLayer(toolpathCopy.layers[i], (int)i, "C:\\temp\\layer_debug", "wall_test", 1024);
                     //kinetica::LayerBitmapDebug::dumpAllTopologyLayers(topologizedCopy, "C:\\temp\\layer_debug");
                     //kinetica::LayerBitmapDebug::dumpAllChainLayers(extractedCopy, "C:\\temp\\layer_debug");
-
+ 
                 },
                 "Debug PNG dump", false, false, false);
         }
