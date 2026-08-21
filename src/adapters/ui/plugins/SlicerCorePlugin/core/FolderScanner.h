@@ -1,4 +1,4 @@
-#pragma once
+ï»¿#pragma once
 
 // -----------------------------------------------------------------------
 // FolderScanner.h
@@ -23,7 +23,7 @@
 namespace adapters::scanning {
 
     // -----------------------------------------------------------------------
-    // ScanFile — represents a single STL file found during the scan
+    // ScanFile ï¿½ represents a single STL file found during the scan
     // -----------------------------------------------------------------------
     struct ScanFile
     {
@@ -42,11 +42,11 @@ namespace adapters::scanning {
             return p;
         }
 
-        
+
     };
 
     // -----------------------------------------------------------------------
-    // ScanFolder — represents a folder node in the scanned hierarchy
+    // ScanFolder ï¿½ represents a folder node in the scanned hierarchy
     // Only folders that contain at least one STL file (directly or in a
     // descendant) are included in the tree.
     // -----------------------------------------------------------------------
@@ -73,7 +73,7 @@ namespace adapters::scanning {
     };
 
     // -----------------------------------------------------------------------
-    // ScanFileResult — result of a single-file scan
+    // ScanFileResult ï¿½ result of a single-file scan
     // -----------------------------------------------------------------------
     struct ScanFileResult
     {
@@ -83,7 +83,7 @@ namespace adapters::scanning {
     };
 
     // -----------------------------------------------------------------------
-    // ScanResult — top-level result returned by FolderScanner::scan()
+    // ScanResult ï¿½ top-level result returned by FolderScanner::scan()
     // -----------------------------------------------------------------------
     struct ScanResult
     {
@@ -94,7 +94,7 @@ namespace adapters::scanning {
         std::string                 errorMessage;
         bool                        success = false;
 
-        // Flat list of all files found — convenient for building a project
+        // Flat list of all files found ï¿½ convenient for building a project
         std::vector<const ScanFile*> allFiles() const
         {
             std::vector<const ScanFile*> out;
@@ -115,7 +115,7 @@ namespace adapters::scanning {
     };
 
     // -----------------------------------------------------------------------
-    // ScanOptions — controls scan behaviour
+    // ScanOptions ï¿½ controls scan behaviour
     // -----------------------------------------------------------------------
     struct ScanOptions
     {
@@ -129,9 +129,18 @@ namespace adapters::scanning {
         // Extra extensions to include alongside .stl (e.g. ".3mf", ".obj")
         std::vector<std::string> extraExtensions;
 
-        // Optional progress callback — called for each folder entered
+        // Optional progress callback ï¿½ called for each folder entered
         // Return false to cancel the scan
         std::function<bool(const std::string& currentPath, int filesFound)> onProgress;
+
+        // Optional hash shortcut - called before hashFile() for every candidate file.
+        // Args: full path, current size (bytes), current last-write-time (epoch count).
+        // Return a non-empty string to use it as the hash and skip re-hashing;
+        // return an empty string to force FolderScanner to hash the file normally.
+        // Lets a caching layer skip re-hashing files whose size+mtime are unchanged.
+        std::function<std::string(const std::filesystem::path& p,
+            uintmax_t sizeBytes,
+            int64_t   lastWriteTime)> hashLookup;
     };
 
     // -----------------------------------------------------------------------
@@ -143,7 +152,7 @@ namespace adapters::scanning {
         FolderScanner() = default;
 
         // Scan rootPath and return a ScanResult.
-        // Thread-safe — each call is independent.
+        // Thread-safe ï¿½ each call is independent.
         ScanResult scan(const std::string& rootPath,
             const ScanOptions& options = {}) const;
 
@@ -151,7 +160,7 @@ namespace adapters::scanning {
             const ScanOptions& options = {}) const;
 
     private:
-        // Recursively scan a directory — returns nullptr if no STL content found
+        // Recursively scan a directory ï¿½ returns nullptr if no STL content found
         std::shared_ptr<ScanFolder> scanDirectory(
             const std::filesystem::path& dirPath,
             const ScanOptions& options,

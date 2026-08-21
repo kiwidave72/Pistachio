@@ -8,6 +8,7 @@
 
 #include <glm/glm.hpp>
 #include <cstdio>
+#include <limits>
 
 namespace {
 
@@ -30,7 +31,7 @@ namespace {
         }
     }
 
-    // Appends one flat quad for a single extruding segment — width
+    // Appends one flat quad for a single extruding segment - width
     // perpendicular to the segment direction in the XY plane, lying at
     // the segment's own Z (no vertical thickness, see header comment).
     void appendSegmentQuad(std::vector<RibbonVertex>& verts, std::vector<uint32_t>& idx,
@@ -60,6 +61,21 @@ namespace {
         idx.insert(idx.end(), { base, base + 1, base + 2, base, base + 2, base + 3 });
     }
 
+    // Grows a running AABB to include a segment's two endpoints, padded
+    // by the segment's half-width so the proxy box doesn't clip the
+    // ribbon geometry it's supposed to stand in for.
+    void growAABB(ToolpathChunkAABB& box, const domain::v1::ToolpathSegment& seg)
+    {
+        float pad = seg.extrusionWidth * 0.5f;
+        if (pad < 1e-6f) pad = 0.05f;
+        glm::vec3 padVec(pad, pad, pad);
+
+        box.min = glm::min(box.min, seg.start.position - padVec);
+        box.min = glm::min(box.min, seg.end.position - padVec);
+        box.max = glm::max(box.max, seg.start.position + padVec);
+        box.max = glm::max(box.max, seg.end.position + padVec);
+    }
+
 } // anonymous namespace
 
 ToolpathRibbonGLMesh::ToolpathRibbonGLMesh() = default;
@@ -69,6 +85,9 @@ ToolpathRibbonGLMesh::~ToolpathRibbonGLMesh()
     if (m_vao) glDeleteVertexArrays(1, &m_vao);
     if (m_vbo) glDeleteBuffers(1, &m_vbo);
     if (m_ebo) glDeleteBuffers(1, &m_ebo);
+    if (m_proxyCubeVao) glDeleteVertexArrays(1, &m_proxyCubeVao);
+    if (m_proxyCubeVbo) glDeleteBuffers(1, &m_proxyCubeVbo);
+    if (m_proxyCubeEbo) glDeleteBuffers(1, &m_proxyCubeEbo);
 }
 
 void ToolpathRibbonGLMesh::ensureGl()
@@ -99,6 +118,41 @@ void ToolpathRibbonGLMesh::ensureGl()
     glGenBuffers(1, &m_vbo);
     glGenBuffers(1, &m_ebo);
     m_glInitialized = true;
+
+    buildProxyCube();
+}
+
+// Unit cube, 8 verts / 36 indices, position-only (location 0) so it can
+// be drawn with the same ribbon shader (uMVP uniform) used everywhere
+// else - vColor just comes out constant, which is fine since occlusion
+// queries never touch the color buffer (color mask is off when drawn).
+void ToolpathRibbonGLMesh::buildProxyCube()
+{
+    static const glm::vec3 kCubeVerts[8] = {
+        {0,0,0}, {1,0,0}, {1,1,0}, {0,1,0},
+        {0,0,1}, {1,0,1}, {1,1,1}, {0,1,1},
+    };
+    static const uint32_t kCubeIdx[36] = {
+        0,1,2, 0,2,3,   // -Z
+        4,6,5, 4,7,6,   // +Z
+        0,4,5, 0,5,1,   // -Y
+        3,2,6, 3,6,7,   // +Y
+        0,3,7, 0,7,4,   // -X
+        1,5,6, 1,6,2,   // +X
+    };
+
+    glGenVertexArrays(1, &m_proxyCubeVao);
+    glGenBuffers(1, &m_proxyCubeVbo);
+    glGenBuffers(1, &m_proxyCubeEbo);
+
+    glBindVertexArray(m_proxyCubeVao);
+    glBindBuffer(GL_ARRAY_BUFFER, m_proxyCubeVbo);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(kCubeVerts), kCubeVerts, GL_STATIC_DRAW);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, m_proxyCubeEbo);
+    glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(kCubeIdx), kCubeIdx, GL_STATIC_DRAW);
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(glm::vec3), (void*)0);
+    glBindVertexArray(0);
 }
 
 void ToolpathRibbonGLMesh::indexRangeForLayers(int startLayer, int endLayer, uint32_t& outOffset, uint32_t& outCount) const
@@ -110,6 +164,19 @@ void ToolpathRibbonGLMesh::indexRangeForLayers(int startLayer, int endLayer, uin
     uint32_t endOffset = m_layerCumulativeCounts[endLayer];
     outCount = endOffset - outOffset;
 }
+
+void ToolpathRibbonGLMesh::indexRangeForChunk(int chunk, uint32_t& outOffset, uint32_t& outCount) const
+{
+    if (chunk < 0 || chunk >= (int)m_chunkIndexOffsets.size())
+    {
+        outOffset = 0;
+        outCount = 0;
+        return;
+    }
+    outOffset = m_chunkIndexOffsets[chunk];
+    outCount = m_chunkIndexCounts[chunk];
+}
+
 void ToolpathRibbonGLMesh::build(const domain::v1::Toolpath& toolpath)
 {
     ensureGl();
@@ -120,14 +187,51 @@ void ToolpathRibbonGLMesh::build(const domain::v1::Toolpath& toolpath)
     m_layerCumulativeCounts.clear();
     m_layerCumulativeCounts.reserve(toolpath.layers.size());
 
-    for (auto& layer : toolpath.layers)
+    m_chunkAABBs.clear();
+    m_chunkIndexOffsets.clear();
+    m_chunkIndexCounts.clear();
+
+    const float kInf = std::numeric_limits<float>::max();
+    ToolpathChunkAABB chunkBox{ glm::vec3(kInf), glm::vec3(-kInf) };
+    uint32_t chunkStartOffset = 0;
+    bool chunkHasGeometry = false;
+
+    for (size_t layerIdx = 0; layerIdx < toolpath.layers.size(); ++layerIdx)
     {
+        auto& layer = toolpath.layers[layerIdx];
+
         for (auto& seg : layer.segments)
         {
-            if (!seg.isExtruding()) continue;   // travel moves skipped — see header comment
+            if (!seg.isExtruding()) continue;   // travel moves skipped - see header comment
             appendSegmentQuad(verts, idx, seg);
+            growAABB(chunkBox, seg);
+            chunkHasGeometry = true;
         }
         m_layerCumulativeCounts.push_back((uint32_t)idx.size());
+
+        // Close out a chunk every kChunkSize layers, or on the final
+        // layer if it doesn't land exactly on a chunk boundary.
+        bool lastLayer = (layerIdx + 1 == toolpath.layers.size());
+        if ((layerIdx + 1) % ToolpathRibbonGLMesh::kChunkSize == 0 || lastLayer)
+        {
+            uint32_t chunkEndOffset = (uint32_t)idx.size();
+
+            // Empty chunk (e.g. no extruding segments at all in this
+            // span) still needs an entry so chunk indices line up with
+            // occlusion-query arrays sized by chunkCount() - give it a
+            // degenerate zero-volume box so it's cheap and harmless to
+            // query, and a zero-length draw range.
+            if (!chunkHasGeometry)
+                chunkBox = ToolpathChunkAABB{ glm::vec3(0.0f), glm::vec3(0.0f) };
+
+            m_chunkAABBs.push_back(chunkBox);
+            m_chunkIndexOffsets.push_back(chunkStartOffset);
+            m_chunkIndexCounts.push_back(chunkEndOffset - chunkStartOffset);
+
+            chunkStartOffset = chunkEndOffset;
+            chunkBox = ToolpathChunkAABB{ glm::vec3(kInf), glm::vec3(-kInf) };
+            chunkHasGeometry = false;
+        }
     }
 
     m_totalIndexCount = (uint32_t)idx.size();
@@ -149,8 +253,8 @@ void ToolpathRibbonGLMesh::build(const domain::v1::Toolpath& toolpath)
 
     glBindVertexArray(0);
 
-    printf("[ToolpathRibbonGLMesh] built: %zu vertices, %zu indices, %d layers\n",
-        verts.size(), idx.size(), (int)m_layerCumulativeCounts.size());
+    printf("[ToolpathRibbonGLMesh] built: %zu vertices, %zu indices, %d layers, %d chunks\n",
+        verts.size(), idx.size(), (int)m_layerCumulativeCounts.size(), (int)m_chunkAABBs.size());
 }
 
 uint32_t ToolpathRibbonGLMesh::indexCountForLayer(int layer) const

@@ -1,5 +1,6 @@
 # Build directories
 .vs/
+.cache/
 _deps/
 build/
 bin/

@@ -2,8 +2,11 @@
 
 #include <clipper2/clipper.h>
 
+#include <algorithm>
+#include <cfloat>
 #include <cmath>
 #include <cstdio>
+#include <limits>
 
 namespace kinetica {
 
@@ -22,25 +25,83 @@ namespace kinetica {
             return path;
         }
 
-        bool connectorStaysInsideRegion(
+        // Returns true if segments (p1,p2) and (p3,p4) properly intersect
+        // (strict interior crossing; shared endpoints/collinear overlap don't count).
+        bool segmentsIntersect(const glm::vec2& p1, const glm::vec2& p2,
+            const glm::vec2& p3, const glm::vec2& p4)
+        {
+            auto cross = [](const glm::vec2& a, const glm::vec2& b) { return a.x * b.y - a.y * b.x; };
+
+            glm::vec2 r = p2 - p1;
+            glm::vec2 s = p4 - p3;
+            float rxs = cross(r, s);
+            if (std::abs(rxs) < 1e-9f) return false; // parallel/collinear, ignore for this purpose
+
+            glm::vec2 qp = p3 - p1;
+            float t = cross(qp, s) / rxs;
+            float u = cross(qp, r) / rxs;
+
+            return t > 1e-6f && t < 1.0f - 1e-6f && u > 1e-6f && u < 1.0f - 1e-6f;
+        }
+
+        // Checks whether the straight connector (a,b) crosses any edge of any region
+        // boundary (outer contour or hole). This is what catches connectors that dip
+        // outside the region and back in around concave features (e.g. circular holes)
+        // that a pure midpoint-containment test would miss.
+        bool connectorCrossesAnyEdge(
             const glm::vec2& a, const glm::vec2& b,
             const Clipper2Lib::Paths64& regionPaths)
         {
-            Clipper2Lib::Path64 connector;
-            connector.push_back(Clipper2Lib::Point64((int64_t)(a.x * kClipperScale), (int64_t)(a.y * kClipperScale)));
-            connector.push_back(Clipper2Lib::Point64((int64_t)(b.x * kClipperScale), (int64_t)(b.y * kClipperScale)));
+            for (auto& path : regionPaths)
+            {
+                size_t n = path.size();
+                for (size_t i = 0; i < n; ++i)
+                {
+                    glm::vec2 e0(path[i].x / kClipperScale, path[i].y / kClipperScale);
+                    glm::vec2 e1(path[(i + 1) % n].x / kClipperScale, path[(i + 1) % n].y / kClipperScale);
+                    if (segmentsIntersect(a, b, e0, e1))
+                        return true;
+                }
+            }
+            return false;
+        }
 
-            Clipper2Lib::Clipper64 clipper;
-            clipper.AddOpenSubject({ connector });
-            clipper.AddClip(regionPaths);
+        // Was: full Clipper64 boolean intersection (AddOpenSubject + AddClip + Execute)
+        // for every connector test. That builds a whole clipping engine (edge lists,
+        // sorting, local minima) just to answer "is this short segment inside the region?"
+        //
+        // Now: reject if the connector crosses any boundary edge (outer wall or hole),
+        // then confirm containment via point-in-polygon on the midpoint. The edge-crossing
+        // check is required on non-convex regions (e.g. circular holes) — a midpoint-only
+        // test can pass even when the segment dips outside the region and back in, which
+        // is what caused infill to cross walls around holes. Still O(V) with no clipper
+        // engine allocation, just a linear scan over edges with a closed-form line test.
+        bool connectorStaysInsideRegion(
+            const glm::vec2& a, const glm::vec2& b,
+            const Clipper2Lib::Paths64& regionPaths,
+            float wallTolerance)
+        {
+            // Cheap early-out: most connectors between adjacent scan-line pieces
+            // are tiny gaps well within tolerance.
+            if (glm::length(b - a) < wallTolerance)
+                return true;
 
-            Clipper2Lib::Paths64 closedSolution, openSolution;
-            clipper.Execute(Clipper2Lib::ClipType::Intersection, Clipper2Lib::FillRule::NonZero, closedSolution, openSolution);
+            if (connectorCrossesAnyEdge(a, b, regionPaths))
+                return false;
 
-            if (openSolution.size() != 1) return false;
-            if (openSolution[0].size() != connector.size()) return false;
+            glm::vec2 mid = (a + b) * 0.5f;
+            Clipper2Lib::Point64 pt(
+                static_cast<int64_t>(mid.x * kClipperScale),
+                static_cast<int64_t>(mid.y * kClipperScale));
 
-            return openSolution[0].front() == connector.front() && openSolution[0].back() == connector.back();
+            int insideCount = 0;
+            for (auto& path : regionPaths)
+            {
+                auto pip = Clipper2Lib::PointInPolygon(pt, path);
+                if (pip != Clipper2Lib::PointInPolygonResult::IsOutside)
+                    insideCount++;
+            }
+            return (insideCount % 2) == 1;
         }
 
         struct WallProjection
@@ -49,9 +110,61 @@ namespace kinetica {
             size_t nearestVertexIndex = 0;
         };
 
+        struct BoundaryBounds
+        {
+            glm::vec2 min{ FLT_MAX, FLT_MAX };
+            glm::vec2 max{ -FLT_MAX, -FLT_MAX };
+        };
+
+        BoundaryBounds computeBounds(const std::vector<glm::vec3>& boundary)
+        {
+            BoundaryBounds b;
+            for (auto& p : boundary)
+            {
+                glm::vec2 v(p);
+                b.min = glm::min(b.min, v);
+                b.max = glm::max(b.max, v);
+            }
+            return b;
+        }
+
+        // Precomputed cumulative arc-length table for a boundary, so walkBoundaryBounded
+        // doesn't have to walk the whole ring (forward AND backward) just to decide
+        // whether a candidate join is short enough to take.
+        struct BoundaryArcInfo
+        {
+            std::vector<float> cumDist; // cumDist[k] = forward distance from vertex 0 to vertex k, size n+1
+            float totalLen = 0.0f;
+        };
+
+        BoundaryArcInfo buildArcInfo(const std::vector<glm::vec3>& boundary)
+        {
+            BoundaryArcInfo info;
+            size_t n = boundary.size();
+            info.cumDist.resize(n + 1, 0.0f);
+            for (size_t i = 0; i < n; ++i)
+            {
+                glm::vec2 a(boundary[i]);
+                glm::vec2 c(boundary[(i + 1) % n]);
+                info.cumDist[i + 1] = info.cumDist[i] + glm::length(c - a);
+            }
+            info.totalLen = info.cumDist[n];
+            return info;
+        }
+
+        // O(1) forward arc length from vertex index 'from' to 'to', using the prefix sums.
+        float forwardArcLength(const BoundaryArcInfo& info, size_t from, size_t to)
+        {
+            if (from == to) return 0.0f;
+            return (to > from)
+                ? (info.cumDist[to] - info.cumDist[from])
+                : (info.totalLen - info.cumDist[from] + info.cumDist[to]);
+        }
+
         WallProjection projectOntoWalls(
             const glm::vec2& point,
             const std::vector<std::vector<glm::vec3>>& allBoundaries,
+            const std::vector<BoundaryBounds>& allBounds,
             float tolerance)
         {
             WallProjection best;
@@ -59,6 +172,13 @@ namespace kinetica {
 
             for (size_t b = 0; b < allBoundaries.size(); ++b)
             {
+                // AABB reject: skip boundaries that can't possibly be within tolerance,
+                // avoiding the O(n) vertex walk entirely for most boundaries.
+                const auto& bounds = allBounds[b];
+                if (point.x < bounds.min.x - tolerance || point.x > bounds.max.x + tolerance ||
+                    point.y < bounds.min.y - tolerance || point.y > bounds.max.y + tolerance)
+                    continue;
+
                 const auto& boundary = allBoundaries[b];
                 size_t n = boundary.size();
 
@@ -87,25 +207,14 @@ namespace kinetica {
         }
 
         std::vector<glm::vec2> walkBoundaryBounded(
-            const std::vector<glm::vec3>& boundary, size_t from, size_t to, float maxArcLength)
+            const std::vector<glm::vec3>& boundary,
+            const BoundaryArcInfo& arcInfo,
+            size_t from, size_t to, float maxArcLength)
         {
             size_t n = boundary.size();
 
-            auto arcLength = [&](bool forward) -> float
-                {
-                    float len = 0.0f;
-                    size_t i = from;
-                    while (i != to)
-                    {
-                        size_t next = forward ? (i + 1) % n : (i == 0 ? n - 1 : i - 1);
-                        len += glm::length(glm::vec2(boundary[next]) - glm::vec2(boundary[i]));
-                        i = next;
-                    }
-                    return len;
-                };
-
-            float fwd = arcLength(true);
-            float bwd = arcLength(false);
+            float fwd = forwardArcLength(arcInfo, from, to);
+            float bwd = arcInfo.totalLen - fwd;
             bool goForward = fwd <= bwd;
             float chosen = goForward ? fwd : bwd;
 
@@ -162,6 +271,7 @@ namespace kinetica {
         float lineSpacing = extrusionWidth / (density / 100.0f);
 
         Clipper2Lib::Paths64 regionPaths;
+        regionPaths.reserve(region.polygons.size());
         for (auto& poly : region.polygons)
             regionPaths.push_back(contourToPath(poly));
 
@@ -180,54 +290,114 @@ namespace kinetica {
             (bounds.bottom + bounds.top) / 2.0 / kClipperScale);
 
         int lineCount = static_cast<int>(diagonal / kClipperScale / lineSpacing) + 2;
+        int startIndex = -lineCount / 2;
 
         std::vector<std::vector<glm::vec3>> allBoundaries;
+        allBoundaries.reserve(wallResult.innermostOuterBoundaries.size() + wallResult.innermostHoleBoundaries.size());
         allBoundaries.insert(allBoundaries.end(), wallResult.innermostOuterBoundaries.begin(), wallResult.innermostOuterBoundaries.end());
         allBoundaries.insert(allBoundaries.end(), wallResult.innermostHoleBoundaries.begin(), wallResult.innermostHoleBoundaries.end());
+
+        // Precompute arc-length tables and AABBs once, instead of re-walking boundaries
+        // and re-scanning all vertices on every fallback connector.
+        std::vector<BoundaryArcInfo> allArcInfo;
+        std::vector<BoundaryBounds> allBounds;
+        allArcInfo.reserve(allBoundaries.size());
+        allBounds.reserve(allBoundaries.size());
+        for (auto& boundary : allBoundaries)
+        {
+            allArcInfo.push_back(buildArcInfo(boundary));
+            allBounds.push_back(computeBounds(boundary));
+        }
 
         //printf("[RectilinearInfill] allBoundaries.size()=%zu (outer=%zu hole=%zu)\n",
         //    allBoundaries.size(), wallResult.innermostOuterBoundaries.size(), wallResult.innermostHoleBoundaries.size());
 
+        // --- Scan-line generation ---
+        // Was: one Clipper64 (AddOpenSubject + AddClip(regionPaths) + Execute) PER scan
+        // line, rebuilding the whole clipping engine (edge lists, sorting of regionPaths)
+        // lineCount times. Now: batch every scan line into a single open-subject set and
+        // clip against regionPaths once. Since Clipper2 doesn't tag output paths with
+        // which input line they came from, we recover the source line index geometrically
+        // (all points on line i satisfy dot(p - center, normal) == i * lineSpacing), then
+        // sort into the same raster order the original nested loop produced.
         std::vector<ScanPiece> pieces;
-        bool reverseNext = false;
-
-        for (int i = -lineCount / 2; i <= lineCount / 2; ++i)
         {
-            glm::vec2 lineOffset = center + normal * (i * lineSpacing);
-            glm::vec2 lineStart = lineOffset - dir * (float)(diagonal / kClipperScale);
-            glm::vec2 lineEnd = lineOffset + dir * (float)(diagonal / kClipperScale);
+            Clipper2Lib::Paths64 allScanLines;
+            allScanLines.reserve(lineCount + 1);
 
-            Clipper2Lib::Path64 scanLine;
-            scanLine.push_back(Clipper2Lib::Point64((int64_t)(lineStart.x * kClipperScale), (int64_t)(lineStart.y * kClipperScale)));
-            scanLine.push_back(Clipper2Lib::Point64((int64_t)(lineEnd.x * kClipperScale), (int64_t)(lineEnd.y * kClipperScale)));
+            for (int i = startIndex; i <= lineCount / 2; ++i)
+            {
+                glm::vec2 lineOffset = center + normal * (i * lineSpacing);
+                glm::vec2 lineStart = lineOffset - dir * (float)(diagonal / kClipperScale);
+                glm::vec2 lineEnd = lineOffset + dir * (float)(diagonal / kClipperScale);
+
+                Clipper2Lib::Path64 scanLine;
+                scanLine.push_back(Clipper2Lib::Point64((int64_t)(lineStart.x * kClipperScale), (int64_t)(lineStart.y * kClipperScale)));
+                scanLine.push_back(Clipper2Lib::Point64((int64_t)(lineEnd.x * kClipperScale), (int64_t)(lineEnd.y * kClipperScale)));
+                allScanLines.push_back(std::move(scanLine));
+            }
 
             Clipper2Lib::Clipper64 clipper;
-            clipper.AddOpenSubject({ scanLine });
+            clipper.AddOpenSubject(allScanLines);
             clipper.AddClip(regionPaths);
 
             Clipper2Lib::Paths64 closedSolution, openSolution;
             clipper.Execute(Clipper2Lib::ClipType::Intersection, Clipper2Lib::FillRule::NonZero, closedSolution, openSolution);
 
+            struct RawPiece
+            {
+                int lineIndex;
+                double tAlongLine;
+                std::vector<glm::vec2> points;
+            };
+            std::vector<RawPiece> raw;
+            raw.reserve(openSolution.size());
+
             for (auto& clipped : openSolution)
             {
                 if (clipped.size() < 2) continue;
 
-                ScanPiece piece;
+                std::vector<glm::vec2> pts;
+                pts.reserve(clipped.size());
                 for (auto& pt : clipped)
-                    piece.points.push_back(glm::vec2(pt.x / kClipperScale, pt.y / kClipperScale));
+                    pts.push_back(glm::vec2(pt.x / kClipperScale, pt.y / kClipperScale));
 
-                if (reverseNext) std::reverse(piece.points.begin(), piece.points.end());
-                pieces.push_back(std::move(piece));
+                glm::vec2 mid = (pts.front() + pts.back()) * 0.5f;
+                double offsetAlongNormal = glm::dot(mid - center, normal);
+                int lineIndex = (int)std::lround(offsetAlongNormal / (double)lineSpacing);
+                double tAlongLine = glm::dot(pts.front() - center, dir);
+
+                raw.push_back(RawPiece{ lineIndex, tAlongLine, std::move(pts) });
             }
 
-            reverseNext = !reverseNext;
+            std::sort(raw.begin(), raw.end(), [](const RawPiece& a, const RawPiece& b)
+                {
+                    if (a.lineIndex != b.lineIndex) return a.lineIndex < b.lineIndex;
+                    return a.tAlongLine < b.tAlongLine;
+                });
+
+            pieces.reserve(raw.size());
+            for (auto& rp : raw)
+            {
+                // Matches original: reverseNext toggled once per loop iteration i,
+                // unconditionally, starting false at i == startIndex.
+                bool reverse = ((rp.lineIndex - startIndex) % 2) != 0;
+
+                ScanPiece piece;
+                piece.points = std::move(rp.points);
+                if (reverse) std::reverse(piece.points.begin(), piece.points.end());
+                pieces.push_back(std::move(piece));
+            }
         }
 
         //printf("[RectilinearInfill] total pieces=%zu\n", pieces.size());
 
         std::vector<glm::vec2> currentRun;
+        currentRun.reserve(64);
         float maxWallArc = lineSpacing * 20.0f;
         float wallTolerance = lineSpacing * 0.5f;
+
+        result.reserve(pieces.size() * 2);
 
         auto flushRun = [&]()
             {
@@ -257,7 +427,7 @@ namespace kinetica {
             glm::vec2 lastPoint = currentRun.back();
             glm::vec2 nextStart = piece.points.front();
 
-            if (connectorStaysInsideRegion(lastPoint, nextStart, regionPaths))
+            if (connectorStaysInsideRegion(lastPoint, nextStart, regionPaths, wallTolerance))
             {
                 //printf("[RectilinearInfill] connector OK: (%.3f,%.3f) -> (%.3f,%.3f)\n",
                 //    lastPoint.x, lastPoint.y, nextStart.x, nextStart.y);
@@ -265,8 +435,8 @@ namespace kinetica {
                 continue;
             }
 
-            WallProjection projA = projectOntoWalls(lastPoint, allBoundaries, wallTolerance);
-            WallProjection projB = projectOntoWalls(nextStart, allBoundaries, wallTolerance);
+            WallProjection projA = projectOntoWalls(lastPoint, allBoundaries, allBounds, wallTolerance);
+            WallProjection projB = projectOntoWalls(nextStart, allBoundaries, allBounds, wallTolerance);
 
             //printf("[RectilinearInfill] fallback: (%.3f,%.3f)->(%.3f,%.3f) projA.boundary=%d projB.boundary=%d wallTolerance=%.4f\n",
             //    lastPoint.x, lastPoint.y, nextStart.x, nextStart.y, projA.boundaryIndex, projB.boundaryIndex, wallTolerance);
@@ -275,6 +445,7 @@ namespace kinetica {
             {
                 auto wallPoints = walkBoundaryBounded(
                     allBoundaries[projA.boundaryIndex],
+                    allArcInfo[projA.boundaryIndex],
                     projA.nearestVertexIndex, projB.nearestVertexIndex, maxWallArc);
 
                 //printf("[RectilinearInfill]   wallPoints.size()=%zu maxWallArc=%.4f\n",

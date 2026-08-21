@@ -96,6 +96,8 @@ ToolpathRibbonGLRender::~ToolpathRibbonGLRender()
 
 
     }
+    if (!m_occlusionQueries.empty())
+        glDeleteQueries((GLsizei)m_occlusionQueries.size(), m_occlusionQueries.data());
 }
 void ToolpathRibbonGLRender::setVisibleLayer(int layer)
 {
@@ -213,6 +215,93 @@ void ToolpathRibbonGLRender::ensureFramebuffer(uint32_t w, uint32_t h)
     m_fboHeight = h;
 }
 
+// Re-sizes the query/visibility arrays to match the current mesh's
+// chunk count. All chunks start "visible" - a chunk is only ever culled
+// once a query has positively proven it's hidden, so nothing pops out
+// of view incorrectly on the first few frames after a reload.
+void ToolpathRibbonGLRender::resetOcclusionState()
+{
+    if (!m_occlusionQueries.empty())
+        glDeleteQueries((GLsizei)m_occlusionQueries.size(), m_occlusionQueries.data());
+
+    int chunkCount = m_mesh.chunkCount();
+    m_occlusionQueries.assign(chunkCount, 0);
+    if (chunkCount > 0)
+        glGenQueries(chunkCount, m_occlusionQueries.data());
+
+    m_chunkQueryPending.assign(chunkCount, false);
+    m_chunkVisible.assign(chunkCount, true);
+}
+
+// Chunk occlusion pass, run once per frame from render():
+//   1. Collect last frame's query results (non-blocking - only reads
+//      queries whose result is already available, per
+//      GL_QUERY_RESULT_AVAILABLE; anything still pending keeps last
+//      frame's visibility rather than stalling the CPU on the GPU).
+//   2. Draw the visible chunks' real ribbon geometry (the caller does
+//      this using m_chunkVisible).
+//   3. Re-issue a query for every chunk in the current layer range,
+//      drawing the cheap proxy AABB with color writes and depth writes
+//      both off so the query only measures "would anything from this
+//      box have passed the existing depth buffer", without disturbing
+//      what's already been rendered.
+void ToolpathRibbonGLRender::updateChunkVisibility(const glm::mat4& viewProj)
+{
+    int chunkCount = m_mesh.chunkCount();
+    if (chunkCount == 0 || (int)m_occlusionQueries.size() != chunkCount) return;
+
+    // Step 1: harvest whatever's ready from last frame's queries.
+    for (int i = 0; i < chunkCount; ++i)
+    {
+        if (!m_chunkQueryPending[i]) continue;
+
+        GLuint available = 0;
+        glGetQueryObjectuiv(m_occlusionQueries[i], GL_QUERY_RESULT_AVAILABLE, &available);
+        if (!available) continue;   // still in flight - keep last known visibility
+
+        GLuint anyPassed = 0;
+        glGetQueryObjectuiv(m_occlusionQueries[i], GL_QUERY_RESULT, &anyPassed);
+        m_chunkVisible[i] = (anyPassed != 0);
+        m_chunkQueryPending[i] = false;
+    }
+
+    // Step 3: re-issue queries for chunks in the active layer range.
+    // Proxy draws don't touch color or depth, only test against what's
+    // already in the depth buffer from this frame's real geometry pass.
+    glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
+    glDepthMask(GL_FALSE);
+    glUseProgram(m_shader);
+    glBindVertexArray(m_mesh.proxyCubeVao());
+
+    for (int i = 0; i < chunkCount; ++i)
+    {
+        uint32_t offset = 0, count = 0;
+        m_mesh.indexRangeForChunk(i, offset, count);
+        if (count == 0) continue;   // empty chunk - nothing to query, nothing to draw either
+
+        int chunkFirstLayer = i * ToolpathRibbonGLMesh::kChunkSize;
+        int chunkLastLayer = std::min(chunkFirstLayer + ToolpathRibbonGLMesh::kChunkSize - 1, m_mesh.layerCount() - 1);
+        bool inRange = chunkLastLayer >= m_layerRangeStart && chunkFirstLayer <= m_layerRangeEnd;
+        if (!inRange) continue;
+
+        const ToolpathChunkAABB& box = m_mesh.chunkBounds(i);
+        glm::vec3 extent = box.max - box.min;
+        glm::mat4 proxyModel = glm::translate(glm::mat4(1.0f), box.min);
+        proxyModel = glm::scale(proxyModel, extent);
+        glm::mat4 proxyMvp = viewProj * proxyModel;
+        glUniformMatrix4fv(glGetUniformLocation(m_shader, "uMVP"), 1, GL_FALSE, glm::value_ptr(proxyMvp));
+
+        glBeginQuery(GL_ANY_SAMPLES_PASSED, m_occlusionQueries[i]);
+        glDrawElements(GL_TRIANGLES, 36, GL_UNSIGNED_INT, (void*)0);
+        glEndQuery(GL_ANY_SAMPLES_PASSED);
+        m_chunkQueryPending[i] = true;
+    }
+
+    glBindVertexArray(0);
+    glDepthMask(GL_TRUE);
+    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+}
+
 void ToolpathRibbonGLRender::setToolpath(const domain::v1::Toolpath& toolpath)
 {
     ensureGl();
@@ -220,6 +309,8 @@ void ToolpathRibbonGLRender::setToolpath(const domain::v1::Toolpath& toolpath)
     m_visibleLayer = m_mesh.layerCount() - 1;   // default: show everything
     m_layerRangeStart = 0;
     m_layerRangeEnd = m_mesh.layerCount() - 1;
+
+    resetOcclusionState();
 
 
     if (!toolpath.layers.empty())
@@ -347,8 +438,24 @@ void ToolpathRibbonGLRender::render(uint32_t width, uint32_t height, const Camer
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
     glEnable(GL_DEPTH_TEST);
 
+    // Ribbon quads are single-sided (one winding, no back face geometry
+    // - see ToolpathRibbonGLMesh), so culling the back face is a free
+    // ~2x reduction in triangle setup with no visual difference from
+    // any angle the pitch clamp above still allows.
+    glEnable(GL_CULL_FACE);
+    glCullFace(GL_BACK);
+
 
     m_cameraState = camera;
+
+    // Defensive pitch clamp: the ribbon mesh is flat, single-sided quads
+    // (see ToolpathRibbonGLMesh header) with backface culling now on
+    // below, so viewing from underneath the bed would make the entire
+    // toolpath vanish. There's no clamp upstream in the camera
+    // controller, so it's enforced here rather than leaving the model
+    // able to disappear. Bounds assume pitch is degrees from horizontal;
+    // adjust if this view's convention differs.
+    m_cameraState.pitch = glm::clamp(m_cameraState.pitch, -89.0f, 89.0f);
 
     float aspect = (float)width / (float)height;
 
@@ -362,7 +469,7 @@ void ToolpathRibbonGLRender::render(uint32_t width, uint32_t height, const Camer
     // view's native Z-up "bed space" via domain::v1::engineToDomain() --
     // this view's geometry, like DebugComparisonGLRender's, is never
     // axisFix'd, only shifted by bedToSceneTransform below.
-    domain::v1::RenderCameraContext engineContext = domain::v1::buildCameraContext(camera, aspect);
+    domain::v1::RenderCameraContext engineContext = domain::v1::buildCameraContext(m_cameraState, aspect);
 
     glm::vec3 engRight(engineContext.view[0].x, engineContext.view[1].x, engineContext.view[2].x);
     glm::vec3 engUp(engineContext.view[0].y, engineContext.view[1].y, engineContext.view[2].y);
@@ -392,14 +499,49 @@ void ToolpathRibbonGLRender::render(uint32_t width, uint32_t height, const Camer
     glUseProgram(m_shader);
     glUniformMatrix4fv(glGetUniformLocation(m_shader, "uMVP"), 1, GL_FALSE, glm::value_ptr(mvp));
 
-
-    uint32_t offset = 0, count = 0;
-    m_mesh.indexRangeForLayers(m_layerRangeStart, m_layerRangeEnd, offset, count);
-
+    // Chunk-based occlusion culling: draw only chunks last known to be
+    // visible (per-chunk draws instead of one indexRangeForLayers call,
+    // trading a few more draw calls for skipping fully-buried chunks
+    // entirely). Falls back to drawing everything in range if the mesh
+    // has no chunks yet (e.g. degenerate/empty toolpath).
+    int chunkCount = m_mesh.chunkCount();
     glBindVertexArray(m_mesh.vao());
-    if (count > 0)
-        glDrawElements(GL_TRIANGLES, count, GL_UNSIGNED_INT, (void*)(uintptr_t)(offset * sizeof(uint32_t)));
+    if (chunkCount > 0)
+    {
+        for (int i = 0; i < chunkCount; ++i)
+        {
+            int chunkFirstLayer = i * ToolpathRibbonGLMesh::kChunkSize;
+            int chunkLastLayer = std::min(chunkFirstLayer + ToolpathRibbonGLMesh::kChunkSize - 1, m_mesh.layerCount() - 1);
+            bool inRange = chunkLastLayer >= m_layerRangeStart && chunkFirstLayer <= m_layerRangeEnd;
+            if (!inRange || !m_chunkVisible[i]) continue;
+
+            // Chunk boundaries are only the occlusion-query granularity
+            // (see kChunkSize) - the actual draw must clip back to
+            // whatever sub-range of layers the caller actually asked
+            // for, or scrubbing to a single layer would draw this
+            // chunk's other 15 layers along with it.
+            int drawStart = std::max(chunkFirstLayer, m_layerRangeStart);
+            int drawEnd = std::min(chunkLastLayer, m_layerRangeEnd);
+
+            uint32_t chunkOffset = 0, chunkCountIdx = 0;
+            m_mesh.indexRangeForLayers(drawStart, drawEnd, chunkOffset, chunkCountIdx);
+            if (chunkCountIdx > 0)
+                glDrawElements(GL_TRIANGLES, chunkCountIdx, GL_UNSIGNED_INT, (void*)(uintptr_t)(chunkOffset * sizeof(uint32_t)));
+        }
+    }
+    else
+    {
+        uint32_t offset = 0, count = 0;
+        m_mesh.indexRangeForLayers(m_layerRangeStart, m_layerRangeEnd, offset, count);
+        if (count > 0)
+            glDrawElements(GL_TRIANGLES, count, GL_UNSIGNED_INT, (void*)(uintptr_t)(offset * sizeof(uint32_t)));
+    }
     glBindVertexArray(0);
+
+    // Occlusion query pass: harvests last frame's results into
+    // m_chunkVisible (used above) and re-issues queries for this
+    // frame's in-range chunks against the depth buffer we just wrote.
+    updateChunkVisibility(mvp);
 
     // NEW POSITION � grid, still inside the FBO binding
     glUseProgram(m_shader);
@@ -409,6 +551,7 @@ void ToolpathRibbonGLRender::render(uint32_t width, uint32_t height, const Camer
     glBindVertexArray(0);
 
     glDisable(GL_DEPTH_TEST);
+    glDisable(GL_CULL_FACE);   // don't leak state into whichever renderer runs next
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
 
 

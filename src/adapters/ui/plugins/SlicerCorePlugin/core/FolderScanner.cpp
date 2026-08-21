@@ -161,7 +161,18 @@ namespace adapters::scanning {
                 file.name = p.stem().string();
                 file.fullPath = fs::absolute(p).string();
                 file.fileSizeBytes = sz;
-                file.fileHash = hashFile(p);
+
+                // Ask the caller if it already knows this file's hash (unchanged
+                // since last scan). Falls back to a real hash if hashLookup is
+                // unset or returns empty (new/modified file).
+                std::string cachedHash;
+                if (options.hashLookup)
+                {
+                    auto mtime = fs::last_write_time(p, ec);
+                    if (!ec)
+                        cachedHash = options.hashLookup(p, sz, mtime.time_since_epoch().count());
+                }
+                file.fileHash = !cachedHash.empty() ? cachedHash : hashFile(p);
 
                 folder->files.push_back(std::move(file));
                 ++totalFiles;
@@ -200,7 +211,7 @@ namespace adapters::scanning {
     // -----------------------------------------------------------------------
     // Helpers
     // -----------------------------------------------------------------------
-    
+
     bool FolderScanner::isStlFile(const fs::path& p,
         const ScanOptions& options) const
     {

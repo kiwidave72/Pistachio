@@ -10,7 +10,11 @@
 #define ICON_FA_FOLDER_OPEN "\xef\x81\xbc"  // U+F07C — used for "Load"
 #define ICON_FA_FILE        "\xef\x85\x9b"  // U+F15B — used for "Save" (blank doc)
 #define ICON_FA_FLOPPY_DISK_REG "\xef\x83\x87" // U+F0C7 — NOT in Regular; kept as a reminder, don't use
+#define ICON_FA_UNDO         "\xef\x83\xa2"  // U+F0E2 — used for "Undo"
+#define ICON_FA_REDO         "\xef\x80\x9e"  // U+F01E — used for "Redo"
 
+#define ICON_FA_CUBES         "\xef\x86\xb3"
+#define ICON_FA_TH            "\xef\x80\x8a"
 // Font Awesome's private-use-area icon range. Needed so ImGui's font atlas
 // reserves glyph slots for these codepoints when merging the icon font.
 #define ICON_MIN_FA 0xf000

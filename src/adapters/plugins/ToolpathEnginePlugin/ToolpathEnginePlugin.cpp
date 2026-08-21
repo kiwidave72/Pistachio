@@ -1,4 +1,4 @@
-#ifdef _WIN32
+ï»¿#ifdef _WIN32
 #include <windows.h>
 #endif
 
@@ -19,7 +19,7 @@
 #include "adapters/plugins/ToolpathEnginePlugin/SlicingPhase.h"
 #include "adapters/plugins/ToolpathEnginePlugin/ExtractionPhase.h"
 #include "adapters/plugins/ToolpathEnginePlugin/TopologyPhase.h"
- 
+
 #include "adapters/plugins/ToolpathEnginePlugin/TopologyRepairPhase.h"
 
 #include "adapters/plugins/ToolpathEnginePlugin/LayerBitmapDebug.h"
@@ -30,16 +30,19 @@
 
 #include "domain/ToolpathSerialization.h"
 #include "domain/ToolpathBinaryIO.h"
+#include "domain/WallGenerationResult.h"
 
 
 
 #include <cstdio>
 #include <algorithm>
+#include <memory>
+#include <atomic>
 
 // -----------------------------------------------------------------------
 // ToolpathEnginePlugin
 //
-// Skeleton only — no P0-P6 pipeline logic yet. Proves the plugin loads
+// Skeleton only ï¿½ no P0-P6 pipeline logic yet. Proves the plugin loads
 // and can resolve the services it will actually need (ModelCache,
 // WorkspaceStore) before any real algorithm code is written, same
 // discipline used for pistachio_service_stub.
@@ -55,6 +58,38 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
     return TRUE;
 }
 #endif
+
+namespace
+{
+    // Holds all per-run pipeline state. Owned via shared_ptr and captured
+    // BY VALUE into every step lambda, so its lifetime spans the async
+    // TaskGroup run regardless of when onRunPipeline() itself returns.
+    // (Previously these were locals in onRunPipeline captured by reference
+    // -- submit() is async, so onRunPipeline's stack frame was gone by the
+    // time later steps ran, and steps were writing through dangling
+    // references into reclaimed stack memory. That's what caused the
+    // STATUS_STACK_BUFFER_OVERRUN / heap corruption on step 1's move-assign.)
+    struct InstanceWallData
+    {
+        // Per-layer wall results for one model instance, same indexing as
+        // topologized[instIdx].topology.layers. Bridges the Wall Generation
+        // step to the Infill step.
+        std::vector<domain::v1::WallGenerationResult> wallResults;
+    };
+
+    struct PipelineContext
+    {
+        std::vector<domain::v1::UnifiedGeometry> geometry;
+        std::vector<kinetica::ValidatedGeometry> validated;
+        std::vector<kinetica::AcceleratedGeometry> accelerated;
+        std::vector<kinetica::SlicedGeometry> sliced;
+        std::vector<kinetica::ExtractedGeometry> extracted;
+        std::vector<kinetica::TopologizedGeometry> topologized;
+        kinetica::TopologyRepairResult repairResult;
+        std::vector<InstanceWallData> wallData;
+        domain::v1::Toolpath toolpath;
+    };
+}
 
 class ToolpathEnginePlugin final : public IServiceModule
 {
@@ -133,210 +168,222 @@ private:
         printf("[ToolpathEngine] run.pipeline: running P0 against plate '%s' (%zu instances)\n",
             buildPlateId.c_str(), plate->modelInstances.size());
 
-        kinetica::ImportPhase importPhase(*m_modelCache, *m_config);
-        auto geometry = importPhase.run(plate);
+        // Heap-allocated, ref-counted pipeline state -- see PipelineContext
+        // comment above for why this replaced stack locals + reference
+        // captures. Every step captures [this, plate, ctx] / [this, ctx]
+        // (ctx by value: cheap shared_ptr copy) and reads/writes ctx->xxx.
+        auto ctx = std::make_shared<PipelineContext>();
 
-        printf("[ToolpathEngine] P0 produced %zu UnifiedGeometry objects\n", geometry.size());
-
-        kinetica::ValidationPhase validationPhase;
-        auto validated = validationPhase.run(std::move(geometry));
-
-        int cleanCount = 0;
-        for (auto& v : validated)
-            if (v.report.isClean()) ++cleanCount;
-
-        printf("[ToolpathEngine] P1 complete: %d/%zu instances clean\n", cleanCount, validated.size());
-
-
-        kinetica::AccelerationPhase accelerationPhase(*m_config);
-        auto accelerated = accelerationPhase.run(std::move(validated));
-
-        printf("[ToolpathEngine] P2 complete: %zu instances accelerated\n", accelerated.size());
-
-        kinetica::SlicingPhase slicingPhase(*m_config);
-        auto sliced = slicingPhase.run(std::move(accelerated));
-
-        printf("[ToolpathEngine] P3 complete: %zu instances sliced\n", sliced.size());
-
-
-        kinetica::ExtractionPhase extractionPhase;
-        auto extracted = extractionPhase.run(std::move(sliced));
-
-        printf("[ToolpathEngine] P4 complete: %zu instances extracted\n", extracted.size());
-        if (!extracted.empty())
-            printf("[ToolpathEngine]   instance 0 has %zu layers\n", extracted[0].layers.size());
-
-
-        kinetica::TopologyPhase topologyPhase;
-        auto topologized = topologyPhase.run(extracted);
-
-        printf("[ToolpathEngine] P5 complete: %zu instances topologized\n", topologized.size());
-
-
-        kinetica::TopologyRepairPhase topologyRepairPhase;
-        auto repairResult = topologyRepairPhase.run(std::move(topologized));
-        topologized = std::move(repairResult.geometry);
-
-        printf("[ToolpathEngine] P5R complete: %d repaired, %d flagged-but-not-repaired\n",
-            repairResult.report.totalRepaired, repairResult.report.totalFlaggedNotRepaired);
-
-
-        // toolpath.layers must ACCUMULATE across every instance, not be
-        // resized-and-overwritten per instance -- the previous version did
-        // exactly that (toolpath.layers.resize() + toolpath.layers[i] =
-        // ... inside this loop), so after the loop finished, toolpath only
-        // ever contained whichever instance happened to run last; every
-        // earlier part's data was silently discarded. Same bug the
-        // commented-out old version below flags in its own comment
-        // ("currently overwrites per-instance"), just never actually
-        // fixed when this was rewritten to use parallelFor.
-        //
-        // Fix: size toolpath.layers ONCE, to the tallest instance's layer
-        // count (different parts can have different heights). Each
-        // instance's wall+infill work still runs in parallel exactly as
-        // before, but writes into its OWN per-instance buffer
-        // (instanceLayers, sized to just that instance -- safe for
-        // parallelFor's indexed writes, no shared mutable state during the
-        // parallel section). The merge into the shared toolpath.layers
-        // (append, not overwrite) happens afterward, sequentially, so two
-        // instances that both have a layer at the same index/Z both
-        // contribute their segments instead of one clobbering the other.
-        size_t maxLayerCount = 0;
-        for (auto& topoInst : topologized)
-            maxLayerCount = (std::max)(maxLayerCount, topoInst.topology.layers.size());
-
-        domain::v1::Toolpath toolpath;
-        toolpath.layers.resize(maxLayerCount);
-
-        for (auto& topoInst : topologized)
-        {
-            auto& layers = topoInst.topology.layers;
-
-            std::vector<domain::v1::ToolpathLayer> instanceLayers(layers.size());
-
-            auto parallelTiming = core::parallelFor(layers.size(), [&](size_t start, size_t end)
+        m_taskRunner->group("Slicing Pipeline")
+            .sequential()
+            .stopOnFailure(true)
+            .step("Import Phase", [this, plate, ctx](std::shared_ptr<TaskProgress> progress)
                 {
-                    // Fresh instances per chunk — rule #3, sidesteps the "is this class
-                    // genuinely stateless between calls" question entirely rather than
-                    // needing to prove it.
-                    kinetica::WallGenerationPhase wallGenerationPhase(*m_config);
-                    kinetica::RectilinearInfillStrategy rectilinearInfill;
+                    kinetica::ImportPhase importPhase(*m_modelCache, *m_config);
+                    ctx->geometry = importPhase.run(plate);
+                    printf("[ToolpathEngine] P0 produced %zu UnifiedGeometry objects\n", ctx->geometry.size());
+                })
+            .step("Validation Phase", [this, ctx](std::shared_ptr<TaskProgress> progress) {
 
-                    for (size_t i = start; i < end; ++i)
+            kinetica::ValidationPhase validationPhase;
+            ctx->validated = validationPhase.run(std::move(ctx->geometry));
+            int cleanCount = 0;
+            for (auto& v : ctx->validated)
+                if (v.report.isClean()) ++cleanCount;
+
+            printf("[ToolpathEngine] P1 complete: %d/%zu instances clean\n", cleanCount, ctx->validated.size());
+                })
+            .step("Acceleration Phase", [this, ctx](std::shared_ptr<TaskProgress> progress)
+                {
+                    kinetica::AccelerationPhase accelerationPhase(*m_config);
+                    ctx->accelerated = accelerationPhase.run(std::move(ctx->validated));
+
+                    printf("[ToolpathEngine] P2 complete: %zu instances accelerated\n", ctx->accelerated.size());
+                })
+            .step("Slicing Phase", [this, ctx](std::shared_ptr<TaskProgress> progress)
+                {
+                    kinetica::SlicingPhase slicingPhase(*m_config);
+                    ctx->sliced = slicingPhase.run(std::move(ctx->accelerated));
+
+                    printf("[ToolpathEngine] P3 complete: %zu instances sliced\n", ctx->sliced.size());
+                })
+            .step("Extraction Phase", [this, ctx](std::shared_ptr<TaskProgress> progress)
+                {
+                    kinetica::ExtractionPhase extractionPhase;
+                    ctx->extracted = extractionPhase.run(std::move(ctx->sliced));
+
+                    printf("[ToolpathEngine] P4 complete: %zu instances extracted\n", ctx->extracted.size());
+                    if (!ctx->extracted.empty())
+                        printf("[ToolpathEngine]   instance 0 has %zu layers\n", ctx->extracted[0].layers.size());
+                })
+            .step("Topology Phase", [this, ctx](std::shared_ptr<TaskProgress> progress) {
+
+            kinetica::TopologyPhase topologyPhase;
+            ctx->topologized = topologyPhase.run(ctx->extracted);
+
+            printf("[ToolpathEngine] P5 complete: %zu instances topologized\n", ctx->topologized.size());
+                })
+            .step("Topology Repair Phase", [this, ctx](std::shared_ptr<TaskProgress> progress)
+                {
+                    kinetica::TopologyRepairPhase topologyRepairPhase;
+                    ctx->repairResult = topologyRepairPhase.run(std::move(ctx->topologized));
+                    ctx->topologized = std::move(ctx->repairResult.geometry);
+
+                    printf("[ToolpathEngine] P5R complete: %d repaired, %d flagged-but-not-repaired\n",
+                        ctx->repairResult.report.totalRepaired, ctx->repairResult.report.totalFlaggedNotRepaired);
+                })
+            .step("Wall Generation Phase", [this, ctx](std::shared_ptr<TaskProgress> progress)
+                {
+                    size_t totalLayers = 0;
+                    for (auto& topoInst : ctx->topologized)
+                        totalLayers += topoInst.topology.layers.size();
+
+                    ctx->wallData.clear();
+                    ctx->wallData.resize(ctx->topologized.size());
+
+                    std::atomic<size_t> completed{ 0 };
+                    progress->fraction.store(totalLayers > 0 ? 0.f : 1.f);
+                    progress->setMessage(totalLayers > 0
+                        ? ("Processing 0 / " + std::to_string(totalLayers))
+                        : "No layers to process");
+
+                    for (size_t instIdx = 0; instIdx < ctx->topologized.size(); ++instIdx)
                     {
-                        auto& topoLayer = layers[i];
+                        auto& topoInst = ctx->topologized[instIdx];
+                        auto& layers = topoInst.topology.layers;
+                        auto& wallResults = ctx->wallData[instIdx].wallResults;
+                        wallResults.resize(layers.size());
 
-                        domain::v1::ToolpathLayer tpLayer;
-                        tpLayer.z = topoLayer.z;
+                        auto parallelTiming = core::parallelFor(layers.size(), [&](size_t start, size_t end)
+                            {
+                                // Fresh instance per chunk ï¿½ rule #3, sidesteps the "is this class
+                                // genuinely stateless between calls" question entirely rather than
+                                // needing to prove it.
+                                kinetica::WallGenerationPhase wallGenerationPhase(*m_config);
 
-                        auto wallResult = wallGenerationPhase.run(topoLayer);
-                        tpLayer.segments = wallResult.segments;
+                                for (size_t i = start; i < end; ++i)
+                                {
+                                    wallResults[i] = wallGenerationPhase.run(layers[i]);
 
-                        auto infillRegion = kinetica::InfillRegionPhase::run(wallResult);
-                        auto infillSegments = rectilinearInfill.generate(infillRegion, wallResult, topoLayer.z, *m_config);
-                        tpLayer.segments.insert(tpLayer.segments.end(), infillSegments.begin(), infillSegments.end());
+                                    // Progress: safe from any worker thread -- fraction is atomic,
+                                    // setMessage is separately mutex-guarded. totalLayers counts
+                                    // work units (instance-layers), not distinct Z-heights.
+                                    size_t done = completed.fetch_add(1, std::memory_order_relaxed) + 1;
+                                    progress->fraction.store(
+                                        totalLayers > 0 ? static_cast<float>(done) / static_cast<float>(totalLayers) : 1.f,
+                                        std::memory_order_relaxed);
+                                    progress->setMessage("Processing " + std::to_string(done) + " / " + std::to_string(totalLayers));
+                                }
+                            });
 
-                        instanceLayers[i] = std::move(tpLayer);   // indexed write into this instance's OWN buffer — safe, no shared mutable state
+                        printf("[ToolpathEngine] P6a wall generation (parallel): %.1fms\n", parallelTiming.milliseconds);
                     }
-                });
+                })
+            .step("Infill Phase", [this, ctx](std::shared_ptr<TaskProgress> progress)
+                {
+                    size_t maxLayerCount = 0;
+                    size_t totalLayers = 0;
+                    for (auto& topoInst : ctx->topologized)
+                    {
+                        maxLayerCount = (std::max)(maxLayerCount, topoInst.topology.layers.size());
+                        totalLayers += topoInst.topology.layers.size();
+                    }
 
-            printf("[ToolpathEngine] P6 wall+infill (parallel): %.1fms\n", parallelTiming.milliseconds);
+                    domain::v1::Toolpath& toolpath = ctx->toolpath;
+                    toolpath.layers.resize(maxLayerCount);
 
-            // Merge (append) this instance's segments into the shared
-            // toolpath — not a write/overwrite — so multiple parts at
-            // the same layer index both end up represented.
-            for (size_t i = 0; i < instanceLayers.size(); ++i)
+                    std::atomic<size_t> completed{ 0 };
+                    progress->fraction.store(totalLayers > 0 ? 0.f : 1.f);
+                    progress->setMessage(totalLayers > 0
+                        ? ("Processing 0 / " + std::to_string(totalLayers))
+                        : "No layers to process");
+
+                    for (size_t instIdx = 0; instIdx < ctx->topologized.size(); ++instIdx)
+                    {
+                        auto& topoInst = ctx->topologized[instIdx];
+                        auto& layers = topoInst.topology.layers;
+                        auto& wallResults = ctx->wallData[instIdx].wallResults;
+
+                        std::vector<domain::v1::ToolpathLayer> instanceLayers(layers.size());
+
+                        auto parallelTiming = core::parallelFor(layers.size(), [&](size_t start, size_t end)
+                            {
+                                kinetica::RectilinearInfillStrategy rectilinearInfill;
+
+                                for (size_t i = start; i < end; ++i)
+                                {
+                                    auto& topoLayer = layers[i];
+                                    auto& wallResult = wallResults[i];
+
+                                    domain::v1::ToolpathLayer tpLayer;
+                                    tpLayer.z = topoLayer.z;
+                                    tpLayer.segments = wallResult.segments;
+
+                                    auto infillRegion = kinetica::InfillRegionPhase::run(wallResult);
+                                    auto infillSegments = rectilinearInfill.generate(infillRegion, wallResult, topoLayer.z, *m_config);
+                                    tpLayer.segments.insert(tpLayer.segments.end(), infillSegments.begin(), infillSegments.end());
+
+                                    instanceLayers[i] = std::move(tpLayer);   // indexed write into this instance's OWN buffer ï¿½ safe, no shared mutable state
+
+                                    // Progress: same pattern as Wall Generation step above.
+                                    size_t done = completed.fetch_add(1, std::memory_order_relaxed) + 1;
+                                    progress->fraction.store(
+                                        totalLayers > 0 ? static_cast<float>(done) / static_cast<float>(totalLayers) : 1.f,
+                                        std::memory_order_relaxed);
+                                    progress->setMessage("Processing " + std::to_string(done) + " / " + std::to_string(totalLayers));
+                                }
+                            });
+
+                        printf("[ToolpathEngine] P6b infill (parallel): %.1fms\n", parallelTiming.milliseconds);
+
+                        // Merge (append) this instance's segments into the shared
+                        // toolpath ï¿½ not a write/overwrite ï¿½ so multiple parts at
+                        // the same layer index both end up represented.
+                        for (size_t i = 0; i < instanceLayers.size(); ++i)
+                        {
+                            if (toolpath.layers[i].segments.empty())
+                                toolpath.layers[i].z = instanceLayers[i].z;
+                            toolpath.layers[i].segments.insert(
+                                toolpath.layers[i].segments.end(),
+                                instanceLayers[i].segments.begin(),
+                                instanceLayers[i].segments.end());
+                        }
+                    }
+
+                    if (m_toolPathStore)
+                        m_toolPathStore->set(toolpath);   // publishes "toolpath.updated" internally, no payload needed
+                })
+            .completed([this](bool success) {
+            if (success)
             {
-                if (toolpath.layers[i].segments.empty())
-                    toolpath.layers[i].z = instanceLayers[i].z;
-                toolpath.layers[i].segments.insert(
-                    toolpath.layers[i].segments.end(),
-                    instanceLayers[i].segments.begin(),
-                    instanceLayers[i].segments.end());
+                printf("[ToolpathEngine] run.pipeline completed successfully\n");
+                m_eventBus->publish("toolpathStore.updated", "");
             }
-        }
-        //kinetica::WallGenerationPhase wallGenerationPhase(*m_config);
-        //kinetica::RectilinearInfillStrategy rectilinearInfill;
-
-        //domain::v1::Toolpath toolpath;   // single-toolhead scope — one Toolpath, no ToolheadToolpath wrapper yet
-        //int totalWallSegments = 0;
-
-        //
-        //int totalInfillSegments = 0;
-        //int totalHolesFilteredAsSpurious = 0;
+            else
+            {
+                printf("[ToolpathEngine] run.pipeline failed\n");
+            }
+                })
+            .submit();
 
 
-        //for (auto& topoInst : topologized)
-        //{
-        //    toolpath.layers.clear();   // TEMP: currently overwrites per-instance — multi-instance
-        //    // Toolpath assembly not designed yet, single-instance
-        //    // testing only for now
+        //auto extractedCopy = ctx->extracted;        // full copies ï¿½ safe, nothing else will touch these again
+        //auto topologizedCopy = ctx->topologized;
+        //auto toolpathCopy = ctx->toolpath;
+        //m_taskRunner->submit(
+        //    [extractedCopy, topologizedCopy, toolpathCopy](std::shared_ptr<TaskProgress>) {
+        //        kinetica::LayerBitmapDebug::writeRunReport(extractedCopy, topologizedCopy, "C:\\temp\\layer_debug");
 
-        //    for (auto& topoLayer : topoInst.topology.layers)
-        //    {
-        //        domain::v1::ToolpathLayer tpLayer;
-        //        tpLayer.z = topoLayer.z;
+        //        //domain::v1::saveToolpathToFile(toolpathCopy, "C:\\temp\\layer_debug\\toolpath.json");
+        //        domain::v1::saveToolpathBinary(toolpathCopy, "C:\\temp\\layer_debug\\toolpath.bin");
+        //        //for (size_t i = 0; i < toolpathCopy.layers.size(); ++i)
+        //        //   kinetica::LayerBitmapDebug::dumpToolpathLayer(toolpathCopy.layers[i], (int)i, "C:\\temp\\layer_debug", "wall_test", 1024);
+        //        //kinetica::LayerBitmapDebug::dumpAllTopologyLayers(topologizedCopy, "C:\\temp\\layer_debug");
+        //        //kinetica::LayerBitmapDebug::dumpAllChainLayers(extractedCopy, "C:\\temp\\layer_debug");
 
-        //        auto wallResult = wallGenerationPhase.run(topoLayer);
-        //        tpLayer.segments = wallResult.segments;
-        //        totalWallSegments += (int)wallResult.segments.size();
+        //    },
+        //    "Debug PNG dump", false, false, false);
 
-        //        auto infillRegion = kinetica::InfillRegionPhase::run(wallResult);
-        //        totalHolesFilteredAsSpurious += infillRegion.holesFilteredAsSpurious;
-
-        //        auto infillSegments = rectilinearInfill.generate(infillRegion, wallResult, topoLayer.z, *m_config);
-        //        tpLayer.segments.insert(tpLayer.segments.end(), infillSegments.begin(), infillSegments.end());
-        //        totalInfillSegments += (int)infillSegments.size();
-
-        //        tpLayer.comments.push_back("P6: walls + infill, no skin yet");
-
-        //        toolpath.layers.push_back(std::move(tpLayer));
-        //    }
-        //}
-
-       /* printf("[ToolpathEngine] P6 (walls only, partial) complete: %d layers, %d wall segments total\n",
-            (int)toolpath.layers.size(), totalWallSegments);
-
-
-        printf("[ToolpathEngine] P6 (walls + infill) complete: %d layers, %d wall segments, %d infill segments, %d holes filtered\n",
-            (int)toolpath.layers.size(), totalWallSegments, totalInfillSegments, totalHolesFilteredAsSpurious);
-        */
-
-        if (m_toolPathStore)
-            m_toolPathStore->set(toolpath);   // publishes "toolpath.updated" internally, no payload needed
-
-        m_eventBus->publish("toolpathStore.updated", "");
-
-
-        if (m_taskRunner)
-        {
-            auto extractedCopy = extracted;        // full copies — safe, nothing else will touch these again
-            auto topologizedCopy = topologized;
-            auto toolpathCopy = toolpath;
-            m_taskRunner->submit(
-                [extractedCopy, topologizedCopy, toolpathCopy](std::shared_ptr<TaskProgress>) {
-                    kinetica::LayerBitmapDebug::writeRunReport(extractedCopy, topologizedCopy, "C:\\temp\\layer_debug");
-
-                    //domain::v1::saveToolpathToFile(toolpathCopy, "C:\\temp\\layer_debug\\toolpath.json");
-                    domain::v1::saveToolpathBinary(toolpathCopy, "C:\\temp\\layer_debug\\toolpath.bin");
-                    //for (size_t i = 0; i < toolpathCopy.layers.size(); ++i)
-                    //   kinetica::LayerBitmapDebug::dumpToolpathLayer(toolpathCopy.layers[i], (int)i, "C:\\temp\\layer_debug", "wall_test", 1024);
-                    //kinetica::LayerBitmapDebug::dumpAllTopologyLayers(topologizedCopy, "C:\\temp\\layer_debug");
-                    //kinetica::LayerBitmapDebug::dumpAllChainLayers(extractedCopy, "C:\\temp\\layer_debug");
- 
-                },
-                "Debug PNG dump", false, false, false);
-        }
-        else
-        {
-            kinetica::LayerBitmapDebug::writeRunReport(extracted, topologized, "C:\\temp\\layer_debug");
-            for (size_t i = 0; i < toolpath.layers.size(); ++i)
-                kinetica::LayerBitmapDebug::dumpToolpathLayer(toolpath.layers[i], (int)i, "C:\\temp\\layer_debug", "wall_test", 1024);
-
-            //kinetica::LayerBitmapDebug::dumpAllTopologyLayers(topologized, "C:\\temp\\layer_debug");
-            //kinetica::LayerBitmapDebug::dumpAllChainLayers(extracted, "C:\\temp\\layer_debug");
-
-        }
     }
 
 

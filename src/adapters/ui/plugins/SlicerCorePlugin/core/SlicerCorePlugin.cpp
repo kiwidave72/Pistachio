@@ -39,6 +39,7 @@
 #include "domain/ModelCache.h"
 
 #include "adapters/loaders/StlLoaderAdapter.h"
+#include "CachedFolderScanner.h"
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -708,14 +709,15 @@ public:
                     progress->setMessage("Scanning  Voron-2 STLs");
 
                     auto tempproject = std::make_shared<domain::v1::Project>();
-                    FolderScanner scanner;
+                   
+                    CachedFolderScanner scanner;   // instead of FolderScanner
                     ScanOptions opts;
                     opts.recursive = true;
                     opts.includeHidden = false;
                     opts.maxDepth = 10;
 
-                    // speed up the cache loading by looking at the test prints only
                     ScanResult result = scanner.scan("e:\\github\\Voron-2\\STLs", opts);
+                    // optional 3rd/4th args: scanner.scan(path, opts, ".cache", /*fresh=*/false)
 
                     if (!result.success)
                     {
@@ -723,21 +725,19 @@ public:
                         progress->failed = true;
                         return;
                     }
-
                     printf("Scanned: %s — %d files, %d folders\n", result.rootPath.c_str(), result.totalFiles, result.totalFolders);
-
                     tempproject->fromScanResult(result, *m_modelCache);
                     m_scannedProject = tempproject;
                     m_projectLoaded = true;
 
 
                 })
-            .step("Loading workspace", [this](std::shared_ptr<TaskProgress> progress)
+           /* .step("Loading workspace", [this](std::shared_ptr<TaskProgress> progress)
                 {
 
                     progress->setMessage("Loading workspace.json");
-                    m_workspaceService->loadWorkspace("c:\\temp\\", "test_workspace.json");
-                })
+                    m_workspaceService->loadWorkspace("c:\\temp\\", "workspace.json");
+                })*/
             .completed([this](bool success)
                 {
                     printf("[SlicerCore] startup load %s\n", success ? "complete" : "FAILED");
@@ -779,8 +779,8 @@ public:
         //m_navigation->setProject(m_workspace->projects[0]->Id);
         //m_navigation->setBuildPlate(m_workspace->projects[0]->buildPlates[0]->Id);
 
-        auto* project = m_navigation->resolveOrDefaultProject(*m_workspaceStore);
-        auto* buildPlate = m_navigation->resolveOrDefaultBuildPlate(project);
+        //auto* project = m_navigation->resolveOrDefaultProject(*m_workspaceStore);
+        //auto* buildPlate = m_navigation->resolveOrDefaultBuildPlate(project);
 
 
         
@@ -792,22 +792,22 @@ public:
                 auto* project = m_navigation->resolveProject(*m_workspaceStore);
                 auto* buildPlate = m_navigation->resolveBuildPlate(project);
 
-                if (!buildPlate)
-                    m_navigation->setBuildPlate("");
+                //if (!buildPlate)
+                //    m_navigation->setBuildPlate("");
 
-                m_buildPlateRenderer->updateViewModel(project ? project->buildPlates : std::vector<domain::v1::BuildPlate*>{});
+                //m_buildPlateRenderer->updateViewModel(project ? project->buildPlates : std::vector<domain::v1::BuildPlate*>{});
             };
 
-        if (buildPlate)
-            m_slicerService->arrangeBuildPlate(buildPlate);
+        //if (buildPlate)
+        //    m_slicerService->arrangeBuildPlate(buildPlate);
 
-        m_buildPlateRenderer = std::make_unique<slicer::BuildPlateRenderer>();
+        //m_buildPlateRenderer = std::make_unique<slicer::BuildPlateRenderer>();
 
         //printf("[SlicerCore] about to call initialize, project=%p, buildPlates.size()=%zu\n",
         //    (void*)m_selectedProject, m_selectedProject ? m_selectedProject->buildPlates.size() : 0);
 
-        m_buildPlateRenderer->initialize(*m_workspaceStore, project, *m_modelCache, *m_navigation);
-        printf("[SlicerCore] initialize() returned\n");
+        //m_buildPlateRenderer->initialize(*m_workspaceStore, project, *m_modelCache, *m_navigation);
+       // printf("[SlicerCore] initialize() returned\n");
 
         if (m_registry)
         {
@@ -821,8 +821,8 @@ public:
                 [this]() { m_sliceRequested = true; },
                 "Ctrl+Shift+S");
             m_menuContrib->addSeparator(90);
-            m_menuContrib->addToggle(
-                "slicer_panel_open", "Show Slicer Panel", 100, &m_panelOpen);
+            //m_menuContrib->addToggle(
+            //    "slicer_panel_open", "Show Slicer Panel", 100, &m_panelOpen);
 
             // add ribbon items
             m_ribbonContrib = m_registry->contributeRibbon(k_pluginId, "Slicer", 300);
@@ -860,7 +860,7 @@ public:
             // confirmed-correct convention already baked in, so this is
             // purely for exploring/confirming further, not a hidden
             // regression risk.
-            m_ribbonContrib->addCustom("cam_axis_mode", 62, [this]() {
+            /*m_ribbonContrib->addCustom("cam_axis_mode", 62, [this]() {
                 if (!m_viewportController) return;
 
                 char label[64];
@@ -869,9 +869,9 @@ public:
                 {
                     m_viewportController->cycleCameraAxisMode();
                 }
-                });
+                });*/
 
-            m_ribbonContrib->addButton("slice_now", "Slice", "", 10, [this]() {
+            m_ribbonContrib->addButton("slice_now", "Slice", ICON_FA_CUBES, 10, [this]() {
 
                 // now update the UI.
                 auto* project = m_navigation->resolveOrDefaultProject(*m_workspaceStore);
@@ -881,12 +881,12 @@ public:
                 m_eventBus->publish("run.pipeline", buildPlate->Id);
 
                 });
-            m_ribbonContrib->addToggle("slicer_panel", "Panel", 90, &m_panelOpen);
+            /*m_ribbonContrib->addToggle("slicer_panel", "Panel", 90, &m_panelOpen);*/
             m_ribbonContrib->addSeparator(20);
-            m_ribbonContrib->addButton("refresh_view", "Refresh", "", 20, [this, project]() {
-                this->m_buildPlateRenderer->updateViewModel(project->buildPlates);  });
+           /* m_ribbonContrib->addButton("refresh_view", "Refresh", "", 20, [this, project]() {
+                this->m_buildPlateRenderer->updateViewModel(project->buildPlates);  });*/
 
-            m_ribbonContrib->addButton("arrange_build_plate", "Arrange", "", 20, [this]() {
+            m_ribbonContrib->addButton("arrange_build_plate", "Arrange", ICON_FA_TH, 20, [this]() {
 
                 auto* project = m_navigation->resolveOrDefaultProject(*m_workspaceStore);
                 auto* buildPlate = m_navigation->resolveOrDefaultBuildPlate(project);
@@ -901,9 +901,15 @@ public:
                 auto cmd = std::make_unique<SnapshotCommand>(
                     *m_workspaceStore, "Load Worspace",
                     [this]() {
-                        m_workspaceService->loadWorkspace("c:\\temp\\", "cube_workspace.json");
+
+                        m_workspaceService->loadWorkspace("c:\\temp\\", "workspace.json");
+
                         auto* project = m_navigation->resolveOrDefaultProject(*m_workspaceStore);
-                        m_buildPlateRenderer->updateViewModel(project->buildPlates);
+                        auto* buildPlate = m_navigation->resolveOrDefaultBuildPlate(project);
+
+                        m_slicerService->arrangeBuildPlate(buildPlate);
+                        m_editableScene->sceneLayout().setActiveBuildPlate(buildPlate, *m_modelCache);
+ 
                     });
                 m_cmdHistory.Execute(std::move(cmd));
 
@@ -920,18 +926,18 @@ public:
 
             // undo / redo
             auto undoRedoContrib = m_registry->contributeRibbon(k_pluginId, "UndoRedo", 400);
-            undoRedoContrib->addButton("undo", "Undo", "", 40, [this]() { m_cmdHistory.Undo(); });
-            undoRedoContrib->addButton("redo", "Redo", "", 40, [this]() { m_cmdHistory.Redo(); });
+            undoRedoContrib->addButton("undo", "Undo", ICON_FA_UNDO, 40, [this]() { m_cmdHistory.Undo(); });
+            undoRedoContrib->addButton("redo", "Redo", ICON_FA_REDO, 40, [this]() { m_cmdHistory.Redo(); });
 
             // Single / Multi
-            auto sceneLayoutContrib = m_registry->contributeRibbon(k_pluginId, "UndoRedo", 400);
+           /* auto sceneLayoutContrib = m_registry->contributeRibbon(k_pluginId, "UndoRedo", 400);
             sceneLayoutContrib->addButton("changeToSingle", "Single", "", 40, [this]() {  m_buildPlateRenderer->getSceneLayout().selectPlate(0); });
-            sceneLayoutContrib->addButton("changeToMulti", "Multi", "", 40, [this]() { m_buildPlateRenderer->getSceneLayout().selectPlate(-1); });
+            sceneLayoutContrib->addButton("changeToMulti", "Multi", "", 40, [this]() { m_buildPlateRenderer->getSceneLayout().selectPlate(-1); });*/
 
 
             auto partContrib = m_registry->contributeRibbon(k_pluginId, "Part", 400);
             // delete Part
-            partContrib->addButton("deletePart", "Delete", "", 40, [this]() {
+            /*partContrib->addButton("deletePart", "Delete", "", 40, [this]() {
                 auto selectedIds = m_navigation->selection().getSelectedIds();
                 if (selectedIds.empty()) return;
 
@@ -957,44 +963,44 @@ public:
                         m_buildPlateRenderer->updateViewModel(project->buildPlates);
                     });
                 m_cmdHistory.Execute(std::move(cmd));
-                });
+                });*/
 
 
-            auto plateContrib = m_registry->contributeRibbon(k_pluginId, "Plate", 400);
-            plateContrib->addButton("addPlate", "Add", "", 60, [this]() {
+            //auto plateContrib = m_registry->contributeRibbon(k_pluginId, "Plate", 400);
+            //plateContrib->addButton("addPlate", "Add", "", 60, [this]() {
 
-                // Add plate
-                auto addCmd = std::make_unique<SnapshotCommand>(
-                    *m_workspaceStore, "Add Build Plate",
-                    [this]() {
-                        auto* project = m_navigation->resolveProject(*m_workspaceStore);
-                        if (!project) return;
+            //    // Add plate
+            //    auto addCmd = std::make_unique<SnapshotCommand>(
+            //        *m_workspaceStore, "Add Build Plate",
+            //        [this]() {
+            //            auto* project = m_navigation->resolveProject(*m_workspaceStore);
+            //            if (!project) return;
 
-                        auto* plate = new domain::v1::BuildPlate();
-                        plate->Id = utils::generateGuid();
-                        plate->name = "Build Plate " + std::to_string(project->buildPlates.size() + 1);
-                        // TODO: populate plate->buildPlateModel same way SlicerService::loadWorkspace() does
-                        std::shared_ptr<domain::v1::Model> buildPlateModel = plate->buildPlateModel;
-                        FolderScanner scanner;
+            //            auto* plate = new domain::v1::BuildPlate();
+            //            plate->Id = utils::generateGuid();
+            //            plate->name = "Build Plate " + std::to_string(project->buildPlates.size() + 1);
+            //            // TODO: populate plate->buildPlateModel same way SlicerService::loadWorkspace() does
+            //            std::shared_ptr<domain::v1::Model> buildPlateModel = plate->buildPlateModel;
+            //            FolderScanner scanner;
 
-                        std::string path = "C:\\github\\Pistachio-config\\Assets\\STL\\BuildPlate.stl";
+            //            std::string path = "C:\\github\\Pistachio-config\\Assets\\STL\\BuildPlate.stl";
 
-                        StlLoaderAdapter loader = StlLoaderAdapter(*m_modelCache);
-                        loader.load(path);
+            //            StlLoaderAdapter loader = StlLoaderAdapter(*m_modelCache);
+            //            loader.load(path);
 
-                        buildPlateModel->mesh = loader.getMesh();
+            //            buildPlateModel->mesh = loader.getMesh();
 
-                        buildPlateModel->Id = scanner.scanFile(path).file.fileHash.c_str();
+            //            buildPlateModel->Id = scanner.scanFile(path).file.fileHash.c_str();
 
-                        plate->buildPlateModel = buildPlateModel;
-                        project->buildPlates.push_back(plate);
-                        m_navigation->setProject(project->Id);   // keep context consistent
-                        m_navigation->setBuildPlate(plate->Id);  // select the new plate immediately
-                    });
-                m_cmdHistory.Execute(std::move(addCmd));
+            //            plate->buildPlateModel = buildPlateModel;
+            //            project->buildPlates.push_back(plate);
+            //            m_navigation->setProject(project->Id);   // keep context consistent
+            //            m_navigation->setBuildPlate(plate->Id);  // select the new plate immediately
+            //        });
+            //    m_cmdHistory.Execute(std::move(addCmd));
 
 
-                });
+            //    });
 
 
             // add dragdrop target

@@ -8,11 +8,11 @@
 //
 // - contributeMenu()   / removeMenuContributions()
 // - contributeRibbon() / removeRibbonContributions()
-// - renderMenuBar()    — call inside HostUI::BeginMenubar block
-// - renderRibbonBar()  — call inside the ribbon area
+// - renderMenuBar()    - call inside HostUI::BeginMenubar block
+// - renderRibbonBar()  - call inside the ribbon area
 //
 // Place at: src/adapters/ui/ContributionRegistry.h
-// Include in ImGuiHost.cpp only — depends on ImGui.
+// Include in ImGuiHost.cpp only - depends on ImGui.
 // -----------------------------------------------------------------------
 
 #include "ports/Contributions.h"
@@ -31,10 +31,10 @@ namespace adapters {
     {
     public:
         // -----------------------------------------------------------------------
-        // Registration — returns a raw pointer the caller holds.
+        // Registration - returns a raw pointer the caller holds.
         // The registry owns the object. Safe to call at any time.
         // -----------------------------------------------------------------------
-         // Register a drop target — returns raw pointer the plugin holds
+         // Register a drop target - returns raw pointer the plugin holds
         ports::DragDropContribution* contributeDragDrop(
             const std::string& pluginId,
             const std::string& payloadType,
@@ -92,7 +92,7 @@ namespace adapters {
 
                     // Extract your payload data safely here!
                     // MyAssetData* droppedAsset = *(MyAssetData**)globalPayload->Data;
-                    
+
                     //std::out << "Dropped successfully using global bypass method!" << std::endl;
                 }
             }
@@ -225,7 +225,7 @@ namespace adapters {
         }
 
         // -----------------------------------------------------------------------
-        // Rendering — call every frame inside the appropriate ImGui context
+        // Rendering - call every frame inside the appropriate ImGui context
         // -----------------------------------------------------------------------
 
         // Call inside HostUI::BeginMenubar / EndMenubar block.
@@ -351,12 +351,24 @@ namespace adapters {
 
             const bool enabled = !item.isEnabled || item.isEnabled();
 
+            // FIX: every ImGui call below now uses "label##item.id" instead of
+            // just "label". Previously two contributions (e.g. from different
+            // plugins) with the same visible label collided on ImGui ID, which
+            // caused the "have to click twice sometimes" bug: ImGui's
+            // hovered/active-id bookkeeping for that ID got associated with
+            // whichever same-labeled widget was submitted last in the frame,
+            // so the first click on the other one didn't resolve cleanly.
+            // item.id is guaranteed unique (see Contributions.h hasItem/removeItem),
+            // so this makes ImGui identity independent of display text everywhere,
+            // matching what the icon-button path already did correctly.
+            const std::string uniqueLabel = item.label + "##" + item.id;
+
             switch (item.type)
             {
             case ports::MenuItem::Type::Item:
                 if (!enabled) ImGui::BeginDisabled();
                 if (ImGui::MenuItem(
-                    item.label.c_str(),
+                    uniqueLabel.c_str(),
                     item.shortcut.empty() ? nullptr : item.shortcut.c_str()))
                 {
                     if (item.onClick) item.onClick();
@@ -367,7 +379,7 @@ namespace adapters {
             case ports::MenuItem::Type::Toggle:
                 if (!enabled) ImGui::BeginDisabled();
                 if (item.togglePtr)
-                    ImGui::MenuItem(item.label.c_str(), nullptr, item.togglePtr);
+                    ImGui::MenuItem(uniqueLabel.c_str(), nullptr, item.togglePtr);
                 if (!enabled) ImGui::EndDisabled();
                 break;
 
@@ -377,7 +389,7 @@ namespace adapters {
 
             case ports::MenuItem::Type::SubMenu:
                 if (!enabled) ImGui::BeginDisabled();
-                if (ImGui::BeginMenu(item.label.c_str()))
+                if (ImGui::BeginMenu(uniqueLabel.c_str()))
                 {
                     if (item.populateSubMenu)
                     {
@@ -423,7 +435,11 @@ namespace adapters {
                 }
                 else
                 {
-                    clicked = ImGui::Button(item.label.c_str());
+                    // FIX: was ImGui::Button(item.label.c_str()) - collided with
+                    // any other item sharing the same label text anywhere else
+                    // in the ribbon/menu. See note in renderMenuItem above.
+                    std::string buttonId = item.label + "##" + item.id;
+                    clicked = ImGui::Button(buttonId.c_str());
                 }
 
                 if (clicked && item.onClick)
@@ -437,7 +453,11 @@ namespace adapters {
             case ports::RibbonItem::Type::Toggle:
                 if (!enabled) ImGui::BeginDisabled();
                 if (item.togglePtr)
-                    ImGui::Checkbox(item.label.c_str(), item.togglePtr);
+                {
+                    // FIX: unique id, same reasoning as the Button case above.
+                    std::string toggleId = item.label + "##" + item.id;
+                    ImGui::Checkbox(toggleId.c_str(), item.togglePtr);
+                }
                 if (!enabled) ImGui::EndDisabled();
                 ImGui::SameLine();
                 break;
@@ -451,7 +471,7 @@ namespace adapters {
                 break;
             }
         }
-       
+
         std::vector<std::unique_ptr<ports::MenuContribution>>   m_menus;
         std::vector<std::unique_ptr<ports::RibbonContribution>> m_ribbons;
         std::vector<std::unique_ptr<ports::DragDropContribution>>  m_dragDrops;

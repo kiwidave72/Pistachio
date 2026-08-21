@@ -499,11 +499,14 @@ namespace adapters {
         iconConfig.MergeMode = true;          // merge into previous font instead of replacing it
         iconConfig.PixelSnapH = true;
         iconConfig.GlyphMinAdvanceX = 16.0f;  // keep icons monospaced-ish so they don't jitter
-
-
-        io.Fonts->AddFontFromFileTTF(
-            "assets/fonts/fa-regular-400.ttf", 16.0f, &iconConfig, iconRanges);
+        io.Fonts->AddFontFromFileTTF("assets/fonts/fa-regular-400.ttf", 16.0f, &iconConfig, iconRanges);
     
+        ImFontConfig icons_config_solid;
+        icons_config_solid.MergeMode = true;      // <-- key: merges into previous font instead of replacing
+        icons_config_solid.PixelSnapH = true;
+        io.Fonts->AddFontFromFileTTF("assets/fonts/fa-solid-900.ttf", 16.0f, &icons_config_solid, iconRanges);
+        
+        
         io.Fonts->Build();
 
         // CRITICAL FIX: Initialize ImGui KeyMap for keyboard navigation
