@@ -11,6 +11,7 @@
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h>
+#include <combaseapi.h>
 #endif
 
 
@@ -451,6 +452,21 @@ namespace
 
 int main(int argc, char** argv)
 {
+#ifdef _WIN32
+    // Required before any COM usage, including the native IFileOpenDialog
+    // used by core::showOpenFileDialog(). STA (COINIT_APARTMENTTHREADED) is
+    // required for that API specifically. This must live on the UI thread
+    // for the app's lifetime, so it's done once here rather than per-call.
+    // Without this, CoCreateInstance(CLSID_FileOpenDialog, ...) fails with
+    // CO_E_NOTINITIALIZED (0x800401F0) regardless of which thread calls it.
+    HRESULT comHr = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+    bool comInitializedHere = SUCCEEDED(comHr);
+    if (comHr == RPC_E_CHANGED_MODE) {
+        std::cerr << "[main] Main thread COM already initialized as MTA; "
+            "native file dialogs will be unavailable.\n";
+    }
+#endif
+
     try {
         std::cout << "===========================================\n";
         std::cout << "          Pistachio CAD Converter\n";
@@ -508,10 +524,16 @@ int main(int argc, char** argv)
         app->shutdown();
 
         std::cout << "Application closed successfully\n";
+#ifdef _WIN32
+        if (comInitializedHere) CoUninitialize();
+#endif
         return 0;
     }
     catch (const std::exception& e) {
         std::cerr << "Fatal error: " << e.what() << "\n";
+#ifdef _WIN32
+        if (comInitializedHere) CoUninitialize();
+#endif
         return 1;
     }
 }

@@ -281,6 +281,7 @@ add_library(pistachio_core SHARED
     src/core/ConfigStore.cpp
     src/core/rendering/SketchRenderBuilder.cpp
     src/core/TaskRunner.cpp
+    src/core/FileDialog.cpp
 
     # Adapters
     src/adapters/eventbus/EventBus.cpp
@@ -314,7 +315,9 @@ target_include_directories(pistachio_core PUBLIC
     ${STB_DIR}
     "${NLOHMANN_JSON_DIR}/single_include"
 )
-
+if(WIN32)
+    add_compile_definitions(NOMINMAX WIN32_LEAN_AND_MEAN)
+endif()
 if(USE_OPENCASCADE)
     target_link_directories(pistachio_core PUBLIC ${OpenCASCADE_LIBRARY_DIR})
 endif()

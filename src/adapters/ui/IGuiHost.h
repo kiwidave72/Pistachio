@@ -13,6 +13,8 @@ struct IGuiHost
 {
     virtual ~IGuiHost() = default;
 
+    virtual void* nativeWindowHandle() const = 0;
+
     virtual void setWindowControlIcons(
         ImTextureID minimize,
         ImTextureID maximize,

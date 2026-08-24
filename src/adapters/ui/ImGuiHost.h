@@ -39,6 +39,11 @@ public:
     void setMenubarCallback(const std::function<void()>& menubarCallback) override;
     void setRibbonbarCallback(const std::function<void()>& ribbonbarCallback) override;
 
+    
+    
+    void* nativeWindowHandle() const override;
+
+
     // IUIPort plugin controls (host-level stubs; real plugin manager lives elsewhere)
     ports::UiPluginStatus getUiPluginStatus() const override;
     void setUiPluginEnabled(bool enabled) override;
@@ -94,6 +99,7 @@ private:
     
 
     GLFWwindow* m_window = nullptr;
+
    
     std::function<void()> m_menubarCallback;
     std::function<void()> m_ribbonbarCallback;

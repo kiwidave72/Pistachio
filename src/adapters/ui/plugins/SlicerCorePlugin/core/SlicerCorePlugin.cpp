@@ -1,7 +1,7 @@
 ﻿#include "adapters/ui/plugins/UiModuleApi.h"
 #include "adapters/ui/IconsFontAwesomeRegular.h"
 #include "ports/ITaskProgressReporter.h"
-
+#include "core/FileDialog.h"
 #include "adapters/rendering/ViewportController.h"
 #include "ports/IViewportRendererRegistry.h"
 
@@ -45,6 +45,9 @@
 #define M_PI 3.14159265358979323846
 #endif
 
+#define GLFW_EXPOSE_NATIVE_WIN32
+#include <GLFW/glfw3.h>
+#include <GLFW/glfw3native.h>
 
 using namespace Clipper2Lib;
 using namespace adapters::scanning;
@@ -897,7 +900,7 @@ public:
             m_ribbonContrib->addSeparator(30);
 
             // Load Workspace
-            m_ribbonContrib->addButton("load_workspace", "Load", ICON_FA_FOLDER_OPEN, 30, [this]() {
+           /* m_ribbonContrib->addButton("load_workspace", "Load", ICON_FA_FOLDER_OPEN, 30, [this]() {
                 auto cmd = std::make_unique<SnapshotCommand>(
                     *m_workspaceStore, "Load Worspace",
                     [this]() {
@@ -913,7 +916,37 @@ public:
                     });
                 m_cmdHistory.Execute(std::move(cmd));
 
+                });*/
+
+            m_ribbonContrib->addButton("load_workspace", "Load", ICON_FA_FOLDER_OPEN, 30, [this]() {
+                
+                HWND ownerHwnd = m_guiHost ? glfwGetWin32Window(m_guiHost->window()) : nullptr;
+
+                auto selectedPath = core::showOpenFileDialog(
+                    L"Load Workspace",
+                    { { L"Workspace Files (*.json)", L"*.json" } },
+                     ownerHwnd
+                 );
+                if (!selectedPath.has_value()) {
+                    return; // user cancelled the dialog
+                }
+
+                std::filesystem::path filePath(*selectedPath);
+
+                auto cmd = std::make_unique<SnapshotCommand>(
+                    *m_workspaceStore, "Load Workspace",
+                    [this, filePath]() {
+                        m_workspaceService->loadWorkspace(
+                            filePath.parent_path().string(),
+                            filePath.filename().string());
+                        auto* project = m_navigation->resolveOrDefaultProject(*m_workspaceStore);
+                        auto* buildPlate = m_navigation->resolveOrDefaultBuildPlate(project);
+                        m_slicerService->arrangeBuildPlate(buildPlate);
+                        m_editableScene->sceneLayout().setActiveBuildPlate(buildPlate, *m_modelCache);
+                    });
+                m_cmdHistory.Execute(std::move(cmd));
                 });
+
             m_ribbonContrib->addButton("saveWorkspace", "Save", ICON_FA_FILE, 30, [this]() {
                 auto* project = m_navigation->resolveOrDefaultProject(*m_workspaceStore);
                 auto* buildPlate = m_navigation->resolveOrDefaultBuildPlate(project);

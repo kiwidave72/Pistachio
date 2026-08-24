@@ -15,14 +15,15 @@
 #include "../../../Walnut-Icon.embed"
 #include "../../../WindowImages.embed"
 
-#define GLFW_INCLUDE_NONE
+ 
+
 #include <glad/glad.h>
 #include <GLFW/glfw3.h>
 #include "stb_image.h"
-
 #define GLFW_EXPOSE_NATIVE_WIN32
 #include <GLFW/glfw3native.h>
 
+ 
 #include <cstdio>
 #include <cassert>
 
@@ -358,7 +359,10 @@ namespace adapters {
             ww, wh, fbw, fbh, visible, iconified
         );
     }
-
+    void* ImGuiHost::nativeWindowHandle() const {
+        return static_cast<void*>(glfwGetWin32Window(m_window));
+    }
+    
     static GLFWwindow* CreateHostWindow()
     {
         // If GLFW isn't initialized by someone else, initialize it here.
