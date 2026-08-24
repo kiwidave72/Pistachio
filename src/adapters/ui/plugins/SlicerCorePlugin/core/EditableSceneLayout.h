@@ -6,8 +6,10 @@
 #include "ports/ModelRenderStrategies.h"
 #include "core/IEasedTransition.h"
 #include "core/CubicEasedTransition.h"
+#include "domain/RaycastHit.h"
 
 #include <cstdio>
+#include <limits>
 
 
 class EditableSceneLayout
@@ -162,6 +164,38 @@ public:
     {
         if (m_plateModel) m_plateModel->render(shader, cameraContext, m_plateOffset);
         for (auto& m : m_instanceModels) m->render(shader, cameraContext, m_instanceOffset);
+    }
+
+    // Parts always take priority over the bare plate underneath them --
+    // same ordering as BuildPlateRenderer::raycast().
+    RaycastHit raycast(const glm::vec3& rayOrigin, const glm::vec3& rayDirection) const
+    {
+        RaycastHit closest;
+        closest.hit = false;
+        closest.distance = (std::numeric_limits<float>::max)();
+
+        for (auto& m : m_instanceModels)
+        {
+            RaycastHit hit;
+            if (m->raycast(rayOrigin, rayDirection, m_instanceOffset, hit) && hit.distance < closest.distance)
+            {
+                closest = hit;
+                closest.isPlateHit = false;
+                if (closest.renderModel) closest.instanceId = closest.renderModel->instanceId;
+            }
+        }
+        if (closest.hit) return closest;   // a part was hit -- don't test the plate
+
+        if (m_plateModel)
+        {
+            RaycastHit hit;
+            if (m_plateModel->raycast(rayOrigin, rayDirection, m_plateOffset, hit, true) && hit.distance < closest.distance)
+            {
+                closest = hit;
+                closest.isPlateHit = true;
+            }
+        }
+        return closest;
     }
 
 private:

@@ -122,3 +122,8 @@ void EditableSceneGLRender::render(uint32_t width, uint32_t height, const Camera
 }
 
 GLuint EditableSceneGLRender::getTexture() const { return m_colorTexture; }
+
+RaycastHit EditableSceneGLRender::raycast(const glm::vec3& rayOrigin, const glm::vec3& rayDirection, const CameraState&)
+{
+    return m_sceneLayout.raycast(rayOrigin, rayDirection);
+}

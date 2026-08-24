@@ -17,6 +17,7 @@
 
 #include <memory>
 #include <string>
+#include <cmath>
 
 class ViewportController
 {
@@ -55,6 +56,51 @@ public:
     void zoom(float delta)
     {
         m_camera.distance = glm::clamp(m_camera.distance - delta, 5.0f, 2000.0f);
+    }
+
+    // Screen-space pan: shifts the orbit target along the camera's own
+    // right/up vectors (same right/up formulas as buildCameraContext()'s
+    // confirmed-correct mode 0), scaled by distance so the drag feels
+    // consistent whether zoomed in close or far out. camPos is re-derived
+    // every frame from target+yaw+pitch+distance, so moving target alone
+    // is enough -- no separate camPos to keep in sync.
+    void pan(float dxPixels, float dyPixels)
+    {
+        glm::vec3 camPos(
+            m_camera.target.x + m_camera.distance * std::cos(m_camera.pitch) * std::cos(m_camera.yaw),
+            m_camera.target.y + m_camera.distance * std::sin(m_camera.pitch),
+            m_camera.target.z + m_camera.distance * std::cos(m_camera.pitch) * std::sin(m_camera.yaw));
+
+        glm::vec3 forward = glm::normalize(m_camera.target - camPos);
+        glm::vec3 right(std::sin(m_camera.yaw), 0.0f, -std::cos(m_camera.yaw));
+        glm::vec3 up = -glm::normalize(glm::cross(right, forward));
+
+        float scale = m_camera.distance * 0.0015f;
+        m_camera.target += (right * dxPixels + up * dyPixels) * scale;
+    }
+
+    // Dolly zoom that also walks the orbit target toward the point the
+    // mouse is over, so repeated scrolling converges the camera on
+    // whatever's under the cursor instead of orbiting around a fixed
+    // pivot. hitPoint is nullptr when the cursor isn't over any geometry
+    // -- in that case this behaves exactly like zoom() above.
+    void zoomToPoint(float delta, const glm::vec3* hitPoint)
+    {
+        float oldDistance = m_camera.distance;
+        m_camera.distance = glm::clamp(m_camera.distance - delta, 5.0f, 2000.0f);
+
+        if (hitPoint)
+        {
+            float t = glm::clamp(std::abs(delta) / std::max(oldDistance, 1.0f), 0.0f, 1.0f);
+            m_camera.target = glm::mix(m_camera.target, *hitPoint, t);
+        }
+    }
+
+    // Casts a ray against whichever renderer is currently active. Returns
+    // a default (RaycastHit::hit == false) if there's no active renderer.
+    RaycastHit raycast(const glm::vec3& rayOrigin, const glm::vec3& rayDirection)
+    {
+        return m_activeRenderer ? m_activeRenderer->raycast(rayOrigin, rayDirection, m_camera) : RaycastHit{};
     }
 
     void setActiveVisibleLayerRange(int start, int end) { if (m_activeRenderer) m_activeRenderer->setVisibleLayerRange(start, end); }

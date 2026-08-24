@@ -1,6 +1,8 @@
 #pragma once
 #include "core/IEasedTransition.h"
 #include "ports/IDrawable.h"
+#include "domain/RenderModel.h"
+#include "domain/RaycastHit.h"
 #include <memory>
 
 inline Transform lerpTransform(const Transform& a, const Transform& b, float t)
@@ -42,6 +44,21 @@ public:
         Transform t = lerpTransform(m_transformFrom, m_transformTarget, m_transformTransition->progress());
         RenderDrawState ds{ lerpColor(m_colorFrom, m_colorTarget, m_colorTransition->progress()), m_ghostFactor };
         m_drawable->draw(*m_strategy, ds, cameraContext, t, shader, center);
+    }
+
+    // Raycasts against the underlying RenderModel using this animated
+    // model's CURRENT (interpolated) transform, so hit-testing matches
+    // what's actually on screen this frame -- not the transition target.
+    // Returns false (no RenderModel found / no hit) without touching outHit.
+    bool raycast(const glm::vec3& rayOrigin, const glm::vec3& rayDirection,
+        glm::vec2 center, RaycastHit& outHit, bool isPlate = false) const
+    {
+        auto* rm = dynamic_cast<RenderModel*>(m_drawable.get());
+        if (!rm) return false;
+
+        glm::mat4 modelMatrix = rm->getModelMatrix(currentTransform(), center, isPlate);
+        if (!rm->raycastBoundsOnly(rayOrigin, rayDirection, modelMatrix)) return false;
+        return rm->raycast(rayOrigin, rayDirection, outHit, modelMatrix);
     }
 
 private:

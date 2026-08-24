@@ -9,7 +9,7 @@ public:
     const char* name() const override { return "Editable Scene"; }
     void render(uint32_t width, uint32_t height, const CameraState& camera, const ViewportRenderContext& ctx) override;
     GLuint getTexture() const override;
-    RaycastHit raycast(const glm::vec3&, const glm::vec3&, const CameraState&) override { return RaycastHit{}; }
+    RaycastHit raycast(const glm::vec3& rayOrigin, const glm::vec3& rayDirection, const CameraState&) override;
 
     EditableSceneLayout& sceneLayout() { return m_sceneLayout; }
 

@@ -694,8 +694,8 @@ public:
             m_viewportController = std::make_unique<ViewportController>(*m_viewportRenderRegistry);
 
             m_eventBus->subscribe("viewcontroler.setactive.toolpath_ribbon", [this](const std::string& payload) {
-                 
-				m_viewportController->setActiveRenderer("toolpath_ribbon");
+
+                m_viewportController->setActiveRenderer("toolpath_ribbon");
 
                 });
 
@@ -712,7 +712,7 @@ public:
                     progress->setMessage("Scanning  Voron-2 STLs");
 
                     auto tempproject = std::make_shared<domain::v1::Project>();
-                   
+
                     CachedFolderScanner scanner;   // instead of FolderScanner
                     ScanOptions opts;
                     opts.recursive = true;
@@ -735,12 +735,12 @@ public:
 
 
                 })
-           /* .step("Loading workspace", [this](std::shared_ptr<TaskProgress> progress)
-                {
+            /* .step("Loading workspace", [this](std::shared_ptr<TaskProgress> progress)
+                 {
 
-                    progress->setMessage("Loading workspace.json");
-                    m_workspaceService->loadWorkspace("c:\\temp\\", "workspace.json");
-                })*/
+                     progress->setMessage("Loading workspace.json");
+                     m_workspaceService->loadWorkspace("c:\\temp\\", "workspace.json");
+                 })*/
             .completed([this](bool success)
                 {
                     printf("[SlicerCore] startup load %s\n", success ? "complete" : "FAILED");
@@ -756,8 +756,8 @@ public:
 
                         //m_debugComparison = std::make_unique<DebugComparisonGLRender>();
                         //m_viewportRenderRegistry->registerRenderer("debug_comparison", m_debugComparison.get());
-                        
-                        
+
+
                         //if (modelCache) m_debugComparison->loadModel(*modelCache, "f10d5414c209e764");
                         //if (modelCache) m_debugComparison->loadModel(*modelCache, "fd0d5d3656e5b8a7");
 
@@ -786,7 +786,7 @@ public:
         //auto* buildPlate = m_navigation->resolveOrDefaultBuildPlate(project);
 
 
-        
+
 
         m_preview = slicer::StlPreviewRenderer();
 
@@ -886,8 +886,8 @@ public:
                 });
             /*m_ribbonContrib->addToggle("slicer_panel", "Panel", 90, &m_panelOpen);*/
             m_ribbonContrib->addSeparator(20);
-           /* m_ribbonContrib->addButton("refresh_view", "Refresh", "", 20, [this, project]() {
-                this->m_buildPlateRenderer->updateViewModel(project->buildPlates);  });*/
+            /* m_ribbonContrib->addButton("refresh_view", "Refresh", "", 20, [this, project]() {
+                 this->m_buildPlateRenderer->updateViewModel(project->buildPlates);  });*/
 
             m_ribbonContrib->addButton("arrange_build_plate", "Arrange", ICON_FA_TH, 20, [this]() {
 
@@ -912,21 +912,21 @@ public:
 
                         m_slicerService->arrangeBuildPlate(buildPlate);
                         m_editableScene->sceneLayout().setActiveBuildPlate(buildPlate, *m_modelCache);
- 
+
                     });
                 m_cmdHistory.Execute(std::move(cmd));
 
                 });*/
 
             m_ribbonContrib->addButton("load_workspace", "Load", ICON_FA_FOLDER_OPEN, 30, [this]() {
-                
+
                 HWND ownerHwnd = m_guiHost ? glfwGetWin32Window(m_guiHost->window()) : nullptr;
 
                 auto selectedPath = core::showOpenFileDialog(
                     L"Load Workspace",
                     { { L"Workspace Files (*.json)", L"*.json" } },
-                     ownerHwnd
-                 );
+                    ownerHwnd
+                );
                 if (!selectedPath.has_value()) {
                     return; // user cancelled the dialog
                 }
@@ -999,44 +999,44 @@ public:
                 });*/
 
 
-            //auto plateContrib = m_registry->contributeRibbon(k_pluginId, "Plate", 400);
-            //plateContrib->addButton("addPlate", "Add", "", 60, [this]() {
+                //auto plateContrib = m_registry->contributeRibbon(k_pluginId, "Plate", 400);
+                //plateContrib->addButton("addPlate", "Add", "", 60, [this]() {
 
-            //    // Add plate
-            //    auto addCmd = std::make_unique<SnapshotCommand>(
-            //        *m_workspaceStore, "Add Build Plate",
-            //        [this]() {
-            //            auto* project = m_navigation->resolveProject(*m_workspaceStore);
-            //            if (!project) return;
+                //    // Add plate
+                //    auto addCmd = std::make_unique<SnapshotCommand>(
+                //        *m_workspaceStore, "Add Build Plate",
+                //        [this]() {
+                //            auto* project = m_navigation->resolveProject(*m_workspaceStore);
+                //            if (!project) return;
 
-            //            auto* plate = new domain::v1::BuildPlate();
-            //            plate->Id = utils::generateGuid();
-            //            plate->name = "Build Plate " + std::to_string(project->buildPlates.size() + 1);
-            //            // TODO: populate plate->buildPlateModel same way SlicerService::loadWorkspace() does
-            //            std::shared_ptr<domain::v1::Model> buildPlateModel = plate->buildPlateModel;
-            //            FolderScanner scanner;
+                //            auto* plate = new domain::v1::BuildPlate();
+                //            plate->Id = utils::generateGuid();
+                //            plate->name = "Build Plate " + std::to_string(project->buildPlates.size() + 1);
+                //            // TODO: populate plate->buildPlateModel same way SlicerService::loadWorkspace() does
+                //            std::shared_ptr<domain::v1::Model> buildPlateModel = plate->buildPlateModel;
+                //            FolderScanner scanner;
 
-            //            std::string path = "C:\\github\\Pistachio-config\\Assets\\STL\\BuildPlate.stl";
+                //            std::string path = "C:\\github\\Pistachio-config\\Assets\\STL\\BuildPlate.stl";
 
-            //            StlLoaderAdapter loader = StlLoaderAdapter(*m_modelCache);
-            //            loader.load(path);
+                //            StlLoaderAdapter loader = StlLoaderAdapter(*m_modelCache);
+                //            loader.load(path);
 
-            //            buildPlateModel->mesh = loader.getMesh();
+                //            buildPlateModel->mesh = loader.getMesh();
 
-            //            buildPlateModel->Id = scanner.scanFile(path).file.fileHash.c_str();
+                //            buildPlateModel->Id = scanner.scanFile(path).file.fileHash.c_str();
 
-            //            plate->buildPlateModel = buildPlateModel;
-            //            project->buildPlates.push_back(plate);
-            //            m_navigation->setProject(project->Id);   // keep context consistent
-            //            m_navigation->setBuildPlate(plate->Id);  // select the new plate immediately
-            //        });
-            //    m_cmdHistory.Execute(std::move(addCmd));
-
-
-            //    });
+                //            plate->buildPlateModel = buildPlateModel;
+                //            project->buildPlates.push_back(plate);
+                //            m_navigation->setProject(project->Id);   // keep context consistent
+                //            m_navigation->setBuildPlate(plate->Id);  // select the new plate immediately
+                //        });
+                //    m_cmdHistory.Execute(std::move(addCmd));
 
 
-            // add dragdrop target
+                //    });
+
+
+                // add dragdrop target
             m_dragDropContrib = m_registry->contributeDragDrop(
                 k_pluginId, "ASSET_PATHS", 100);
 
@@ -1171,7 +1171,7 @@ private:
     SlicerService* m_slicerService = nullptr;
     WorkspaceService* m_workspaceService = nullptr;
     std::unique_ptr<ViewportController> m_viewportController;
-    ports::IViewportRendererRegistry* m_viewportRenderRegistry  ;
+    ports::IViewportRendererRegistry* m_viewportRenderRegistry;
 
 
     ports::IEventBus* m_eventBus = nullptr;
@@ -1216,6 +1216,15 @@ private:
     std::unique_ptr<slicer::BuildPlateRenderer> m_buildPlateRenderer;
 
     std::unique_ptr<EditableSceneGLRender> m_editableScene;
+
+    // Main-viewport camera drag state. "Armed" means the button-down that
+    // started the drag wasn't on top of a model part, decided once at
+    // click time and held for the duration of that drag (re-testing every
+    // frame would let a rotate flip into un-armed mid-drag if the cursor
+    // happened to cross a part).
+    bool m_vpOrbiting = false;
+    bool m_vpOrbitArmed = false;
+    bool m_vpPanning = false;
 
     // -----------------------------------------------------------------------
     // Main panel
@@ -1713,15 +1722,10 @@ private:
         ImGui::SetCursorScreenPos(gizmoScreenPos);
         ImGui::InvisibleButton("##camgizmo", ImVec2((float)gizmoSize, (float)gizmoSize));
 
-        bool clicked = ImGui::IsItemClicked(ImGuiMouseButton_Left);
-        bool dragging = ImGui::IsItemActive() && ImGui::IsMouseDragging(ImGuiMouseButton_Left);
-
-        if (dragging)
-        {
-            ImVec2 delta = ImGui::GetIO().MouseDelta;
-            m_viewportController->orbit(delta.x * 0.005f, -delta.y * 0.005f);
-        }
-        else if (clicked)
+        // Drag-to-orbit lives on the main viewport now (see renderBuildPlate())
+        // -- the gizmo itself only handles click-to-snap-to-face and the
+        // nudge arrows below.
+        if (ImGui::IsItemClicked(ImGuiMouseButton_Left))
         {
             m_viewportController->handleGizmoClick(mousePos.x - gizmoScreenPos.x, mousePos.y - gizmoScreenPos.y, gizmoSize);
         }
@@ -1759,8 +1763,65 @@ private:
         uint32_t w = (uint32_t)avail.x, h = (uint32_t)avail.y;
         GLuint tex = m_viewportController->renderAndGetTexture(w, h, ImGui::GetIO().DeltaTime, ImGui::IsWindowHovered());
         if (tex) ImGui::Image((ImTextureID)(intptr_t)tex, avail);
-        if (ImGui::IsItemHovered()) m_viewportController->zoom(ImGui::GetIO().MouseWheel * 10.0f);
 
+        bool viewportHovered = ImGui::IsItemHovered();
+
+        // Left mouse: orbit, but only when the drag didn't start on top of
+        // a model -- leaves LMB free for selection/gizmo manipulation on
+        // parts. Right mouse: pan, unconditionally. Wheel: dolly zoom that
+        // also walks the orbit target toward whatever's under the cursor.
+        if (viewportHovered && w > 0 && h > 0)
+        {
+            ImVec2 mousePos = ImGui::GetMousePos();
+            float px = mousePos.x - viewportTopLeft.x;
+            float py = mousePos.y - viewportTopLeft.y;
+            float ndcX = (px / (float)w) * 2.0f - 1.0f;
+            float ndcY = 1.0f - (py / (float)h) * 2.0f;
+            float aspect = (float)w / (float)h;
+
+            auto camCtx = domain::v1::buildCameraContext(m_viewportController->camera(), aspect);
+
+            auto screenRay = [&]() -> glm::vec3 {
+                glm::vec4 rayClip(ndcX, ndcY, -1.0f, 1.0f);
+                glm::vec4 rayEye = glm::inverse(camCtx.proj) * rayClip;
+                rayEye = glm::vec4(rayEye.x, rayEye.y, -1.0f, 0.0f);
+                return glm::normalize(glm::vec3(glm::inverse(camCtx.view) * rayEye));
+                };
+
+            if (ImGui::IsMouseClicked(ImGuiMouseButton_Left))
+            {
+                RaycastHit hit = m_viewportController->raycast(camCtx.camPos, screenRay());
+                m_vpOrbitArmed = !(hit.hit && !hit.isPlateHit);   // hit a part -> don't arm orbit
+                m_vpOrbiting = true;
+            }
+
+            if (ImGui::IsMouseClicked(ImGuiMouseButton_Right))
+                m_vpPanning = true;
+
+            float wheel = ImGui::GetIO().MouseWheel;
+            if (wheel != 0.0f)
+            {
+                RaycastHit hit = m_viewportController->raycast(camCtx.camPos, screenRay());
+                m_viewportController->zoomToPoint(wheel * 10.0f, hit.hit ? &hit.point : nullptr);
+            }
+        }
+
+        if (ImGui::IsMouseReleased(ImGuiMouseButton_Left)) m_vpOrbiting = false;
+        if (ImGui::IsMouseReleased(ImGuiMouseButton_Right)) m_vpPanning = false;
+
+        // Driven by IsMouseDown rather than re-checking hover every frame,
+        // so a fast drag that momentarily leaves the viewport rect doesn't
+        // interrupt the rotate/pan already in progress.
+        if (m_vpOrbiting && m_vpOrbitArmed && (ImGui::GetIO().MouseDelta.x != 0.0f || ImGui::GetIO().MouseDelta.y != 0.0f))
+        {
+            ImVec2 delta = ImGui::GetIO().MouseDelta;
+            m_viewportController->orbit(delta.x * 0.005f, -delta.y * 0.005f);
+        }
+        if (m_vpPanning && (ImGui::GetIO().MouseDelta.x != 0.0f || ImGui::GetIO().MouseDelta.y != 0.0f))
+        {
+            ImVec2 delta = ImGui::GetIO().MouseDelta;
+            m_viewportController->pan(delta.x, delta.y);
+        }
 
         renderGizmoOverlay(viewportTopLeft, avail);
 
@@ -1768,7 +1829,7 @@ private:
         {
             //if (tex) ImGui::Image((ImTextureID)(intptr_t)tex, avail);
 
-            
+
 
             m_viewportController->renderActiveUI(viewportTopLeft, avail);   // NEW — correct draw order, guaranteed on top
 
@@ -1810,7 +1871,7 @@ private:
 
         }
 
-        
+
         /*   }
           else if (m_buildPlateRenderer->isLoaded())
           {
