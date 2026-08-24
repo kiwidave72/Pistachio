@@ -234,12 +234,31 @@ private:
                 })
             .step("Wall Generation Phase", [this, ctx](std::shared_ptr<TaskProgress> progress)
                 {
+                    // Flatten (instance, layer) into one index space so a single
+                    // parallelFor call load-balances across ALL instances at once,
+                    // instead of one parallelFor per instance run back-to-back.
+                    // The old per-instance loop meant the pool sat idle between
+                    // instances and a plate with mixed part sizes (one big part,
+                    // several small ones) never got to work on the small parts'
+                    // layers while the big part's layers were still in flight.
+                    struct WorkItem { size_t instIdx; size_t layerIdx; };
+                    std::vector<WorkItem> workItems;
+
                     size_t totalLayers = 0;
                     for (auto& topoInst : ctx->topologized)
                         totalLayers += topoInst.topology.layers.size();
+                    workItems.reserve(totalLayers);
 
                     ctx->wallData.clear();
                     ctx->wallData.resize(ctx->topologized.size());
+
+                    for (size_t instIdx = 0; instIdx < ctx->topologized.size(); ++instIdx)
+                    {
+                        auto& layers = ctx->topologized[instIdx].topology.layers;
+                        ctx->wallData[instIdx].wallResults.resize(layers.size());
+                        for (size_t layerIdx = 0; layerIdx < layers.size(); ++layerIdx)
+                            workItems.push_back({ instIdx, layerIdx });
+                    }
 
                     std::atomic<size_t> completed{ 0 };
                     progress->fraction.store(totalLayers > 0 ? 0.f : 1.f);
@@ -247,37 +266,33 @@ private:
                         ? ("Processing 0 / " + std::to_string(totalLayers))
                         : "No layers to process");
 
-                    for (size_t instIdx = 0; instIdx < ctx->topologized.size(); ++instIdx)
-                    {
-                        auto& topoInst = ctx->topologized[instIdx];
-                        auto& layers = topoInst.topology.layers;
-                        auto& wallResults = ctx->wallData[instIdx].wallResults;
-                        wallResults.resize(layers.size());
+                    auto parallelTiming = core::parallelFor(workItems.size(), [&](size_t start, size_t end)
+                        {
+                            // Fresh instance per chunk � rule #3, sidesteps the "is this class
+                            // genuinely stateless between calls" question entirely rather than
+                            // needing to prove it.
+                            kinetica::WallGenerationPhase wallGenerationPhase(*m_config);
 
-                        auto parallelTiming = core::parallelFor(layers.size(), [&](size_t start, size_t end)
+                            for (size_t w = start; w < end; ++w)
                             {
-                                // Fresh instance per chunk � rule #3, sidesteps the "is this class
-                                // genuinely stateless between calls" question entirely rather than
-                                // needing to prove it.
-                                kinetica::WallGenerationPhase wallGenerationPhase(*m_config);
+                                const WorkItem& item = workItems[w];
+                                auto& layers = ctx->topologized[item.instIdx].topology.layers;
+                                ctx->wallData[item.instIdx].wallResults[item.layerIdx] =
+                                    wallGenerationPhase.run(layers[item.layerIdx]);
 
-                                for (size_t i = start; i < end; ++i)
-                                {
-                                    wallResults[i] = wallGenerationPhase.run(layers[i]);
+                                // Progress: safe from any worker thread -- fraction is atomic,
+                                // setMessage is separately mutex-guarded. totalLayers counts
+                                // work units (instance-layers), not distinct Z-heights.
+                                size_t done = completed.fetch_add(1, std::memory_order_relaxed) + 1;
+                                progress->fraction.store(
+                                    totalLayers > 0 ? static_cast<float>(done) / static_cast<float>(totalLayers) : 1.f,
+                                    std::memory_order_relaxed);
+                                progress->setMessage("Processing " + std::to_string(done) + " / " + std::to_string(totalLayers));
+                            }
+                        });
 
-                                    // Progress: safe from any worker thread -- fraction is atomic,
-                                    // setMessage is separately mutex-guarded. totalLayers counts
-                                    // work units (instance-layers), not distinct Z-heights.
-                                    size_t done = completed.fetch_add(1, std::memory_order_relaxed) + 1;
-                                    progress->fraction.store(
-                                        totalLayers > 0 ? static_cast<float>(done) / static_cast<float>(totalLayers) : 1.f,
-                                        std::memory_order_relaxed);
-                                    progress->setMessage("Processing " + std::to_string(done) + " / " + std::to_string(totalLayers));
-                                }
-                            });
-
-                        printf("[ToolpathEngine] P6a wall generation (parallel): %.1fms\n", parallelTiming.milliseconds);
-                    }
+                    printf("[ToolpathEngine] P6a wall generation (parallel, %zu instances flattened): %.1fms\n",
+                        ctx->topologized.size(), parallelTiming.milliseconds);
                 })
             .step("Infill Phase", [this, ctx](std::shared_ptr<TaskProgress> progress)
                 {
@@ -292,61 +307,79 @@ private:
                     domain::v1::Toolpath& toolpath = ctx->toolpath;
                     toolpath.layers.resize(maxLayerCount);
 
+                    // Same flattening as Wall Generation Phase above: one work-item
+                    // list spanning every instance's layers, one parallelFor call,
+                    // so the pool load-balances across the whole plate instead of
+                    // draining one instance at a time. Each work item still writes
+                    // to its own indexed slot in instanceLayers[instIdx][layerIdx] --
+                    // no shared mutable state between chunks, same safety property
+                    // as before.
+                    struct WorkItem { size_t instIdx; size_t layerIdx; };
+                    std::vector<WorkItem> workItems;
+                    workItems.reserve(totalLayers);
+
+                    std::vector<std::vector<domain::v1::ToolpathLayer>> instanceLayers(ctx->topologized.size());
+                    for (size_t instIdx = 0; instIdx < ctx->topologized.size(); ++instIdx)
+                    {
+                        auto& layers = ctx->topologized[instIdx].topology.layers;
+                        instanceLayers[instIdx].resize(layers.size());
+                        for (size_t layerIdx = 0; layerIdx < layers.size(); ++layerIdx)
+                            workItems.push_back({ instIdx, layerIdx });
+                    }
+
                     std::atomic<size_t> completed{ 0 };
                     progress->fraction.store(totalLayers > 0 ? 0.f : 1.f);
                     progress->setMessage(totalLayers > 0
                         ? ("Processing 0 / " + std::to_string(totalLayers))
                         : "No layers to process");
 
-                    for (size_t instIdx = 0; instIdx < ctx->topologized.size(); ++instIdx)
-                    {
-                        auto& topoInst = ctx->topologized[instIdx];
-                        auto& layers = topoInst.topology.layers;
-                        auto& wallResults = ctx->wallData[instIdx].wallResults;
+                    auto parallelTiming = core::parallelFor(workItems.size(), [&](size_t start, size_t end)
+                        {
+                            kinetica::RectilinearInfillStrategy rectilinearInfill;
 
-                        std::vector<domain::v1::ToolpathLayer> instanceLayers(layers.size());
-
-                        auto parallelTiming = core::parallelFor(layers.size(), [&](size_t start, size_t end)
+                            for (size_t w = start; w < end; ++w)
                             {
-                                kinetica::RectilinearInfillStrategy rectilinearInfill;
+                                const WorkItem& item = workItems[w];
+                                auto& topoLayer = ctx->topologized[item.instIdx].topology.layers[item.layerIdx];
+                                auto& wallResult = ctx->wallData[item.instIdx].wallResults[item.layerIdx];
 
-                                for (size_t i = start; i < end; ++i)
-                                {
-                                    auto& topoLayer = layers[i];
-                                    auto& wallResult = wallResults[i];
+                                domain::v1::ToolpathLayer tpLayer;
+                                tpLayer.z = topoLayer.z;
+                                tpLayer.segments = wallResult.segments;
 
-                                    domain::v1::ToolpathLayer tpLayer;
-                                    tpLayer.z = topoLayer.z;
-                                    tpLayer.segments = wallResult.segments;
+                                auto infillRegion = kinetica::InfillRegionPhase::run(wallResult);
+                                auto infillSegments = rectilinearInfill.generate(infillRegion, wallResult, topoLayer.z, *m_config);
+                                tpLayer.segments.insert(tpLayer.segments.end(), infillSegments.begin(), infillSegments.end());
 
-                                    auto infillRegion = kinetica::InfillRegionPhase::run(wallResult);
-                                    auto infillSegments = rectilinearInfill.generate(infillRegion, wallResult, topoLayer.z, *m_config);
-                                    tpLayer.segments.insert(tpLayer.segments.end(), infillSegments.begin(), infillSegments.end());
+                                instanceLayers[item.instIdx][item.layerIdx] = std::move(tpLayer);   // indexed write, unique per work item � safe, no shared mutable state
 
-                                    instanceLayers[i] = std::move(tpLayer);   // indexed write into this instance's OWN buffer � safe, no shared mutable state
+                                // Progress: same pattern as Wall Generation step above.
+                                size_t done = completed.fetch_add(1, std::memory_order_relaxed) + 1;
+                                progress->fraction.store(
+                                    totalLayers > 0 ? static_cast<float>(done) / static_cast<float>(totalLayers) : 1.f,
+                                    std::memory_order_relaxed);
+                                progress->setMessage("Processing " + std::to_string(done) + " / " + std::to_string(totalLayers));
+                            }
+                        });
 
-                                    // Progress: same pattern as Wall Generation step above.
-                                    size_t done = completed.fetch_add(1, std::memory_order_relaxed) + 1;
-                                    progress->fraction.store(
-                                        totalLayers > 0 ? static_cast<float>(done) / static_cast<float>(totalLayers) : 1.f,
-                                        std::memory_order_relaxed);
-                                    progress->setMessage("Processing " + std::to_string(done) + " / " + std::to_string(totalLayers));
-                                }
-                            });
+                    printf("[ToolpathEngine] P6b infill (parallel, %zu instances flattened): %.1fms\n",
+                        ctx->topologized.size(), parallelTiming.milliseconds);
 
-                        printf("[ToolpathEngine] P6b infill (parallel): %.1fms\n", parallelTiming.milliseconds);
-
-                        // Merge (append) this instance's segments into the shared
-                        // toolpath � not a write/overwrite � so multiple parts at
-                        // the same layer index both end up represented.
-                        for (size_t i = 0; i < instanceLayers.size(); ++i)
+                    // Merge (append) each instance's segments into the shared
+                    // toolpath � sequential, after the parallel section, unchanged
+                    // logic � not a write/overwrite, so multiple parts at the same
+                    // layer index both end up represented.
+                    for (size_t instIdx = 0; instIdx < instanceLayers.size(); ++instIdx)
+                    {
+                        auto& layers = instanceLayers[instIdx];
+                        for (size_t i = 0; i < layers.size(); ++i)
                         {
                             if (toolpath.layers[i].segments.empty())
-                                toolpath.layers[i].z = instanceLayers[i].z;
+                                toolpath.layers[i].z = layers[i].z;
                             toolpath.layers[i].segments.insert(
                                 toolpath.layers[i].segments.end(),
-                                instanceLayers[i].segments.begin(),
-                                instanceLayers[i].segments.end());
+                                layers[i].segments.begin(),
+                                layers[i].segments.end());
                         }
                     }
 

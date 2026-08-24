@@ -1,44 +1,31 @@
 #pragma once
 
 #include "domain/PhaseProcessingTiming.h"
+#include "core/ThreadPool.h"
 
-#include <vector>
-#include <thread>
 #include <functional>
-#include <algorithm>
 
 namespace core {
 
-    // Splits [0, count) into chunks across a pooled set of worker
-    // threads, blocks until all complete. Returns the TRUE wall-clock
-    // time for the whole parallel section — not a sum of per-chunk
-    // durations, which would measure total work done, not elapsed time
-    // (the actual number worth comparing against a sequential baseline).
+    // Splits [0, count) into chunks and runs them across the shared,
+    // persistent ThreadPool, blocking until all complete. Returns the TRUE
+    // wall-clock time for the whole parallel section -- not a sum of
+    // per-chunk durations, which would measure total work done, not elapsed
+    // time (the actual number worth comparing against a sequential baseline).
+    //
+    // Signature is unchanged from the previous std::thread-per-call
+    // implementation, so existing call sites don't need to change -- this
+    // now dispatches onto ThreadPool::shared() instead of spawning and
+    // joining fresh OS threads on every call. That matters here because this
+    // is called once per model instance per phase in ToolpathEnginePlugin;
+    // with N instances that's N thread spin-up/tear-down cycles per phase
+    // under the old implementation, now zero (pool threads are created once,
+    // at first use, for the process lifetime).
     inline domain::v1::PhaseProcessingTiming parallelFor(
         size_t count, const std::function<void(size_t start, size_t end)>& fn, size_t minChunkSize = 4)
     {
         domain::v1::PhaseProcessingTimer timer;
-
-        if (count == 0) return timer.elapsed();
-
-        size_t hwThreads = (std::max)(1u, std::thread::hardware_concurrency());
-        size_t chunkCount = (std::min)(hwThreads, (std::max)((size_t)1, count / minChunkSize));
-        size_t chunkSize = (count + chunkCount - 1) / chunkCount;
-
-        std::vector<std::thread> threads;
-        threads.reserve(chunkCount);
-
-        for (size_t c = 0; c < chunkCount; ++c)
-        {
-            size_t start = c * chunkSize;
-            size_t end = (std::min)(start + chunkSize, count);
-            if (start >= end) break;
-
-            threads.emplace_back([&fn, start, end]() { fn(start, end); });
-        }
-
-        for (auto& t : threads) t.join();
-
+        ThreadPool::shared().parallelFor(count, fn, minChunkSize);
         return timer.elapsed();
     }
 
