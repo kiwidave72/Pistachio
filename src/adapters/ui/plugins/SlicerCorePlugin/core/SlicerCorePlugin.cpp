@@ -1153,6 +1153,12 @@ public:
 
         renderBuildPlatePanel();
 
+        // Top-level, not nested inside renderBuildPlatePanel()'s child
+        // window -- the cycler overlay needs to float centered over the
+        // whole app viewport, not be clipped to the Build Plate panel's
+        // bounds.
+        updatePlateCycler();
+
         auto renderEnd = std::chrono::high_resolution_clock::now();
         static int fc = 0;
         if (++fc % 30 == 0)
@@ -1226,6 +1232,11 @@ private:
     // (it's the one drawing itself translucent), so the renderer swap is
     // deferred until the fade completes rather than happening immediately.
     bool m_pendingSwitchToEditable = false;
+
+    // Ctrl+Q-style plate cycler state (editable_scene only). See
+    // updatePlateCycler().
+    bool m_plateCyclerActive = false;
+    int m_plateCyclerIndex = -1;
 
     // Last-known main-viewport aspect ratio, refreshed every frame in
     // renderBuildPlate() -- needed by beginSwitchToMultiPlate() when
@@ -1786,6 +1797,172 @@ private:
         c.yaw = m_editableScene->defaultYaw();
         c.pitch = m_editableScene->defaultPitch();
         return c;
+    }
+
+    // Instantly (no fade, no animation) makes `plate` the active plate
+    // in editable_scene -- used by the plate cycler below, where each
+    // Tab press needs to land immediately rather than fight a 0.6s
+    // animateTo() transition on every step. Unlike beginSwitchToEditable(),
+    // this never touches multi_plate_scene or the renderer selection --
+    // the cycler only runs while editable_scene is already active.
+    void setActiveEditablePlateInstant(domain::v1::BuildPlate* plate)
+    {
+        if (!plate || !m_editableScene || !m_viewportController || !m_navigation || !m_modelCache) return;
+        m_navigation->setBuildPlate(plate->Id);
+        m_editableScene->sceneLayout().setActiveBuildPlate(plate, *m_modelCache);
+        m_viewportController->setCameraImmediate(editableSceneDefaultCamera());
+    }
+
+    // Ctrl+Q-style build-plate switcher, editable_scene only. Holding
+    // Ctrl opens an overlay listing every plate; each Q press
+    // (edge-detected, not auto-repeat -- one step per press) advances to
+    // the next plate and applies it live immediately, same as the OS
+    // switcher previewing as you tab through. Releasing Ctrl just closes
+    // the overlay -- there's no separate "commit" step since each press
+    // already committed live.
+    //
+    // Key choice, in order of rejection:
+    // - Alt+Tab: intercepted by Windows' own task switcher before this
+    //   app ever sees it.
+    // - Ctrl+Tab: collides with ImGui's own built-in docking
+    //   window-switcher specifically (this app has
+    //   ImGuiConfigFlags_DockingEnable set in ImGuiHost.cpp) --
+    //   confirmed by testing it: pressing Tab while Ctrl was held opened
+    //   ImGui's native docked-window switcher and closed this overlay,
+    //   not a "Ctrl in general" problem -- ImGui specifically reserves
+    //   Ctrl+TAB, not Ctrl+other-keys.
+    // - Alt+` (backtick), then Ctrl+PageDown as a stopgap: ImGuiHost.cpp
+    //   uses ImGui's legacy io.KeyMap[]/io.KeysDown[] input scheme and
+    //   originally only mapped a specific, limited set of keys (Tab,
+    //   arrows, PageUp/Down, Home/End, Insert/Delete, Backspace, Space,
+    //   Enter, Escape, KeyPadEnter, A/C/V/X/Y/Z) -- IsKeyDown() for any
+    //   unmapped key (Alt, backtick, Q, ...) always returned false
+    //   regardless of what was physically pressed, so PageDown was used
+    //   as a working substitute until Ctrl+Q was specifically requested.
+    // Landed on Ctrl+Q: io.KeyMap[ImGuiKey_Q] = GLFW_KEY_Q was added to
+    // ImGuiHost.cpp (same pattern as the existing A/C/V/X/Y/Z entries)
+    // so Q registers properly instead of picking around the gap again.
+    // io.KeyCtrl (a separate legacy "is some Ctrl held" boolean,
+    // correctly maintained by ImGuiHost.cpp's callback) is used for the
+    // modifier since ImGuiKey_LeftCtrl/RightCtrl have the same
+    // io.KeyMap[] gap Alt did.
+    //
+    // Scoped to editable_scene: if the multi-plate view is active (or
+    // becomes active mid-hold), this does nothing and the overlay stays
+    // closed, per "when in edit mode" from the request.
+    void updatePlateCycler()
+    {
+        bool inEditableScene = m_viewportController && m_viewportController->activeId() == "editable_scene";
+        // ImGuiKey_LeftCtrl/RightCtrl are NOT usable here -- same
+        // io.KeyMap[] gap as ImGuiKey_LeftAlt/RightAlt (see the class
+        // comment above updatePlateCycler() for the full story). Ctrl
+        // isn't in that map either, so IsKeyDown() for it would always
+        // return false; io.KeyCtrl (a separate legacy boolean) IS
+        // correctly maintained by ImGuiHost.cpp's callback regardless,
+        // so it's used here instead. Q was added to io.KeyMap[] in
+        // ImGuiHost.cpp specifically for this, so ImGuiKey_Q works
+        // normally via IsKeyDown()/IsKeyPressed().
+        bool modifierHeld = ImGui::GetIO().KeyCtrl;
+        bool qHeld = ImGui::IsKeyDown(ImGuiKey_Q);
+
+        // Debug: confirm this function runs every frame, and log the
+        // raw key state + gating decision on the rising edge of either
+        // key so we can see exactly what's (not) being detected --
+        // fires at most once per state change, not every frame.
+        static bool s_dbgModifierWasHeld = false, s_dbgQWasHeld = false;
+        static int s_dbgHeartbeat = 0;
+        if (++s_dbgHeartbeat % 180 == 0)
+            printf("[SlicerCorePlugin][platecycler] heartbeat: activeId=%s inEditableScene=%d\n",
+                m_viewportController ? m_viewportController->activeId().c_str() : "(null controller)", inEditableScene ? 1 : 0);
+        if (modifierHeld != s_dbgModifierWasHeld)
+        {
+            printf("[SlicerCorePlugin][platecycler] Ctrl held=%d (activeId=%s inEditableScene=%d)\n",
+                modifierHeld ? 1 : 0, m_viewportController ? m_viewportController->activeId().c_str() : "(null controller)", inEditableScene ? 1 : 0);
+            s_dbgModifierWasHeld = modifierHeld;
+        }
+        if (qHeld != s_dbgQWasHeld)
+        {
+            printf("[SlicerCorePlugin][platecycler] Q held=%d\n", qHeld ? 1 : 0);
+            s_dbgQWasHeld = qHeld;
+        }
+
+        if (!inEditableScene || !modifierHeld)
+        {
+            m_plateCyclerActive = false;
+            return;
+        }
+
+        auto* project = m_navigation->resolveOrDefaultProject(*m_workspaceStore);
+        if (!project || project->buildPlates.empty())
+        {
+            m_plateCyclerActive = false;
+            return;
+        }
+
+        if (!m_plateCyclerActive)
+        {
+            // Modifier freshly pressed -- open the overlay, starting
+            // from whichever plate is already active so the first Tab
+            // press moves forward from there rather than jumping to
+            // plate 0.
+            m_plateCyclerActive = true;
+            m_plateCyclerIndex = 0;
+            const std::string& currentId = m_navigation->currentBuildPlateId();
+            for (size_t i = 0; i < project->buildPlates.size(); i++)
+            {
+                if (project->buildPlates[i] && project->buildPlates[i]->Id == currentId)
+                {
+                    m_plateCyclerIndex = (int)i;
+                    break;
+                }
+            }
+        }
+
+        if (ImGui::IsKeyPressed(ImGuiKey_Q, false))
+        {
+            m_plateCyclerIndex = (m_plateCyclerIndex + 1) % (int)project->buildPlates.size();
+            setActiveEditablePlateInstant(project->buildPlates[m_plateCyclerIndex]);
+        }
+
+        renderPlateCyclerOverlay(project->buildPlates);
+    }
+
+    void renderPlateCyclerOverlay(const std::vector<domain::v1::BuildPlate*>& buildPlates)
+    {
+        ImGuiViewport* vp = ImGui::GetMainViewport();
+        ImGui::SetNextWindowPos(ImVec2(vp->Pos.x + vp->Size.x * 0.5f, vp->Pos.y + vp->Size.y * 0.5f),
+            ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+        ImGui::SetNextWindowBgAlpha(0.85f);
+        ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove
+            | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_AlwaysAutoResize
+            | ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav;
+
+        if (ImGui::Begin("##PlateCycler", nullptr, flags))
+        {
+            ImGui::TextDisabled("Build Plates -- hold Ctrl, tap Q");
+            ImGui::Separator();
+            for (int i = 0; i < (int)buildPlates.size(); i++)
+            {
+                auto* p = buildPlates[i];
+                if (!p) continue;
+                const std::string& label = p->name.empty() ? p->Id : p->name;
+                bool isActive = (i == m_plateCyclerIndex);
+                if (isActive)
+                {
+                    // Same blue accent as the multi-plate view's
+                    // active-plate highlight, for a consistent "this one
+                    // is active" visual language across both views.
+                    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.35f, 0.60f, 0.95f, 1.0f));
+                    ImGui::Text("> %s", label.c_str());
+                    ImGui::PopStyleColor();
+                }
+                else
+                {
+                    ImGui::Text("   %s", label.c_str());
+                }
+            }
+        }
+        ImGui::End();
     }
 
     // Swaps to multi_plate_scene immediately and fades every OTHER plate

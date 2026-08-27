@@ -162,6 +162,25 @@ public:
 
     bool isCameraAnimating() const { return m_cameraTransitionActive; }
 
+    // Sets the camera directly to `target`, with no easing -- for
+    // callers that want an instant cut instead of animateTo()'s eased
+    // transition (e.g. rapid-fire plate cycling on repeated key presses,
+    // where a per-step animation would fight itself and feel laggy).
+    // Cancels any in-flight transition. Only target/distance/yaw/pitch
+    // come from `target`; axisMode/fov/near/far carry over from the
+    // current camera untouched, same convention as animateTo().
+    void setCameraImmediate(const CameraState& target)
+    {
+        cancelCameraTransition();
+        float fov = m_camera.fovYRadians, nearP = m_camera.nearPlane, farP = m_camera.farPlane;
+        int axisMode = m_camera.axisMode;
+        m_camera = target;
+        m_camera.fovYRadians = fov;
+        m_camera.nearPlane = nearP;
+        m_camera.farPlane = farP;
+        m_camera.axisMode = axisMode;
+    }
+
     // Diagnostic only -- see the long comment on CameraState::axisMode in
     // ports/I3DViewportGLRender.h. Mutates the ONE shared CameraState
     // instance (m_camera below), which every renderer -- regardless of
