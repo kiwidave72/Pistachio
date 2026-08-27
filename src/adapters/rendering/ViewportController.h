@@ -14,7 +14,10 @@
 #include "ports/IViewportRendererRegistry.h"
 #include "adapters/rendering/CameraGizmoGLRender.h"
 #include "domain/RenderCameraContext.h"
+#include "core/IEasedTransition.h"
+#include "core/CubicEasedTransition.h"
 
+#include <glm/gtc/constants.hpp>
 #include <memory>
 #include <string>
 #include <cmath>
@@ -49,12 +52,14 @@ public:
 
     void orbit(float deltaYaw, float deltaPitch)
     {
+        cancelCameraTransition();   // manual input interrupts any in-flight animateTo()
         m_camera.yaw += deltaYaw;
         m_camera.pitch = glm::clamp(m_camera.pitch + deltaPitch, -1.5f, 1.5f);
     }
 
     void zoom(float delta)
     {
+        cancelCameraTransition();
         m_camera.distance = glm::clamp(m_camera.distance - delta, 5.0f, 2000.0f);
     }
 
@@ -66,6 +71,7 @@ public:
     // is enough -- no separate camPos to keep in sync.
     void pan(float dxPixels, float dyPixels)
     {
+        cancelCameraTransition();
         glm::vec3 camPos(
             m_camera.target.x + m_camera.distance * std::cos(m_camera.pitch) * std::cos(m_camera.yaw),
             m_camera.target.y + m_camera.distance * std::sin(m_camera.pitch),
@@ -76,22 +82,30 @@ public:
         glm::vec3 up = -glm::normalize(glm::cross(right, forward));
 
         float scale = m_camera.distance * 0.0015f;
-        m_camera.target += (right * dxPixels + up * dyPixels) * scale;
+        m_camera.target += (-right * dxPixels - up * dyPixels) * scale;
     }
 
-    // Dolly zoom that also walks the orbit target toward the point the
-    // mouse is over, so repeated scrolling converges the camera on
-    // whatever's under the cursor instead of orbiting around a fixed
-    // pivot. hitPoint is nullptr when the cursor isn't over any geometry
-    // -- in that case this behaves exactly like zoom() above.
+    // Dolly zoom that pulls the orbit pivot toward the point under the
+    // cursor while zooming IN, so the view visibly converges onto
+    // whatever you're pointed at over several scroll ticks -- each tick
+    // blends only a fraction of the remaining distance (proportional to
+    // how much closer this tick just brought you), so it reads as a
+    // smooth homing-in rather than a jump, and lands exactly on the
+    // point once fully zoomed in. Zooming back OUT leaves the pivot
+    // alone -- pulling it toward hitPoint on the way out as well would
+    // make the view lurch sideways as you pull back. hitPoint is
+    // nullptr when the cursor isn't over any geometry, in which case
+    // this is just a plain dolly around the existing target.
     void zoomToPoint(float delta, const glm::vec3* hitPoint)
     {
+        cancelCameraTransition();
         float oldDistance = m_camera.distance;
-        m_camera.distance = glm::clamp(m_camera.distance - delta, 5.0f, 2000.0f);
+        float newDistance = glm::clamp(oldDistance - delta, 5.0f, 2000.0f);
+        m_camera.distance = newDistance;
 
-        if (hitPoint)
+        if (hitPoint && delta > 0.0f && oldDistance > 0.01f)
         {
-            float t = glm::clamp(std::abs(delta) / std::max(oldDistance, 1.0f), 0.0f, 1.0f);
+            float t = glm::clamp(1.0f - (newDistance / oldDistance), 0.0f, 1.0f);
             m_camera.target = glm::mix(m_camera.target, *hitPoint, t);
         }
     }
@@ -105,17 +119,48 @@ public:
 
     void setActiveVisibleLayerRange(int start, int end) { if (m_activeRenderer) m_activeRenderer->setVisibleLayerRange(start, end); }
 
-    void setTarget(const glm::vec3& target) { m_camera.target = target; }
+    void setTarget(const glm::vec3& target) { cancelCameraTransition(); m_camera.target = target; }
 
     // Absolute set � used by the gizmo's click-to-snap, distinct from
     // orbit()'s incremental delta used for drag.
     void setYawPitch(float yaw, float pitch)
     {
+        cancelCameraTransition();
         m_camera.yaw = yaw;
         m_camera.pitch = glm::clamp(pitch, -1.5f, 1.5f);
     }
 
     const CameraState& camera() const { return m_camera; }
+
+    // -----------------------------------------------------------------
+    // Eased camera transition -- animates the one shared CameraState from
+    // wherever it currently is toward `target` over durationSeconds, using
+    // the same CubicEasedTransition/IEasedTransition policy AnimatedModel
+    // uses for per-model transforms (see core/CubicEasedTransition.h).
+    // Lives here rather than in any one renderer because the camera is
+    // shared across every registered renderer (see the class comment) --
+    // e.g. the multi-plate <-> single-plate view toggle animates this
+    // same camera regardless of which renderer ends up active.
+    //
+    // Only target/distance/yaw/pitch are eased; axisMode/fov/near/far
+    // carry over from whatever the camera is currently set to, untouched.
+    // Any manual camera input (orbit/pan/zoom/zoomToPoint/setTarget/
+    // setYawPitch) cancels an in-flight transition immediately -- the user
+    // taking control should never fight an animation still resolving.
+    // -----------------------------------------------------------------
+    void animateTo(const CameraState& target, float durationSeconds)
+    {
+        m_cameraTransitionFrom = m_camera;
+        m_cameraTransitionTo = target;
+        m_cameraTransitionTo.axisMode = m_camera.axisMode;
+        m_cameraTransitionTo.fovYRadians = m_camera.fovYRadians;
+        m_cameraTransitionTo.nearPlane = m_camera.nearPlane;
+        m_cameraTransitionTo.farPlane = m_camera.farPlane;
+        m_cameraTransition->start(durationSeconds);
+        m_cameraTransitionActive = true;
+    }
+
+    bool isCameraAnimating() const { return m_cameraTransitionActive; }
 
     // Diagnostic only -- see the long comment on CameraState::axisMode in
     // ports/I3DViewportGLRender.h. Mutates the ONE shared CameraState
@@ -129,6 +174,8 @@ public:
 
     GLuint renderAndGetTexture(uint32_t width, uint32_t height, float deltaSeconds, bool canControl)
     {
+        tickCameraTransition(deltaSeconds);
+
         if (!m_activeRenderer) return 0;
 
         ViewportRenderContext ctx;
@@ -172,10 +219,44 @@ public:
     void setActiveVisibleLayer(int layer) { if (m_activeRenderer) m_activeRenderer->setVisibleLayer(layer); }
 
 private:
+    // Cancels an in-flight animateTo() without touching m_camera itself --
+    // called from every manual camera-control entry point above so user
+    // input always wins over a still-resolving transition.
+    void cancelCameraTransition() { m_cameraTransitionActive = false; }
+
+    // Advances the eased transition (if any) and writes the blended
+    // result into m_camera. Shortest-path yaw lerp matches the identical
+    // logic in the old (dead) SceneLayout::update() -- orbiting the long
+    // way around on a >180 degree yaw change would look wrong otherwise.
+    void tickCameraTransition(float deltaSeconds)
+    {
+        if (!m_cameraTransitionActive) return;
+
+        m_cameraTransition->tick(deltaSeconds);
+        float e = m_cameraTransition->progress();
+
+        m_camera.target = glm::mix(m_cameraTransitionFrom.target, m_cameraTransitionTo.target, e);
+        m_camera.distance = glm::mix(m_cameraTransitionFrom.distance, m_cameraTransitionTo.distance, e);
+        m_camera.pitch = glm::mix(m_cameraTransitionFrom.pitch, m_cameraTransitionTo.pitch, e);
+
+        float yawDelta = m_cameraTransitionTo.yaw - m_cameraTransitionFrom.yaw;
+        if (yawDelta > glm::pi<float>()) yawDelta -= glm::two_pi<float>();
+        if (yawDelta < -glm::pi<float>()) yawDelta += glm::two_pi<float>();
+        m_camera.yaw = m_cameraTransitionFrom.yaw + yawDelta * e;
+
+        if (!m_cameraTransition->isAnimating())
+            m_cameraTransitionActive = false;
+    }
+
     ports::IViewportRendererRegistry& m_registry;
     I3DViewportGLRender* m_activeRenderer = nullptr;
     std::string m_activeId;
     CameraState m_camera;
+
+    bool m_cameraTransitionActive = false;
+    CameraState m_cameraTransitionFrom{};
+    CameraState m_cameraTransitionTo{};
+    std::unique_ptr<core::IEasedTransition> m_cameraTransition = std::make_unique<core::CubicEasedTransition>();
 
     std::unique_ptr<CameraGizmoGLRender> m_gizmo;
 };

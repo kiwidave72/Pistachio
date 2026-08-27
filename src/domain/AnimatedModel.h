@@ -50,14 +50,29 @@ public:
     // model's CURRENT (interpolated) transform, so hit-testing matches
     // what's actually on screen this frame -- not the transition target.
     // Returns false (no RenderModel found / no hit) without touching outHit.
+    //
+    // Builds the model matrix via m_strategy (the same
+    // StandardModelRenderStrategy/PlateModelRenderStrategy render() uses),
+    // not RenderModel::getModelMatrix()'s own separate copy of this math --
+    // that copy's isPlate branch hardcoded world Y=0, ignoring
+    // PlateModelRenderStrategy::m_heightOffset entirely, so any plate
+    // whose mesh has a non-negligible thickness raycast-tested against a
+    // phantom position offset from where it actually renders. Going
+    // through the strategy means render() and raycast() can no longer
+    // silently drift apart like that -- there's only one matrix
+    // computation now, not two meant to mirror each other.
+    //
+    // debug: when true, prints bounds-sphere diagnostics from
+    // RenderModel::raycastBoundsOnly() -- see MultiPlateSceneLayout::
+    // debugLogNextRaycast().
     bool raycast(const glm::vec3& rayOrigin, const glm::vec3& rayDirection,
-        glm::vec2 center, RaycastHit& outHit, bool isPlate = false) const
+        glm::vec2 center, RaycastHit& outHit, bool debug = false) const
     {
         auto* rm = dynamic_cast<RenderModel*>(m_drawable.get());
         if (!rm) return false;
 
-        glm::mat4 modelMatrix = rm->getModelMatrix(currentTransform(), center, isPlate);
-        if (!rm->raycastBoundsOnly(rayOrigin, rayDirection, modelMatrix)) return false;
+        glm::mat4 modelMatrix = m_strategy->computeModelMatrix(currentTransform(), center);
+        if (!rm->raycastBoundsOnly(rayOrigin, rayDirection, modelMatrix, debug)) return false;
         return rm->raycast(rayOrigin, rayDirection, outHit, modelMatrix);
     }
 

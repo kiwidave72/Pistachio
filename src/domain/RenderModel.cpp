@@ -83,9 +83,13 @@ RenderModel::~RenderModel()
     if (ebo) glDeleteBuffers(1, &ebo);
 }
 
-bool RenderModel::raycastBoundsOnly(const glm::vec3& rayOrigin, const glm::vec3& rayDirection, glm::mat4 modelMatrix) const
+bool RenderModel::raycastBoundsOnly(const glm::vec3& rayOrigin, const glm::vec3& rayDirection, glm::mat4 modelMatrix, bool debug) const
 {
-    if (!model || !model->mesh) return false;
+    if (!model || !model->mesh)
+    {
+        if (debug) printf("[RenderModel::raycastBoundsOnly] instanceId=%s NO model/mesh -- always misses\n", instanceId.c_str());
+        return false;
+    }
 
     const auto& b = model->mesh->bounds;
     glm::vec3 center = (b.max + b.min) * 0.5f;
@@ -101,6 +105,16 @@ bool RenderModel::raycastBoundsOnly(const glm::vec3& rayOrigin, const glm::vec3&
     float b2 = glm::dot(oc, rayDirection);
     float c = glm::dot(oc, oc) - worldRadius * worldRadius;
     float discriminant = b2 * b2 - c;
+
+    if (debug)
+    {
+        printf("[RenderModel::raycastBoundsOnly] instanceId=%s localBounds(min=%.2f,%.2f,%.2f max=%.2f,%.2f,%.2f) "
+            "localRadius=%.2f scale=(%.3f,%.3f,%.3f) worldCenter=(%.2f,%.2f,%.2f) worldRadius=%.2f discriminant=%.2f -> %s\n",
+            instanceId.c_str(), b.min.x, b.min.y, b.min.z, b.max.x, b.max.y, b.max.z,
+            radius, scale.x, scale.y, scale.z,
+            worldCenter.x, worldCenter.y, worldCenter.z, worldRadius, discriminant,
+            (discriminant >= 0.0f) ? "PASS" : "FAIL");
+    }
 
     return discriminant >= 0.0f;
 }
@@ -247,57 +261,69 @@ void RenderModel::draw(const IModelRenderStrategy& strategy, const RenderDrawSta
 
     glm::mat4 modelMatrix = strategy.computeModelMatrix(transform, center);
 
-    // One-shot-per-call dump of where this is actually being placed, so we
-    // can tell a scale/position data problem apart from a GL state problem
-    // without a debugger. modelMatrix[3] is the translation column; the
-    // length of each basis column tells us the effective scale per axis.
-    // Also dumps this model's own local mesh bounds (min/max, before any
-    // transform/offset is applied) plus the offset ("center") passed in,
-    // and the camera's position/target -- enough together to tell whether
-    // an object is sitting where expected relative to where the camera is
-    // actually looking.
-    glm::vec3 worldPos(modelMatrix[3]);
-    glm::vec3 effScale(
-        glm::length(glm::vec3(modelMatrix[0])),
-        glm::length(glm::vec3(modelMatrix[1])),
-        glm::length(glm::vec3(modelMatrix[2])));
+    // Throttled to once per second per instance -- see
+    // m_lastDrawDebugLogTime in RenderModel.h. draw() runs once per model
+    // per frame, so logging every call here floods the console; a
+    // periodic sample is still enough to catch a scale/position data
+    // problem without a debugger.
+    auto now = std::chrono::steady_clock::now();
+    bool shouldLog = (now - m_lastDrawDebugLogTime) >= std::chrono::seconds(1);
+    if (shouldLog) m_lastDrawDebugLogTime = now;
 
-    glm::vec3 meshMin(0.0f), meshMax(0.0f);
-    if (model && model->mesh)
+    if (shouldLog)
     {
-        meshMin = model->mesh->bounds.min;
-        meshMax = model->mesh->bounds.max;
+        // One-shot-per-call dump of where this is actually being placed, so we
+        // can tell a scale/position data problem apart from a GL state problem
+        // without a debugger. modelMatrix[3] is the translation column; the
+        // length of each basis column tells us the effective scale per axis.
+        // Also dumps this model's own local mesh bounds (min/max, before any
+        // transform/offset is applied) plus the offset ("center") passed in,
+        // and the camera's position/target -- enough together to tell whether
+        // an object is sitting where expected relative to where the camera is
+        // actually looking.
+        glm::vec3 worldPos(modelMatrix[3]);
+        glm::vec3 effScale(
+            glm::length(glm::vec3(modelMatrix[0])),
+            glm::length(glm::vec3(modelMatrix[1])),
+            glm::length(glm::vec3(modelMatrix[2])));
+
+        glm::vec3 meshMin(0.0f), meshMax(0.0f);
+        if (model && model->mesh)
+        {
+            meshMin = model->mesh->bounds.min;
+            meshMax = model->mesh->bounds.max;
+        }
+
+        // Four footprint corners (min/max Z of the mesh's own bounds, at each
+        // XY corner) run through the exact same modelMatrix used to actually
+        // render, so this is ground truth for where the mesh's real geometry
+        // ends up in world space -- unlike worldPos above, which is only the
+        // local-origin POINT's world position and says nothing about where
+        // the mesh's actual footprint is once its own bounds (which may not
+        // be centered on that origin, or even contain it) are accounted for.
+        glm::vec3 c0 = glm::vec3(modelMatrix * glm::vec4(meshMin.x, meshMin.y, meshMin.z, 1.0f)); // min,min
+        glm::vec3 c1 = glm::vec3(modelMatrix * glm::vec4(meshMax.x, meshMin.y, meshMin.z, 1.0f)); // max,min
+        glm::vec3 c2 = glm::vec3(modelMatrix * glm::vec4(meshMin.x, meshMax.y, meshMin.z, 1.0f)); // min,max
+        glm::vec3 c3 = glm::vec3(modelMatrix * glm::vec4(meshMax.x, meshMax.y, meshMin.z, 1.0f)); // max,max
+
+        printf("[RenderModel::draw] instanceId=%s vao=%u indexCount=%u transform(pos=%.2f,%.2f,%.2f rot=%.2f,%.2f,%.2f scale=%.2f,%.2f,%.2f) "
+            "center=%.2f,%.2f meshBounds(min=%.2f,%.2f,%.2f max=%.2f,%.2f,%.2f) "
+            "worldPos=%.2f,%.2f,%.2f effScale=%.3f,%.3f,%.3f color=%.2f,%.2f,%.2f ghost=%.2f "
+            "camPos=%.2f,%.2f,%.2f camTarget=%.2f,%.2f,%.2f "
+            "worldCorners[minmin=%.2f,%.2f,%.2f maxmin=%.2f,%.2f,%.2f minmax=%.2f,%.2f,%.2f maxmax=%.2f,%.2f,%.2f]\n",
+            instanceId.c_str(), vao, indexCount,
+            transform.position.x, transform.position.y, transform.position.z,
+            transform.rotation.x, transform.rotation.y, transform.rotation.z,
+            transform.scale.x, transform.scale.y, transform.scale.z,
+            center.x, center.y,
+            meshMin.x, meshMin.y, meshMin.z, meshMax.x, meshMax.y, meshMax.z,
+            worldPos.x, worldPos.y, worldPos.z,
+            effScale.x, effScale.y, effScale.z,
+            drawState.color.r, drawState.color.g, drawState.color.b, drawState.ghostFactor,
+            cameraContext.camPos.x, cameraContext.camPos.y, cameraContext.camPos.z,
+            cameraContext.target.x, cameraContext.target.y, cameraContext.target.z,
+            c0.x, c0.y, c0.z, c1.x, c1.y, c1.z, c2.x, c2.y, c2.z, c3.x, c3.y, c3.z);
     }
-
-    // Four footprint corners (min/max Z of the mesh's own bounds, at each
-    // XY corner) run through the exact same modelMatrix used to actually
-    // render, so this is ground truth for where the mesh's real geometry
-    // ends up in world space -- unlike worldPos above, which is only the
-    // local-origin POINT's world position and says nothing about where
-    // the mesh's actual footprint is once its own bounds (which may not
-    // be centered on that origin, or even contain it) are accounted for.
-    glm::vec3 c0 = glm::vec3(modelMatrix * glm::vec4(meshMin.x, meshMin.y, meshMin.z, 1.0f)); // min,min
-    glm::vec3 c1 = glm::vec3(modelMatrix * glm::vec4(meshMax.x, meshMin.y, meshMin.z, 1.0f)); // max,min
-    glm::vec3 c2 = glm::vec3(modelMatrix * glm::vec4(meshMin.x, meshMax.y, meshMin.z, 1.0f)); // min,max
-    glm::vec3 c3 = glm::vec3(modelMatrix * glm::vec4(meshMax.x, meshMax.y, meshMin.z, 1.0f)); // max,max
-
-    printf("[RenderModel::draw] instanceId=%s vao=%u indexCount=%u transform(pos=%.2f,%.2f,%.2f rot=%.2f,%.2f,%.2f scale=%.2f,%.2f,%.2f) "
-        "center=%.2f,%.2f meshBounds(min=%.2f,%.2f,%.2f max=%.2f,%.2f,%.2f) "
-        "worldPos=%.2f,%.2f,%.2f effScale=%.3f,%.3f,%.3f color=%.2f,%.2f,%.2f ghost=%.2f "
-        "camPos=%.2f,%.2f,%.2f camTarget=%.2f,%.2f,%.2f "
-        "worldCorners[minmin=%.2f,%.2f,%.2f maxmin=%.2f,%.2f,%.2f minmax=%.2f,%.2f,%.2f maxmax=%.2f,%.2f,%.2f]\n",
-        instanceId.c_str(), vao, indexCount,
-        transform.position.x, transform.position.y, transform.position.z,
-        transform.rotation.x, transform.rotation.y, transform.rotation.z,
-        transform.scale.x, transform.scale.y, transform.scale.z,
-        center.x, center.y,
-        meshMin.x, meshMin.y, meshMin.z, meshMax.x, meshMax.y, meshMax.z,
-        worldPos.x, worldPos.y, worldPos.z,
-        effScale.x, effScale.y, effScale.z,
-        drawState.color.r, drawState.color.g, drawState.color.b, drawState.ghostFactor,
-        cameraContext.camPos.x, cameraContext.camPos.y, cameraContext.camPos.z,
-        cameraContext.target.x, cameraContext.target.y, cameraContext.target.z,
-        c0.x, c0.y, c0.z, c1.x, c1.y, c1.z, c2.x, c2.y, c2.z, c3.x, c3.y, c3.z);
 
     glUseProgram(shader);
     glUniformMatrix4fv(glGetUniformLocation(shader, "uModel"), 1, GL_FALSE, glm::value_ptr(modelMatrix));

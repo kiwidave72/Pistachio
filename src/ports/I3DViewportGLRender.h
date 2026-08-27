@@ -68,7 +68,7 @@ public:
 
     virtual glm::vec3 defaultTarget() const { return glm::vec3(0.0f); }
     virtual float defaultDistance() const { return 200.0f; }
-    virtual float defaultYaw() const { return 0.7853982f; }
+    virtual float defaultYaw() const { return 0.0f; }
     virtual float defaultPitch() const { return glm::radians(45.0f); }
 
     virtual const char* name() const = 0;

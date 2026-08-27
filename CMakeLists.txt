@@ -500,6 +500,7 @@ add_library(pistachio_slicer_core SHARED
     src/adapters/ui/plugins/SlicerCorePlugin/core/SelectionManager.cpp
     src/adapters/ui/plugins/SlicerCorePlugin/core/NavigationManager.cpp
     src/adapters/ui/plugins/SlicerCorePlugin/core/EditableSceneGLRender.cpp
+    src/adapters/ui/plugins/SlicerCorePlugin/core/MultiPlateSceneGLRender.cpp
 
 )
 

@@ -7,6 +7,7 @@
 #include "ports/IDrawable.h"
 #include <glad/glad.h>
 #include <glm/glm.hpp>
+#include <chrono>
 #include <memory>
 #include <string>
 
@@ -21,7 +22,7 @@ public:
     RenderModel();
     ~RenderModel() override;
 
-    bool raycastBoundsOnly(const glm::vec3& rayOrigin, const glm::vec3& rayDirection, glm::mat4 modelMatrix) const;
+    bool raycastBoundsOnly(const glm::vec3& rayOrigin, const glm::vec3& rayDirection, glm::mat4 modelMatrix, bool debug = false) const;
     bool create(std::shared_ptr<domain::v1::Model> sourceModel, glm::vec2& center, bool isBuildPlateModel = false);
     void createVertixBuffer();
     glm::mat4 getBoundingBoxMatrix(const Transform& transform, glm::vec2 layoutOffset) const;
@@ -40,4 +41,11 @@ public:
 private:
     bool intersectTriangle(const glm::vec3& rayOrigin, const glm::vec3& rayDirection,
         const glm::vec3& v0, const glm::vec3& v1, const glm::vec3& v2, float& t, float& u, float& v) const;
+
+    // Throttles the [RenderModel::draw] debug dump to once per second per
+    // instance, instead of once per frame -- draw() is called once per
+    // model per frame (every instance on every plate, in both
+    // editable_scene and multi_plate_scene), so unthrottled it drowns
+    // the console. min() so the very first draw() call always logs.
+    std::chrono::steady_clock::time_point m_lastDrawDebugLogTime = std::chrono::steady_clock::time_point::min();
 };

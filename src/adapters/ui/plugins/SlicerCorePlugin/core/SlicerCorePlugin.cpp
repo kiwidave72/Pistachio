@@ -7,6 +7,8 @@
 
 #include "EditableSceneGLRender.h"
 #include "EditableSceneLayout.h"
+#include "MultiPlateSceneGLRender.h"
+#include "MultiPlateSceneLayout.h"
 
 #include "core/Application.h"
 #include "ports/IConfigPort.h"
@@ -754,6 +756,9 @@ public:
                         m_viewportRenderRegistry->registerRenderer("editable_scene", m_editableScene.get());
                         m_viewportController->setActiveRenderer("editable_scene");
 
+                        m_multiPlateScene = std::make_unique<MultiPlateSceneGLRender>();
+                        m_viewportRenderRegistry->registerRenderer("multi_plate_scene", m_multiPlateScene.get());
+
                         //m_debugComparison = std::make_unique<DebugComparisonGLRender>();
                         //m_viewportRenderRegistry->registerRenderer("debug_comparison", m_debugComparison.get());
 
@@ -772,6 +777,7 @@ public:
                         //m_buildPlateRenderer->updateViewModel(project->buildPlates);
 
                         m_editableScene->sceneLayout().setActiveBuildPlate(buildPlate, *m_modelCache);
+                        m_multiPlateScene->sceneLayout().createLayout(project->buildPlates, *m_modelCache);
 
                     }
                 })
@@ -832,26 +838,19 @@ public:
 
 
             m_ribbonContrib->addButton("toggle_viewport", "Toggle View", "", 60, [this]() {
-                //if (!m_viewportController) return;
+                // Single/multi build-plate toggle -- animated via
+                // ViewportController::animateTo() so the camera eases
+                // between views instead of cutting, and via
+                // MultiPlateSceneLayout::animateGhostOutExcept()/
+                // animateGhostAllTo() so the multi-plate scene itself
+                // fades out/in rather than popping (see
+                // beginSwitchToEditable()/beginSwitchToMultiPlate() above).
+                if (!m_viewportController || !m_editableScene || !m_multiPlateScene) return;
 
-                //if (m_viewportController->activeId() == "debug_comparison")
-                //{
-                //    m_viewportController->setActiveRenderer("editable_scene");   // back to plate view — however that's currently selected
-                //}
-                //else
-                //{
-                //    m_viewportController->setActiveRenderer("debug_comparison");
-                //}
-                if (!m_viewportController) return;
-
-                std::string current = m_viewportController->activeId();
-                if (current == "toolpath_ribbon")
-                    m_viewportController->setActiveRenderer("debug_comparison");
-                else if (current == "debug_comparison")
-                    m_viewportController->setActiveRenderer("editable_scene");
+                if (m_viewportController->activeId() == "multi_plate_scene")
+                    beginSwitchToEditable(nullptr);
                 else
-                    m_viewportController->setActiveRenderer("toolpath_ribbon");
-
+                    beginSwitchToMultiPlate();
                 });
 
             // Diagnostic only -- see the long comment on CameraState::
@@ -896,6 +895,7 @@ public:
 
                 m_slicerService->arrangeBuildPlate(buildPlate);
                 m_editableScene->sceneLayout().setActiveBuildPlate(buildPlate, *m_modelCache);
+                m_multiPlateScene->sceneLayout().createLayout(project->buildPlates, *m_modelCache);
                 });
             m_ribbonContrib->addSeparator(30);
 
@@ -943,6 +943,7 @@ public:
                         auto* buildPlate = m_navigation->resolveOrDefaultBuildPlate(project);
                         m_slicerService->arrangeBuildPlate(buildPlate);
                         m_editableScene->sceneLayout().setActiveBuildPlate(buildPlate, *m_modelCache);
+                        m_multiPlateScene->sceneLayout().createLayout(project->buildPlates, *m_modelCache);
                     });
                 m_cmdHistory.Execute(std::move(cmd));
                 });
@@ -1216,6 +1217,29 @@ private:
     std::unique_ptr<slicer::BuildPlateRenderer> m_buildPlateRenderer;
 
     std::unique_ptr<EditableSceneGLRender> m_editableScene;
+    std::unique_ptr<MultiPlateSceneGLRender> m_multiPlateScene;
+
+    // True while multi_plate_scene is fading itself out ahead of an
+    // impending swap to editable_scene -- see beginSwitchToEditable() and
+    // the check at the top of renderBuildPlate(). multi_plate_scene must
+    // stay the active renderer for the ghost fade to actually be visible
+    // (it's the one drawing itself translucent), so the renderer swap is
+    // deferred until the fade completes rather than happening immediately.
+    bool m_pendingSwitchToEditable = false;
+
+    // Last-known main-viewport aspect ratio, refreshed every frame in
+    // renderBuildPlate() -- needed by beginSwitchToMultiPlate() when
+    // called from the toggle-view ribbon button, which (unlike the
+    // double-click handler) runs outside renderBuildPlate()'s per-frame
+    // scope and has no w/h of its own to compute aspect from.
+    float m_lastViewportAspect = 16.0f / 9.0f;
+
+    // Set on every frame the camera is mid-animateTo(); used to detect
+    // the exact frame a transition settles, so we can log what the
+    // camera actually ended up at -- confirms whether the transition
+    // truly converges to what animateTo() was given, or something else
+    // changes it afterward.
+    bool m_wasCameraAnimating = false;
 
     // Main-viewport camera drag state. "Armed" means the button-down that
     // started the drag wasn't on top of a model part, decided once at
@@ -1746,13 +1770,171 @@ private:
             ImVec2 rgt(ax + std::cos(tipAngle - glm::half_pi<float>()) * as * 0.5f, ay - std::sin(tipAngle - glm::half_pi<float>()) * as * 0.5f);
             bool hov = glm::length(glm::vec2(mousePos.x - ax, mousePos.y - ay)) < as * 1.5f;
             dl->AddTriangleFilled(tip, lft, rgt, hov ? IM_COL32(230, 230, 230, 255) : IM_COL32(160, 160, 165, 200));
-            if (hov && ImGui::IsMouseClicked(ImGuiMouseButton_Left))
+            if (hov && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && m_viewportController->activeId() != "multi_plate_scene")
                 m_viewportController->orbit(arr.dYawRad, glm::radians(arr.dPitchDeg));
         }
     }
+    // editable_scene always re-centers whichever plate is active at world
+    // origin, so its own default*() camera hooks are always the right
+    // "come back to the single-plate view" target -- shared by the
+    // toggle button and the multi-plate double-click handoff below.
+    CameraState editableSceneDefaultCamera() const
+    {
+        CameraState c;
+        c.target = m_editableScene->defaultTarget();
+        c.distance = m_editableScene->defaultDistance();
+        c.yaw = m_editableScene->defaultYaw();
+        c.pitch = m_editableScene->defaultPitch();
+        return c;
+    }
+
+    // Swaps to multi_plate_scene immediately and fades every OTHER plate
+    // IN from invisible while the camera zooms out to frame all of them.
+    // The plate editable_scene was just showing is forced fully opaque
+    // immediately, not faded -- it was already on screen a moment ago,
+    // so there's nothing to reveal there.
+    //
+    // Immediate ghost set (not deferred like beginSwitchToEditable()
+    // below) because there's nothing for multi_plate_scene to fade out
+    // from -- it isn't the active renderer yet, so nothing of it is on
+    // screen to animate.
+    void beginSwitchToMultiPlate()
+    {
+        if (!m_viewportController || !m_multiPlateScene || !m_editableScene) return;
+
+        m_pendingSwitchToEditable = false;
+
+        auto* activePlate = m_editableScene->sceneLayout().getActivePlate();
+        std::string keepPlateId = activePlate ? activePlate->Id : std::string();
+
+        m_multiPlateScene->sceneLayout().setImmediateGhostExcept(keepPlateId, 0.0f);
+        m_viewportController->setActiveRenderer("multi_plate_scene");
+
+        // editable_scene always shows its active plate re-centered at
+        // world origin; multi_plate_scene (just swapped in) shows that
+        // same plate at its own grid position instead. Snap the camera
+        // target to match the instant the geometry reappears there, so
+        // the zoom-out animates from where the plate actually now is,
+        // not from the origin it was centered on a frame ago.
+        glm::vec2 plateCenter;
+        if (!keepPlateId.empty() && m_multiPlateScene->sceneLayout().tryGetPlateWorldCenter(keepPlateId, plateCenter))
+            m_viewportController->setTarget(glm::vec3(plateCenter.x, 0.0f, plateCenter.y));
+
+        CameraState fromCam = m_viewportController->camera();
+        CameraState toCam = m_multiPlateScene->sceneLayout().computeOverviewCamera(fromCam.fovYRadians, m_lastViewportAspect);
+        printf("[SlicerCorePlugin][toggle->multi] lastViewportAspect=%.4f fovY=%.4f\n", m_lastViewportAspect, fromCam.fovYRadians);
+        printf("[SlicerCorePlugin][toggle->multi] FROM target=(%.2f,%.2f,%.2f) distance=%.2f yaw=%.4f pitch=%.4f\n",
+            fromCam.target.x, fromCam.target.y, fromCam.target.z, fromCam.distance, fromCam.yaw, fromCam.pitch);
+        printf("[SlicerCorePlugin][toggle->multi] TO   target=(%.2f,%.2f,%.2f) distance=%.2f yaw=%.4f pitch=%.4f\n",
+            toCam.target.x, toCam.target.y, toCam.target.z, toCam.distance, toCam.yaw, toCam.pitch);
+
+        m_viewportController->animateTo(toCam, 0.6f);
+        m_multiPlateScene->sceneLayout().animateGhostAllTo(1.0f, 0.6f);
+    }
+
+    // Fades multi_plate_scene OUT while still active (so the fade is
+    // actually visible), then hands off to editable_scene once that fade
+    // completes -- see the m_pendingSwitchToEditable check in
+    // renderBuildPlate(). targetPlate is the plate to make active in
+    // editable_scene; pass nullptr to keep whichever plate is already
+    // active there (the toggle button isn't switching plates, just views).
+    //
+    // The plate being handed off to stays fully opaque throughout --
+    // only the OTHER plates fade out. That plate is where the camera is
+    // headed and is exactly what editable_scene shows immediately after,
+    // so making it disappear too would just be a needless flicker.
+    void beginSwitchToEditable(domain::v1::BuildPlate* targetPlate)
+    {
+        if (!m_viewportController || !m_multiPlateScene || !m_editableScene) return;
+
+        if (targetPlate)
+        {
+            m_navigation->setBuildPlate(targetPlate->Id);
+            m_editableScene->sceneLayout().setActiveBuildPlate(targetPlate, *m_modelCache);
+        }
+        else
+        {
+            // Toggle-button case -- no plate was passed, so keep visible
+            // whichever plate editable_scene is already showing.
+            targetPlate = m_editableScene->sceneLayout().getActivePlate();
+        }
+
+        std::string keepPlateId = targetPlate ? targetPlate->Id : std::string();
+        m_multiPlateScene->sceneLayout().animateGhostOutExcept(keepPlateId, 0.6f);
+
+        // Camera eases toward the target plate's OWN grid position while
+        // multi_plate_scene is still what's actually rendering -- it
+        // hasn't been re-centered at the origin yet, that only happens
+        // once editable_scene takes over (see the setTarget() snap in
+        // renderBuildPlate() below). Using editable_scene's default
+        // target (the origin) here would send the camera toward empty
+        // space in the grid unless the plate happens to sit in the
+        // origin cell.
+        CameraState midFadeCamera = editableSceneDefaultCamera();
+        glm::vec2 plateCenter;
+        if (!keepPlateId.empty() && m_multiPlateScene->sceneLayout().tryGetPlateWorldCenter(keepPlateId, plateCenter))
+            midFadeCamera.target = glm::vec3(plateCenter.x, 0.0f, plateCenter.y);
+
+        m_viewportController->animateTo(midFadeCamera, 0.6f);
+        m_pendingSwitchToEditable = true;
+    }
+
     void renderBuildPlate()
     {
         m_buildPlateRenderer->tick(ImGui::GetIO().DeltaTime);
+
+        // Debug: log the camera the instant an animateTo() transition
+        // settles -- confirms whether it truly converges to what was
+        // requested (see the FROM/TO log in beginSwitchToMultiPlate()),
+        // or something changes it afterward. bool edge-detected (only
+        // fires once per transition, on the animating->not-animating
+        // frame), not every frame.
+        if (m_viewportController)
+        {
+            bool animatingNow = m_viewportController->isCameraAnimating();
+            if (m_wasCameraAnimating && !animatingNow)
+            {
+                const CameraState& c = m_viewportController->camera();
+                printf("[SlicerCorePlugin][camera settle] target=(%.2f,%.2f,%.2f) distance=%.2f yaw=%.4f pitch=%.4f activeRenderer=%s\n",
+                    c.target.x, c.target.y, c.target.z, c.distance, c.yaw, c.pitch, m_viewportController->activeId().c_str());
+            }
+            m_wasCameraAnimating = animatingNow;
+        }
+
+        // Keep the multi-plate view's active-plate highlight in sync
+        // with whatever editable_scene is actually showing -- single
+        // source of truth (EditableSceneLayout::getActivePlate()),
+        // pulled fresh every frame here rather than pushed from each of
+        // the several places that change the active plate (Arrange,
+        // Load Workspace, startup, double-click), so there's no call
+        // site that can forget and drift out of sync. setActivePlateId()
+        // itself no-ops when the id hasn't changed.
+        if (m_multiPlateScene && m_editableScene)
+        {
+            auto* activePlate = m_editableScene->sceneLayout().getActivePlate();
+            m_multiPlateScene->sceneLayout().setActivePlateId(activePlate ? activePlate->Id : std::string());
+        }
+
+        // multi_plate_scene must stay the active renderer for its own
+        // fade-out to be visible (see beginSwitchToEditable() above) --
+        // so the actual renderer swap happens here, once that fade has
+        // finished, rather than at the moment the toggle/double-click
+        // was triggered.
+        if (m_pendingSwitchToEditable && m_multiPlateScene && !m_multiPlateScene->sceneLayout().isGhostAnimating())
+        {
+            m_viewportController->setActiveRenderer("editable_scene");
+
+            // multi_plate_scene was framing the target plate at its own
+            // grid position (see beginSwitchToEditable() above);
+            // editable_scene re-centers that same plate at world origin
+            // the instant it becomes active, so the camera's target has
+            // to snap there in this same frame to stay seamless --
+            // distance/yaw/pitch already match (they were the eased
+            // destination all along), only the target moves.
+            if (m_editableScene) m_viewportController->setTarget(m_editableScene->defaultTarget());
+
+            m_pendingSwitchToEditable = false;
+        }
 
         bool showToolpathView = m_viewportController && m_viewportController->activeId() == "debug_comparison";
         ImVec2 viewportTopLeft = ImGui::GetCursorScreenPos();
@@ -1761,48 +1943,120 @@ private:
         /*if (showToolpathView)
          {*/
         uint32_t w = (uint32_t)avail.x, h = (uint32_t)avail.y;
+        if (h > 0) m_lastViewportAspect = (float)w / (float)h;
         GLuint tex = m_viewportController->renderAndGetTexture(w, h, ImGui::GetIO().DeltaTime, ImGui::IsWindowHovered());
+        // NOT flipped -- unlike renderPreview()'s STL thumbnail and
+        // renderGizmoOverlay()'s camera gizmo (both of which do need the
+        // Y flip), the main viewport render was ALREADY correctly
+        // oriented without one. A flip was tried here as a fix for the
+        // raycast miss (theorizing the display was silently mirrored,
+        // matching those other two textures) -- it visibly turned the
+        // scene upside down instead, disproving that theory. Reverted;
+        // the raycast bug is still unexplained, don't reintroduce this
+        // without visual confirmation it's actually needed.
         if (tex) ImGui::Image((ImTextureID)(intptr_t)tex, avail);
 
-        bool viewportHovered = ImGui::IsItemHovered();
+        // ImGui::Image() registers with id=0, so IsItemHovered() on it
+        // does NOT defer to items drawn on top of it later this frame
+        // (gizmo buttons, the layer-range sliders, the debug checkboxes
+        // below all sit visually on top of this same image). A plain
+        // geometric rect test avoids that trap; the actual "is a *real*
+        // widget on top of the cursor" check happens further down, once
+        // every overlay for this frame has actually been submitted.
+        bool imageAreaHovered = w > 0 && h > 0 &&
+            ImGui::IsMouseHoveringRect(viewportTopLeft, ImVec2(viewportTopLeft.x + (float)w, viewportTopLeft.y + (float)h));
 
-        // Left mouse: orbit, but only when the drag didn't start on top of
-        // a model -- leaves LMB free for selection/gizmo manipulation on
-        // parts. Right mouse: pan, unconditionally. Wheel: dolly zoom that
-        // also walks the orbit target toward whatever's under the cursor.
-        if (viewportHovered && w > 0 && h > 0)
+        bool leftClicked = ImGui::IsMouseClicked(ImGuiMouseButton_Left);
+        bool leftDoubleClicked = ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left);
+        bool rightClicked = ImGui::IsMouseClicked(ImGuiMouseButton_Right);
+        float wheel = ImGui::GetIO().MouseWheel;
+
+        RaycastHit clickHit, wheelHit;
+        bool haveClickHit = false, haveWheelHit = false;
+
+        if (imageAreaHovered && (leftClicked || wheel != 0.0f))
         {
             ImVec2 mousePos = ImGui::GetMousePos();
             float px = mousePos.x - viewportTopLeft.x;
             float py = mousePos.y - viewportTopLeft.y;
             float ndcX = (px / (float)w) * 2.0f - 1.0f;
-            float ndcY = 1.0f - (py / (float)h) * 2.0f;
+            // Flipped relative to the textbook screen-to-NDC formula
+            // (1 - (py/h)*2) -- empirically confirmed by directly testing
+            // both: flipping the main-viewport DISPLAY made every
+            // raycast hit correctly, but visibly turned the render
+            // upside down (reverted -- the render was already correctly
+            // oriented on its own). This applies that same Y correction
+            // only to the ray math instead, leaving the display alone --
+            // whatever in this pipeline maps screen Y to render Y isn't
+            // the naive relationship this formula assumed, but it's
+            // still self-consistent for VIEWING (correct as rendered),
+            // just not for the mouse-to-NDC math used here.
+            float ndcY = -1.0f + (py / (float)h) * 2.0f;
             float aspect = (float)w / (float)h;
 
             auto camCtx = domain::v1::buildCameraContext(m_viewportController->camera(), aspect);
 
-            auto screenRay = [&]() -> glm::vec3 {
-                glm::vec4 rayClip(ndcX, ndcY, -1.0f, 1.0f);
-                glm::vec4 rayEye = glm::inverse(camCtx.proj) * rayClip;
-                rayEye = glm::vec4(rayEye.x, rayEye.y, -1.0f, 0.0f);
-                return glm::normalize(glm::vec3(glm::inverse(camCtx.view) * rayEye));
-                };
+            glm::vec4 rayClip(ndcX, ndcY, -1.0f, 1.0f);
+            glm::vec4 rayEye = glm::inverse(camCtx.proj) * rayClip;
+            rayEye = glm::vec4(rayEye.x, rayEye.y, -1.0f, 0.0f);
+            glm::vec3 rayWorld = glm::normalize(glm::vec3(glm::inverse(camCtx.view) * rayEye));
 
-            if (ImGui::IsMouseClicked(ImGuiMouseButton_Left))
+            // Debug: log the double-click ray + resulting hit -- only in
+            // the multi-plate view, per request, while tracking down a
+            // build-plate hit-test miss. debugLogNextRaycast() makes the
+            // raycast() call just below print per-plate diagnostics too.
+            bool debugMultiPlateClick = leftDoubleClicked && m_multiPlateScene
+                && m_viewportController->activeId() == "multi_plate_scene";
+            if (debugMultiPlateClick)
             {
-                RaycastHit hit = m_viewportController->raycast(camCtx.camPos, screenRay());
-                m_vpOrbitArmed = !(hit.hit && !hit.isPlateHit);   // hit a part -> don't arm orbit
-                m_vpOrbiting = true;
+                const CameraState& cam = m_viewportController->camera();
+                printf("[SlicerCorePlugin][dblclick] w=%u h=%u aspect=%.4f fovY=%.4f near=%.2f far=%.2f\n",
+                    w, h, aspect, cam.fovYRadians, cam.nearPlane, cam.farPlane);
+                printf("[SlicerCorePlugin][dblclick] camera target=(%.2f,%.2f,%.2f) distance=%.2f yaw=%.4f pitch=%.4f\n",
+                    cam.target.x, cam.target.y, cam.target.z, cam.distance, cam.yaw, cam.pitch);
+                printf("[SlicerCorePlugin][dblclick] mouse=(%.1f,%.1f) ndc=(%.3f,%.3f) rayOrigin=(%.2f,%.2f,%.2f) rayDir=(%.3f,%.3f,%.3f) camCtx.target=(%.2f,%.2f,%.2f)\n",
+                    px, py, ndcX, ndcY, camCtx.camPos.x, camCtx.camPos.y, camCtx.camPos.z, rayWorld.x, rayWorld.y, rayWorld.z,
+                    camCtx.target.x, camCtx.target.y, camCtx.target.z);
+
+                // Independently mirror buildCameraContext()'s own basis
+                // vectors here, rather than re-deriving them by hand from
+                // yaw/pitch again -- ground truth, printed directly,
+                // plus an orthonormality check and a reconstructed
+                // dead-center-of-screen ray (which should equal `forward`
+                // exactly, since off-axis basis vectors don't enter into
+                // an ndcX=ndcY=0 unprojection at all).
+                {
+                    glm::vec3 dbgRight(sin(cam.yaw), 0.0f, -cos(cam.yaw));
+                    glm::vec3 dbgForward = glm::normalize(cam.target - camCtx.camPos);
+                    glm::vec3 dbgUp = -glm::normalize(glm::cross(dbgRight, dbgForward));
+                    printf("[SlicerCorePlugin][dblclick] right=(%.3f,%.3f,%.3f) up=(%.3f,%.3f,%.3f) forward=(%.3f,%.3f,%.3f)\n",
+                        dbgRight.x, dbgRight.y, dbgRight.z, dbgUp.x, dbgUp.y, dbgUp.z, dbgForward.x, dbgForward.y, dbgForward.z);
+                    printf("[SlicerCorePlugin][dblclick] orthocheck dot(right,up)=%.4f dot(right,fwd)=%.4f dot(up,fwd)=%.4f\n",
+                        glm::dot(dbgRight, dbgUp), glm::dot(dbgRight, dbgForward), glm::dot(dbgUp, dbgForward));
+
+                    glm::vec4 centerClip(0.0f, 0.0f, -1.0f, 1.0f);
+                    glm::vec4 centerEye = glm::inverse(camCtx.proj) * centerClip;
+                    centerEye = glm::vec4(centerEye.x, centerEye.y, -1.0f, 0.0f);
+                    glm::vec3 centerRay = glm::normalize(glm::vec3(glm::inverse(camCtx.view) * centerEye));
+                    printf("[SlicerCorePlugin][dblclick] screenCenterRay=(%.3f,%.3f,%.3f) (should equal forward above)\n",
+                        centerRay.x, centerRay.y, centerRay.z);
+                }
+
+                m_multiPlateScene->sceneLayout().debugDumpPlatePositions();
+                m_multiPlateScene->sceneLayout().debugLogNextRaycast();
             }
 
-            if (ImGui::IsMouseClicked(ImGuiMouseButton_Right))
-                m_vpPanning = true;
+            if (leftClicked) { clickHit = m_viewportController->raycast(camCtx.camPos, rayWorld); haveClickHit = true; }
+            if (wheel != 0.0f) { wheelHit = m_viewportController->raycast(camCtx.camPos, rayWorld); haveWheelHit = true; }
 
-            float wheel = ImGui::GetIO().MouseWheel;
-            if (wheel != 0.0f)
+            if (debugMultiPlateClick)
             {
-                RaycastHit hit = m_viewportController->raycast(camCtx.camPos, screenRay());
-                m_viewportController->zoomToPoint(wheel * 10.0f, hit.hit ? &hit.point : nullptr);
+                if (clickHit.hit)
+                    printf("[SlicerCorePlugin][dblclick] RESULT hit=1 plate=%s isPlateHit=%d point=(%.2f,%.2f,%.2f) dist=%.2f instanceId=%s\n",
+                        clickHit.buildPlateId.c_str(), clickHit.isPlateHit ? 1 : 0,
+                        clickHit.point.x, clickHit.point.y, clickHit.point.z, clickHit.distance, clickHit.instanceId.c_str());
+                else
+                    printf("[SlicerCorePlugin][dblclick] RESULT hit=0\n");
             }
         }
 
@@ -1812,7 +2066,16 @@ private:
         // Driven by IsMouseDown rather than re-checking hover every frame,
         // so a fast drag that momentarily leaves the viewport rect doesn't
         // interrupt the rotate/pan already in progress.
-        if (m_vpOrbiting && m_vpOrbitArmed && (ImGui::GetIO().MouseDelta.x != 0.0f || ImGui::GetIO().MouseDelta.y != 0.0f))
+        //
+        // Rotation is disabled in the multi-plate view -- it's an
+        // overview at a fixed, purpose-fit angle (see
+        // computeOverviewCamera()), and orbiting away from it both loses
+        // that framing and was the exact scenario that caused the
+        // "rotated the camera" confusion earlier in this feature's
+        // development. Panning/zoom are left enabled -- only rotation is
+        // disabled here, per request.
+        if (m_vpOrbiting && m_vpOrbitArmed && m_viewportController->activeId() != "multi_plate_scene"
+            && (ImGui::GetIO().MouseDelta.x != 0.0f || ImGui::GetIO().MouseDelta.y != 0.0f))
         {
             ImVec2 delta = ImGui::GetIO().MouseDelta;
             m_viewportController->orbit(delta.x * 0.005f, -delta.y * 0.005f);
@@ -1869,6 +2132,59 @@ private:
             if (ImGui::Checkbox("Solid Shading", &solidShader))
                 m_eventBus->publish("debug.toggle.solidshader", solidShader ? "1" : "0");
 
+        }
+
+        // Everything that can visually sit on top of the viewport this
+        // frame (gizmo, layer sliders, debug checkboxes) has now been
+        // submitted, so IsAnyItemHovered() correctly reflects whether the
+        // cursor is actually over one of THEM rather than bare viewport --
+        // that's what was letting scroll/click on those widgets also
+        // drive the camera before.
+        bool blockedByOtherWidget = ImGui::IsAnyItemHovered();
+        bool viewportInputAllowed = imageAreaHovered && !blockedByOtherWidget;
+
+        if (viewportInputAllowed)
+        {
+            if (leftClicked)
+            {
+                m_vpOrbitArmed = !(haveClickHit && clickHit.hit && !clickHit.isPlateHit);   // hit a part -> don't arm orbit
+                m_vpOrbiting = true;
+            }
+            if (rightClicked)
+                m_vpPanning = true;
+            if (wheel != 0.0f)
+                m_viewportController->zoomToPoint(wheel * 10.0f, (haveWheelHit && wheelHit.hit) ? &wheelHit.point : nullptr);
+
+            // Double-click a build plate (or a part sitting on one) in the
+            // multi-plate overview -> switch to the editable single-plate
+            // view for that plate, with the camera animating in. clickHit
+            // is already populated above since leftClicked is true on the
+            // same frame IsMouseDoubleClicked() fires. Only meaningful in
+            // the multi-plate view -- editable_scene only ever has one
+            // plate.
+            //
+            // The camera target here is editable_scene's own default, NOT
+            // MultiPlateSceneLayout's grid position for this plate --
+            // EditableSceneLayout::setActiveBuildPlate() always re-centers
+            // whichever plate is active at world origin (see its
+            // m_plateOffset derivation), independent of where that same
+            // plate happened to sit in the grid a moment ago.
+            if (leftDoubleClicked && haveClickHit && clickHit.hit && !clickHit.buildPlateId.empty()
+                && m_viewportController->activeId() == "multi_plate_scene")
+            {
+                auto* project = m_navigation->resolveOrDefaultProject(*m_workspaceStore);
+                domain::v1::BuildPlate* targetPlate = nullptr;
+                if (project)
+                {
+                    for (auto* p : project->buildPlates)
+                        if (p && p->Id == clickHit.buildPlateId) { targetPlate = p; break; }
+                }
+
+                if (targetPlate)
+                {
+                    beginSwitchToEditable(targetPlate);
+                }
+            }
         }
 
 

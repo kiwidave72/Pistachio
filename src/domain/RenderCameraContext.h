@@ -39,6 +39,13 @@ namespace domain::v1 {
         // restored, diagnostic-only) axis-mode toggle -- both the editable
         // scene and the debug visualiser only read correctly (letters
         // right-side-up and legible) with this flip applied.
+        //
+        // Verified again the hard way: removing this negation was tried
+        // as a fix for a multi-plate-view raycast miss (hand-derived
+        // math suggested it) -- it visibly flipped rendering everywhere
+        // AND did not fix the raycast miss. Both outcomes confirm this
+        // negation is correct and the raycast bug lives elsewhere; do
+        // not remove it again without visual confirmation first.
         glm::vec3 up = -glm::normalize(glm::cross(right, forward));
 
         switch (camera.axisMode)

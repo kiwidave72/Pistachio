@@ -3,6 +3,7 @@
 #include "domain/RenderModel.h"
 #include "domain/BuildPlate.h"
 #include "domain/ModelCache.h"
+#include "domain/PlateOffsets.h"
 #include "ports/ModelRenderStrategies.h"
 #include "core/IEasedTransition.h"
 #include "core/CubicEasedTransition.h"
@@ -15,6 +16,12 @@
 class EditableSceneLayout
 {
 public:
+    // Which plate is currently shown, if any -- used by the multi-plate
+    // view's fade-out (MultiPlateSceneLayout::animateGhostOutExcept())
+    // to know which plate to keep visible when the toggle button (which
+    // has no plate of its own to pass) hands off to this view.
+    domain::v1::BuildPlate* getActivePlate() const { return m_activePlate; }
+
     void setActiveBuildPlate(domain::v1::BuildPlate* plate, domain::v1::ModelCache& cache)
     {
         m_instanceModels.clear();
@@ -64,13 +71,13 @@ public:
         {
             const auto& b = plate->buildPlateModel->mesh->bounds;
 
-            m_plateOffset = glm::vec2(
-                -(b.min.x + b.max.x) * 0.5f,
-                (b.min.y + b.max.y) * 0.5f);
-
-            float halfBedW = (b.max.x - b.min.x) * 0.5f;
-            float halfBedD = (b.max.y - b.min.y) * 0.5f;
-            m_instanceOffset = glm::vec2(-halfBedW, halfBedD);
+            // Derivation moved to domain::v1::computePlateOffsets() so
+            // MultiPlateSceneLayout can reuse the identical math per plate
+            // -- the long comment above still describes the "why" of each
+            // field; only the arithmetic itself moved.
+            auto offsets = domain::v1::computePlateOffsets(b);
+            m_plateOffset = offsets.plateOffset;
+            m_instanceOffset = offsets.instanceOffset;
 
             // Drop the plate down by its own thickness (mesh's local max
             // Z) so its top surface lands at world Y=0, matching where
@@ -79,7 +86,7 @@ public:
             // top surface sits at world Y=(max Z) and every instance ends
             // up sunk into it by that amount. See PlateModelRenderStrategy
             // ::setHeightOffset in ports/ModelRenderStrategies.h.
-            m_plateStrategy->setHeightOffset(-b.max.z);
+            m_plateStrategy->setHeightOffset(offsets.plateHeightOffset);
         }
 
         if (plate->buildPlateModel)
@@ -189,7 +196,7 @@ public:
         if (m_plateModel)
         {
             RaycastHit hit;
-            if (m_plateModel->raycast(rayOrigin, rayDirection, m_plateOffset, hit, true) && hit.distance < closest.distance)
+            if (m_plateModel->raycast(rayOrigin, rayDirection, m_plateOffset, hit) && hit.distance < closest.distance)
             {
                 closest = hit;
                 closest.isPlateHit = true;
